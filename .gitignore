@@ -1,0 +1,26 @@
+# --- secrets (never commit) ---
+config/env.php
+
+# --- generated / runtime ---
+logs/*.log
+logs/*.json
+data/state.json
+scratch/*
+!scratch/.gitkeep
+
+# --- tooling artifacts ---
+.playwright-mcp/
+automation/node_modules/
+node_modules/
+
+# --- dependencies (restored via composer install) ---
+vendor/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.bak
+*.old
+*.tmp

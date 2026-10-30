@@ -1,0 +1,86 @@
+/* ─────────────────────────────────────────────────────────────
+   Shared clean print toolbar
+   Used by: admin/results_print.php, admin/unit_tests_print.php
+   Provides: Back · View All (fit-to-width) · Download PDF · Print
+   ───────────────────────────────────────────────────────────── */
+.ptb-wrap {
+    position: sticky;
+    top: 0;
+    z-index: 900;
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid #e2e8f0;
+    margin: calc(-1 * var(--ptb-pad, 24px)) calc(-1 * var(--ptb-pad, 24px)) 22px;
+    padding: 12px 24px;
+}
+.ptb-bar {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.ptb-title {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: #334155;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.ptb-title i { color: #1a237e; }
+.ptb-spacer { flex: 1 1 auto; }
+
+.ptb-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 16px;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 0.84rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    border: 1.5px solid transparent;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+.ptb-btn:active { transform: translateY(1px); }
+.ptb-btn i { font-size: 0.9em; }
+
+.ptb-ghost { background: #fff; border-color: #cbd5e1; color: #334155; }
+.ptb-ghost:hover { border-color: #1a237e; color: #1a237e; background: #fff; }
+
+.ptb-soft { background: #eef2ff; border-color: #c7d2fe; color: #1a237e; }
+.ptb-soft:hover { background: #e0e7ff; border-color: #818cf8; }
+
+.ptb-dark { background: #475569; border-color: #475569; color: #fff; }
+.ptb-dark:hover { background: #334155; border-color: #334155; }
+
+.ptb-solid { background: #1a237e; border-color: #1a237e; color: #fff; }
+.ptb-solid:hover { background: #283593; border-color: #283593; }
+
+.ptb-btn.is-active { background: #1a237e; border-color: #1a237e; color: #fff; }
+
+/* ── View All (fit-to-width) mode ── */
+.ptb-scroll { overflow-x: auto; }
+body.ptb-fit .ptb-scroll {
+    overflow-x: visible !important;
+}
+body.ptb-fit .ptb-sheet {
+    max-width: 100% !important;
+}
+body.ptb-fit .ptb-scroll > table {
+    zoom: var(--ptb-zoom, 1);
+}
+
+/* Keep the toolbar out of print output */
+@media print {
+    .ptb-wrap { display: none !important; }
+    body.ptb-fit .ptb-scroll > table { zoom: 1 !important; }
+}

@@ -1,0 +1,59 @@
+# HCC — root .htaccess: harden exposure without breaking admin/*.php
+# Requires Apache 2.4+ for "Require all denied"; Rewrite rules work on 2.2+ too.
+
+# 0) Custom 404 page — route all 404s to branded /404.php
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  # Only intercept real 404s (file/dir don't exist). Existing paths are served normally.
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^.*$ /hcc/404.php [L,R=404]
+</IfModule>
+ErrorDocument 404 /hcc/404.php
+
+# 1) Disable directory listing everywhere under docroot.
+Options -Indexes
+ServerSignature Off
+
+# 2) Deny direct HTTP access to sensitive directories (filesystem PHP includes still work).
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  # Block config/, data/, logs/, vendor/, scratch/, and any hidden/dot directory.
+  RewriteRule ^(config|data|logs|vendor|scratch|\..*)(/|$) - [F,L,NC]
+  # Block backup/temp/dump files from being served.
+  RewriteRule \.(bak|old|orig|save|swp|swo|tmp|log|json|sql|yml|yaml|env|dist|db|sqlite|md)$ - [F,L,NC]
+</IfModule>
+
+# 3) Apache 2.4 native denial (works even if mod_rewrite is off).
+<IfModule mod_authz_core.c>
+  <If "%{REQUEST_URI} =~ m#^/hcc/(config|data|logs|vendor|scratch|\..*)(/|$)#">
+    Require all denied
+  </If>
+  # Deny serving of sensitive file extensions anywhere under /hcc.
+  <FilesMatch "\.(log|json|bak|old|orig|save|swp|swo|tmp|dist|env|sql|yml|yaml|db|sqlite|md)$">
+    Require all denied
+  </FilesMatch>
+  # Block dot-files (.env, .git, .htaccess, etc.)
+  <FilesMatch "^\.">
+    Require all denied
+  </FilesMatch>
+  # Backup variants of PHP files (e.g. index.php~, index.php.bak).
+  <FilesMatch "\.php~$|\.php\.(bak|old|orig|save|swp)$">
+    Require all denied
+  </FilesMatch>
+</IfModule>
+
+# 4) Apache 2.2 fallback (harmless on 2.4).
+<IfModule !mod_authz_core.c>
+  <FilesMatch "\.(log|json|bak|old|orig|save|swp|swo|tmp|dist|env|sql|yml|yaml|db|sqlite|md)$">
+    Order allow,deny
+    Deny from all
+  </FilesMatch>
+  <FilesMatch "^\.">
+    Order allow,deny
+    Deny from all
+  </FilesMatch>
+</IfModule>
+
+# NOTE: admin/*.php are NOT blocked — only the 4 prefixes above + backup extensions.
+# Sensitive dirs also carry their own .htaccess with "Require all denied" for defense-in-depth.

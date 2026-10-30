@@ -1,0 +1,6 @@
+{
+    "name": "hcc/admin",
+    "require": {
+        "phpoffice/phpspreadsheet": "~5.4"
+    }
+}
