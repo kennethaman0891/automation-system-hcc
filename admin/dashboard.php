@@ -16,6 +16,26 @@ $grNo = $settings['gr_no'] ?? '';
 $contactAddress = $settings['contact_address'] ?? '';
 $notifData = rcGetRecentNotifications(8);
 
+/* ── WhatsApp hub quick stats (fail-soft: WhatsApp tables may not exist yet) ── */
+$waContacts = 0;
+$waSent = 0;
+$waPending = 0;
+try {
+    $waDb = getDB();
+    $waContacts = (int)$waDb->query("SELECT COUNT(DISTINCT linked_student_roll) FROM whatsapp_contacts WHERE linked_student_roll IS NOT NULL AND linked_student_roll <> ''")->fetchColumn();
+    if ($waContacts === 0) {
+        $waContacts = (int)$waDb->query("SELECT COUNT(DISTINCT roll_no) FROM report_card WHERE parent_phone IS NOT NULL AND parent_phone <> ''")->fetchColumn();
+    }
+} catch (Throwable $e) {}
+try {
+    $waDb = $waDb ?? getDB();
+    $waSent = (int)$waDb->query("SELECT COUNT(*) FROM whatsapp_dispatch_log WHERE status = 'sent'")->fetchColumn();
+} catch (Throwable $e) {}
+try {
+    $waDb = $waDb ?? getDB();
+    $waPending = (int)$waDb->query("SELECT COUNT(*) FROM whatsapp_dispatch_log WHERE status IN ('pending','ready')")->fetchColumn();
+} catch (Throwable $e) {}
+
 /* Mark-as-read endpoint for the header bell (same contract as results.php). */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'mark_notifs_read') {
     if (!verifyCSRFToken()) {
@@ -102,6 +122,9 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
                         </div>
                     </div>
                 </div>
+                <a href="whatsapp_share.php" class="wa-quick-btn" id="waQuickBtn" title="Open WhatsApp Share Hub" aria-label="Open WhatsApp Share Hub">
+                    <i class="fa-brands fa-whatsapp"></i>
+                </a>
                 <div class="admin-user">
                     <span class="user-avatar"><?= sanitize($adminInitials) ?></span>
                     <span class="user-meta">
@@ -126,6 +149,34 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
                     <div class="dash-hero-body">
                         <h2>Welcome to <span class="dash-hero-accent">Automation System</span></h2>
                         <p><?= sanitize($greeting) ?>, <?= $adminName ?> — <?= sanitize($schoolTagline) !== '' ? sanitize($schoolTagline) : 'Learn &middot; Lead &middot; Serve' ?></p>
+                    </div>
+                </section>
+
+                <!-- ═══ WhatsApp Share Hub launcher ═══ -->
+                <section class="dash-wa" id="dashWaLauncher" role="link" tabindex="0"
+                         data-href="whatsapp_share.php"
+                         aria-label="Open the WhatsApp Share Hub">
+                    <span class="dash-wa-orb" aria-hidden="true"><i class="fa-brands fa-whatsapp"></i></span>
+                    <div class="dash-wa-main">
+                        <div class="dash-wa-head">
+                            <h2>WhatsApp Share Hub</h2>
+                            <span class="dash-wa-live"><span class="dash-wa-dot" aria-hidden="true"></span> Live</span>
+                        </div>
+                        <p class="dash-wa-sub">Broadcast report cards, unit-test slips and bonafide certificates straight to parent WhatsApp.</p>
+                        <div class="dash-wa-stats">
+                            <span><i class="fas fa-address-book" aria-hidden="true"></i> <?= (int)$waContacts ?> parents</span>
+                            <span class="is-ok"><i class="fas fa-check-double" aria-hidden="true"></i> <?= (int)$waSent ?> sent</span>
+                            <span class="is-wait"><i class="fas fa-clock" aria-hidden="true"></i> <?= (int)$waPending ?> pending</span>
+                        </div>
+                    </div>
+                    <div class="dash-wa-actions">
+                        <div class="dash-wa-chips">
+                            <a href="whatsapp_share.php?doc_type=report_card" class="dash-wa-chip"><i class="fas fa-file-lines" aria-hidden="true"></i> Report Card</a>
+                            <a href="whatsapp_share.php?doc_type=unit_test" class="dash-wa-chip"><i class="fas fa-pen-to-square" aria-hidden="true"></i> Unit Test</a>
+                            <a href="whatsapp_share.php?doc_type=bonafide" class="dash-wa-chip"><i class="fas fa-certificate" aria-hidden="true"></i> Bonafide</a>
+                            <a href="whatsapp_share.php?doc_type=announcement" class="dash-wa-chip"><i class="fas fa-bullhorn" aria-hidden="true"></i> Notice</a>
+                        </div>
+                        <a href="whatsapp_share.php" class="dash-wa-open">Open Hub <i class="fas fa-arrow-right" aria-hidden="true"></i></a>
                     </div>
                 </section>
 
@@ -313,6 +364,24 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
         </main>
     </div>
     <script>
+        /* WhatsApp launcher: whole card is clickable / keyboard-activatable. */
+    (function () {
+        var launcher = document.getElementById('dashWaLauncher');
+        if (!launcher) return;
+        var target = launcher.getAttribute('data-href') || 'whatsapp_share.php';
+        launcher.addEventListener('click', function (e) {
+            // Let the inner chips & "Open Hub" link behave normally.
+            if (e.target.closest('a, button')) return;
+            window.location.href = target;
+        });
+        launcher.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+                e.preventDefault();
+                window.location.href = target;
+            }
+        });
+    })();
+
         /* Header notification bell: toggle dropdown + mark-as-read on open. */
     (function () {
         var trigger = document.getElementById('notifTrigger');
