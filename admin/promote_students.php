@@ -708,7 +708,7 @@ $notifData = rcGetRecentNotifications(8);
                                                 <a href="results.php?class=<?= urlencode("{$targetYear}|{$co['target_std']}|{$co['target_div']}|{$co['target_sem']}") ?>" class="btn btn-sm btn-secondary" style="margin-right:6px;" title="View marksheet in results">
                                                     <i class="fas fa-table"></i> Results
                                                 </a>
-                                                <form method="POST" style="display:inline-block;" onsubmit="return confirm('Are you sure you want to revert promotion for STD <?= sanitize($co['target_std']) ?> <?= sanitize($co['target_div']) ?> in <?= sanitize($targetYear) ?>?');">
+                                                <form method="POST" style="display:inline-block;" data-confirm="Are you sure you want to revert promotion for STD <?= sanitize($co['target_std']) ?> <?= sanitize($co['target_div']) ?> in <?= sanitize($targetYear) ?>?" data-confirm-title="Revert Promotion Cohort" data-confirm-btn="Revert Promotion">
                                                     <?= csrfField() ?>
                                                     <input type="hidden" name="action" value="rollback_promotion">
                                                     <input type="hidden" name="target_year" value="<?= sanitize($targetYear) ?>">
@@ -932,5 +932,6 @@ $notifData = rcGetRecentNotifications(8);
             });
         }
     </script>
+    <script src="<?= BASE_URL ?>assets/js/admin.js?v=<?= (is_file(__DIR__ . '/../assets/js/admin.js') ? filemtime(__DIR__ . '/../assets/js/admin.js') : 0) ?>"></script>
 </body>
 </html>

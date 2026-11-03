@@ -52,6 +52,11 @@ $successMessages = [
         'text'  => 'Your password has been reset. Sign in with your new credentials to open the dashboard.',
         'icon'  => 'fa-circle-check',
     ],
+    'logged_out' => [
+        'title' => 'Signed out successfully',
+        'text'  => 'You have safely logged out of the administrator panel.',
+        'icon'  => 'fa-circle-check',
+    ],
 ];
 
 $error      = '';

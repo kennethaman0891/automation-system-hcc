@@ -642,12 +642,26 @@ class WaChatItem extends WaElement {
             }
           }
           if (action === 'clear') {
-            if (confirm(`Clear all messages with ${chat.name || 'this student'}?`)) {
+            const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
+            const confirmed = await confirmFn({
+              title: 'Clear Chat Messages',
+              message: `Clear all messages with ${chat.name || 'this student'}?`,
+              confirmText: 'Clear Messages',
+              type: 'danger'
+            });
+            if (confirmed) {
               await this.store.chatAction(chat.id, 'clear');
             }
           }
           if (action === 'delete') {
-            if (confirm(`Delete chat with ${chat.name || 'this contact'}?`)) {
+            const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
+            const confirmed = await confirmFn({
+              title: 'Delete Chat',
+              message: `Delete chat with ${chat.name || 'this contact'}? This cannot be undone.`,
+              confirmText: 'Delete Chat',
+              type: 'danger'
+            });
+            if (confirmed) {
               await this.store.chatAction(chat.id, 'delete');
             }
           }
@@ -1584,9 +1598,17 @@ class WaChatList extends WaElement {
         } else if (action === 'starred') {
           this.setFilter('starred');
         } else if (action === 'logout') {
-          if (confirm('Log out from WhatsApp Web Replica?')) {
-            this.store?.logout();
-          }
+          const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
+          confirmFn({
+            title: 'Log Out of WhatsApp',
+            message: 'Are you sure you want to log out from WhatsApp Web Replica?',
+            confirmText: 'Log Out',
+            type: 'danger'
+          }).then((confirmed) => {
+            if (confirmed) {
+              this.store?.logout();
+            }
+          });
         } else {
           alert(`${item.textContent.trim()} action selected.`);
         }

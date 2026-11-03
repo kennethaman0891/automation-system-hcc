@@ -150,14 +150,33 @@
         var btn = document.getElementById(btnId);
         if (!form || !btn) return;
         form.addEventListener('submit', function (e) {
-            var count = btn.getAttribute('data-count') || '';
-            var msg = confirmText(count);
-            if (!window.confirm(msg)) {
-                e.preventDefault();
+            if (form.dataset.hccConfirmed === 'true') {
+                delete form.dataset.hccConfirmed;
                 return;
             }
-            btn.classList.add('is-busy');
-            btn.innerHTML = '<i class="fas fa-spinner"></i> ' + busyLabel;
+            e.preventDefault();
+            var count = btn.getAttribute('data-count') || '';
+            var msg = confirmText(count);
+            var confirmFn = window.hccConfirm || function (opts) {
+                return Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message));
+            };
+            confirmFn({
+                title: 'Confirm Unit Test Import',
+                message: msg,
+                confirmText: 'Import Now',
+                type: 'primary'
+            }).then(function (confirmed) {
+                if (confirmed) {
+                    form.dataset.hccConfirmed = 'true';
+                    btn.classList.add('is-busy');
+                    btn.innerHTML = '<i class="fas fa-spinner"></i> ' + busyLabel;
+                    if (typeof form.requestSubmit === 'function') {
+                        form.requestSubmit();
+                    } else {
+                        form.submit();
+                    }
+                }
+            });
         });
     }
 

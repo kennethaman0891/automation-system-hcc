@@ -982,35 +982,43 @@
         const resetSentStatusBtn = document.getElementById('resetSentStatusBtn');
         if (resetSentStatusBtn) {
             resetSentStatusBtn.addEventListener('click', () => {
-                if (!confirm('Reset dispatch status for all students in this class?')) return;
-                const fd = new FormData();
-                fd.append('action', 'reset_class_dispatch_status');
-                fd.append('csrf_token', csrfToken);
-                fd.append('doc_type', docType);
-                fd.append('class_key', classKey);
-                fd.append('test_type', testType);
+                const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
+                confirmFn({
+                    title: 'Reset Dispatch Status',
+                    message: 'Reset dispatch status for all students in this class?',
+                    confirmText: 'Reset Status',
+                    type: 'danger'
+                }).then((confirmed) => {
+                    if (!confirmed) return;
+                    const fd = new FormData();
+                    fd.append('action', 'reset_class_dispatch_status');
+                    fd.append('csrf_token', csrfToken);
+                    fd.append('doc_type', docType);
+                    fd.append('class_key', classKey);
+                    fd.append('test_type', testType);
 
-                fetch('whatsapp_share.php', { method: 'POST', body: fd })
-                    .then(r => r.json())
-                    .then(res => {
-                        if (res.ok) {
-                            rawStudents.forEach(st => {
-                                const roll = String(st.roll);
-                                const p = getStudentPhone(st.roll);
-                                const hasPhone = !!(window.HCCWhatsApp && window.HCCWhatsApp.cleanPhone(p));
-                                const resetStatus = hasPhone ? 'pending' : 'no_phone';
-                                statusMap.set(roll, resetStatus);
-                                updateStatusPill(roll, resetStatus);
-                            });
-                            updateStats();
-                            if (window.HCCWhatsApp && window.HCCWhatsApp.showToast) {
-                                window.HCCWhatsApp.showToast('Class dispatch statuses reset.', 'fa-rotate-left');
+                    fetch('whatsapp_share.php', { method: 'POST', body: fd })
+                        .then(r => r.json())
+                        .then(res => {
+                            if (res.ok) {
+                                rawStudents.forEach(st => {
+                                    const roll = String(st.roll);
+                                    const p = getStudentPhone(st.roll);
+                                    const hasPhone = !!(window.HCCWhatsApp && window.HCCWhatsApp.cleanPhone(p));
+                                    const resetStatus = hasPhone ? 'pending' : 'no_phone';
+                                    statusMap.set(roll, resetStatus);
+                                    updateStatusPill(roll, resetStatus);
+                                });
+                                updateStats();
+                                if (window.HCCWhatsApp && window.HCCWhatsApp.showToast) {
+                                    window.HCCWhatsApp.showToast('Class dispatch statuses reset.', 'fa-rotate-left');
+                                }
+                            } else {
+                                alert('Failed to reset: ' + (res.error || 'Unknown error'));
                             }
-                        } else {
-                            alert('Failed to reset: ' + (res.error || 'Unknown error'));
-                        }
-                    })
-                    .catch(err => alert('Request failed: ' + err.message));
+                        })
+                        .catch(err => alert('Request failed: ' + err.message));
+                });
             });
         }
 

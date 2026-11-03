@@ -1,4 +1,136 @@
 /* ============================================================
+   HCC Admin — Global Custom Confirmation Modal (window.hccConfirm)
+   Replaces default browser window.confirm() across the entire admin
+   ============================================================ */
+window.hccConfirm = function (options) {
+  return new Promise((resolve) => {
+    if (typeof options === 'string') {
+      options = { message: options };
+    }
+    options = options || {};
+    const title = options.title || 'Confirm Action';
+    const message = options.message || 'Are you sure you want to proceed?';
+    const confirmText = options.confirmText || 'Confirm';
+    const cancelText = options.cancelText || 'Cancel';
+    const type = options.type || (
+      options.message && /delete|remove|revert|rollback|reset|clear|discard|overwrite|logout|backup/i.test(options.message + ' ' + title)
+        ? 'danger'
+        : 'warning'
+    );
+    const icon = options.icon || (
+      type === 'danger' ? 'fa-triangle-exclamation' : (type === 'info' ? 'fa-circle-info' : 'fa-circle-question')
+    );
+
+    let modal = document.getElementById('hccConfirmModal');
+    if (!modal) {
+      const tpl = document.createElement('div');
+      tpl.innerHTML = `
+        <div class="hcc-confirm-backdrop" id="hccConfirmModal" aria-hidden="true" role="alertdialog" aria-modal="true" aria-labelledby="hccConfirmTitle" aria-describedby="hccConfirmDesc">
+          <div class="hcc-confirm-card">
+            <button type="button" class="hcc-confirm-close" id="hccConfirmClose" aria-label="Close dialog">&times;</button>
+            <div class="hcc-confirm-body">
+              <div class="hcc-confirm-icon-wrap" id="hccConfirmIconWrap">
+                <div class="hcc-confirm-icon" id="hccConfirmIcon">
+                  <i class="fa-solid fa-triangle-exclamation"></i>
+                </div>
+              </div>
+              <h3 class="hcc-confirm-title" id="hccConfirmTitle">Confirm Action</h3>
+              <p class="hcc-confirm-desc" id="hccConfirmDesc">Are you sure you want to proceed?</p>
+              <div class="hcc-confirm-actions">
+                <button type="button" class="hcc-confirm-btn-cancel" id="hccConfirmCancel">
+                  <i class="fa-solid fa-xmark"></i>
+                  <span id="hccConfirmCancelText">Cancel</span>
+                </button>
+                <button type="button" class="hcc-confirm-btn-confirm" id="hccConfirmSubmit">
+                  <i class="fa-solid fa-check" id="hccConfirmSubmitIcon"></i>
+                  <span id="hccConfirmSubmitText">Confirm</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+      modal = tpl.firstElementChild;
+      document.body.appendChild(modal);
+    }
+
+    const titleEl = document.getElementById('hccConfirmTitle');
+    const descEl = document.getElementById('hccConfirmDesc');
+    const cancelBtn = document.getElementById('hccConfirmCancel');
+    const submitBtn = document.getElementById('hccConfirmSubmit');
+    const cancelTextEl = document.getElementById('hccConfirmCancelText');
+    const submitTextEl = document.getElementById('hccConfirmSubmitText');
+    const closeBtn = document.getElementById('hccConfirmClose');
+    const iconEl = document.getElementById('hccConfirmIcon');
+
+    if (titleEl) titleEl.textContent = title;
+    if (descEl) descEl.textContent = message;
+    if (cancelTextEl) cancelTextEl.textContent = cancelText;
+    if (submitTextEl) submitTextEl.textContent = confirmText;
+
+    modal.setAttribute('data-type', type);
+    if (iconEl) {
+      iconEl.className = 'hcc-confirm-icon ' + type;
+      iconEl.innerHTML = `<i class="fa-solid ${icon}"></i>`;
+    }
+    if (submitBtn) {
+      submitBtn.className = 'hcc-confirm-btn-confirm ' + type;
+    }
+
+    let resolved = false;
+    const cleanup = () => {
+      modal.classList.remove('is-open');
+      modal.setAttribute('aria-hidden', 'true');
+      document.body.classList.remove('hcc-confirm-open');
+      cancelBtn.removeEventListener('click', onCancel);
+      if (closeBtn) closeBtn.removeEventListener('click', onCancel);
+      submitBtn.removeEventListener('click', onConfirm);
+      modal.removeEventListener('click', onBackdrop);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+
+    const onCancel = (e) => {
+      if (e) e.preventDefault();
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      resolve(false);
+    };
+
+    const onConfirm = (e) => {
+      if (e) e.preventDefault();
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      resolve(true);
+    };
+
+    const onBackdrop = (e) => {
+      if (e.target === modal) {
+        onCancel(e);
+      }
+    };
+
+    const onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        onCancel(e);
+      }
+    };
+
+    cancelBtn.addEventListener('click', onCancel);
+    if (closeBtn) closeBtn.addEventListener('click', onCancel);
+    submitBtn.addEventListener('click', onConfirm);
+    modal.addEventListener('click', onBackdrop);
+    document.addEventListener('keydown', onKeyDown);
+
+    modal.classList.add('is-open');
+    modal.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('hcc-confirm-open');
+    if (cancelBtn) cancelBtn.focus();
+  });
+};
+
+/* ============================================================
    HCC Admin — Core Navigation & Global Interactions
    ============================================================ */
 document.addEventListener('DOMContentLoaded', () => {
@@ -53,10 +185,127 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  /* ── 2. Global Submit Confirmation Delegation (data-confirm) ── */
+  /* ── 2. Custom CSS Logout Confirmation Modal Popup ── */
+  const logoutModal = document.getElementById('logoutConfirmModal');
+  if (logoutModal) {
+    const cancelBtn = document.getElementById('logoutModalCancel');
+    const closeBtn = document.getElementById('logoutModalClose');
+
+    const openLogoutModal = () => {
+      logoutModal.classList.add('is-open');
+      logoutModal.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('logout-modal-open');
+      if (cancelBtn) cancelBtn.focus();
+    };
+
+    const closeLogoutModal = () => {
+      logoutModal.classList.remove('is-open');
+      logoutModal.setAttribute('aria-hidden', 'true');
+      document.body.classList.remove('logout-modal-open');
+    };
+
+    if (cancelBtn) cancelBtn.addEventListener('click', closeLogoutModal);
+    if (closeBtn) closeBtn.addEventListener('click', closeLogoutModal);
+
+    logoutModal.addEventListener('click', (e) => {
+      if (e.target === logoutModal) {
+        closeLogoutModal();
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && logoutModal.classList.contains('is-open')) {
+        closeLogoutModal();
+      }
+    });
+  }
+
+  /* Intercept any logout link / button click to open custom CSS modal */
+  document.addEventListener('click', (e) => {
+    const logoutLink = e.target.closest('.js-logout-trigger, #sidebarLogoutBtn, .sidebar-logout, a[href="logout.php"], a[href$="/logout.php"]');
+    if (logoutLink && !logoutLink.closest('.logout-modal-card')) {
+      const modal = document.getElementById('logoutConfirmModal');
+      if (modal) {
+        e.preventDefault();
+        modal.classList.add('is-open');
+        modal.setAttribute('aria-hidden', 'false');
+        document.body.classList.add('logout-modal-open');
+        const cancel = document.getElementById('logoutModalCancel');
+        if (cancel) cancel.focus();
+      }
+    }
+  });
+
+  /* ── 3. Global Submit Confirmation Delegation (data-confirm) ── */
   document.addEventListener('submit', (e) => {
+    if (e.target.classList.contains('sidebar-logout-form') || e.target.classList.contains('logout-modal-form')) {
+      if (e.target.querySelector('input[name="confirm"]')?.value === '1') {
+        return; // confirmed submission from modal, let it proceed!
+      }
+      e.preventDefault();
+      const modal = document.getElementById('logoutConfirmModal');
+      if (modal) {
+        modal.classList.add('is-open');
+        modal.setAttribute('aria-hidden', 'false');
+        document.body.classList.add('logout-modal-open');
+        const cancel = document.getElementById('logoutModalCancel');
+        if (cancel) cancel.focus();
+      } else {
+        window.location.href = 'logout.php';
+      }
+      return;
+    }
+
+    if (e.target.dataset.hccConfirmed === 'true') {
+      delete e.target.dataset.hccConfirmed;
+      return; // verified confirmation, let it submit!
+    }
+
     const msg = e.target.getAttribute('data-confirm');
-    if (msg && !confirm(msg)) e.preventDefault();
+    if (msg) {
+      e.preventDefault();
+      const form = e.target;
+      window.hccConfirm({
+        title: form.getAttribute('data-confirm-title') || 'Confirm Action',
+        message: msg,
+        confirmText: form.getAttribute('data-confirm-btn') || 'Proceed',
+        type: /delete|remove|revert|rollback|reset|clear|overwrite/i.test(msg) ? 'danger' : 'warning'
+      }).then((confirmed) => {
+        if (confirmed) {
+          form.dataset.hccConfirmed = 'true';
+          if (typeof form.requestSubmit === 'function') {
+            form.requestSubmit();
+          } else {
+            form.submit();
+          }
+        }
+      });
+      return;
+    }
+  });
+
+  /* ── 4. Global Click Confirmation Delegation (data-confirm on buttons/links) ── */
+  document.addEventListener('click', (e) => {
+    const trigger = e.target.closest('[data-confirm]:not(form)');
+    if (trigger) {
+      if (trigger.dataset.hccConfirmed === 'true') {
+        delete trigger.dataset.hccConfirmed;
+        return; // allow click
+      }
+      e.preventDefault();
+      const msg = trigger.getAttribute('data-confirm');
+      window.hccConfirm({
+        title: trigger.getAttribute('data-confirm-title') || 'Confirm Action',
+        message: msg,
+        confirmText: trigger.getAttribute('data-confirm-btn') || 'Proceed',
+        type: /delete|remove|revert|rollback|reset|clear|overwrite/i.test(msg) ? 'danger' : 'warning'
+      }).then((confirmed) => {
+        if (confirmed) {
+          trigger.dataset.hccConfirmed = 'true';
+          trigger.click();
+        }
+      });
+    }
   });
 
   /* ── 3. Global Print & Download Action Delegation ── */

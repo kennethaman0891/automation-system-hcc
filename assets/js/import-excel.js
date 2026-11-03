@@ -18,20 +18,42 @@
        so nothing below may early-return before this. */
     if (confirmForm) {
         confirmForm.addEventListener('submit', function (e) {
-            var count = confirmBtn ? (confirmBtn.getAttribute('data-count') || '0') : '0';
-            var overwrite = document.getElementById('overwriteChk');
-            var msg = 'Import ' + count + ' student(s) into the database?';
-            msg += overwrite && overwrite.checked
-                ? ' Existing entries with matching roll numbers WILL be overwritten.'
-                : ' Existing entries are kept; only new roll numbers are added.';
-            if (!window.confirm(msg)) {
-                e.preventDefault();
+            if (confirmForm.dataset.hccConfirmed === 'true') {
+                delete confirmForm.dataset.hccConfirmed;
                 return;
             }
-            if (confirmBtn) {
-                confirmBtn.classList.add('is-busy');
-                confirmBtn.innerHTML = '<i class="fas fa-spinner"></i> Importing…';
-            }
+            e.preventDefault();
+            var count = confirmBtn ? (confirmBtn.getAttribute('data-count') || '0') : '0';
+            var overwrite = document.getElementById('overwriteChk');
+            var isOverwrite = overwrite && overwrite.checked;
+            var msg = 'Import ' + count + ' student(s) into the database?';
+            msg += isOverwrite
+                ? ' Existing entries with matching roll numbers WILL be overwritten.'
+                : ' Existing entries are kept; only new roll numbers are added.';
+
+            var confirmFn = window.hccConfirm || function (opts) {
+                return Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message));
+            };
+
+            confirmFn({
+                title: 'Confirm Student Import',
+                message: msg,
+                confirmText: 'Import Students',
+                type: isOverwrite ? 'warning' : 'primary'
+            }).then(function (confirmed) {
+                if (confirmed) {
+                    confirmForm.dataset.hccConfirmed = 'true';
+                    if (confirmBtn) {
+                        confirmBtn.classList.add('is-busy');
+                        confirmBtn.innerHTML = '<i class="fas fa-spinner"></i> Importing…';
+                    }
+                    if (typeof confirmForm.requestSubmit === 'function') {
+                        confirmForm.requestSubmit();
+                    } else {
+                        confirmForm.submit();
+                    }
+                }
+            });
         });
     }
 

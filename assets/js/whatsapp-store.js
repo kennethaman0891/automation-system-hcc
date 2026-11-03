@@ -366,7 +366,9 @@ class WhatsAppStore extends EventTarget {
   getCSRFToken() {
     if (typeof document === 'undefined') return '';
     const meta = document.querySelector('meta[name="csrf-token"]');
-    return meta ? meta.content : '';
+    if (meta && meta.content) return meta.content;
+    const inp = document.querySelector('input[name="csrf_token"]');
+    return inp ? inp.value : '';
   }
   
   // ============ CHATS ============

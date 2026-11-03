@@ -716,7 +716,7 @@ $romanMap = ['1'=>'I','2'=>'II','3'=>'III','4'=>'IV','5'=>'V','6'=>'VI','7'=>'VI
                     <a href="promote_students.php" class="btn btn-outline-secondary">
                         <i class="fa-solid fa-graduation-cap"></i> Promote Students
                     </a>
-                    <form method="POST" action="records_archive.php" style="display:inline;" onsubmit="return confirm('Download complete MySQL database backup SQL export?');">
+                    <form method="POST" action="records_archive.php" style="display:inline;" data-confirm="Download complete MySQL database backup SQL export?" data-confirm-title="Database Backup" data-confirm-btn="Download Backup">
                         <input type="hidden" name="csrf_token" value="<?= generateCSRFToken() ?>">
                         <input type="hidden" name="action" value="backup_database">
                         <button type="submit" class="btn btn-outline-secondary" title="Download Complete MySQL Database Backup" style="background:#fff; border-color:#cbd5e1; color:#1e293b;">

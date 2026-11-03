@@ -98,15 +98,51 @@ $adminNav = [
             </nav>
 
             <div class="sidebar-footer">
-                <form method="POST" action="<?= BASE_URL ?>admin/logout.php" class="sidebar-logout-form" data-confirm="Are you sure you want to log out?">
-                    <?= csrfField() ?>
-                    <button type="submit" class="sidebar-logout">
-                        <i class="fa-solid fa-arrow-right-from-bracket"></i>
-                        <span>Log out</span>
-                    </button>
-                </form>
+                <a href="<?= BASE_URL ?>admin/logout.php" class="sidebar-logout js-logout-trigger" title="Log out of admin session">
+                    <i class="fa-solid fa-arrow-right-from-bracket"></i>
+                    <span>Log out</span>
+                </a>
             </div>
         </aside>
+
+        <!-- Logout Confirmation Modal (Custom CSS Popup) -->
+        <div class="logout-modal-backdrop" id="logoutConfirmModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="logoutModalTitle">
+            <div class="logout-modal-card">
+                <button type="button" class="logout-modal-close" id="logoutModalClose" aria-label="Close dialog">&times;</button>
+                <div class="logout-modal-body">
+                    <div class="logout-modal-icon-wrap">
+                        <div class="logout-modal-icon">
+                            <i class="fa-solid fa-arrow-right-from-bracket"></i>
+                        </div>
+                    </div>
+                    <h3 class="logout-modal-title" id="logoutModalTitle">Confirm Logout</h3>
+                    <p class="logout-modal-desc">Are you sure you want to log out of the admin panel? Any unsaved changes on this page will be lost.</p>
+                    <div class="logout-modal-user">
+                        <div class="logout-modal-avatar">
+                            <?= htmlspecialchars(mb_strtoupper(mb_substr(trim($adminName), 0, 1)), ENT_QUOTES, 'UTF-8') ?>
+                        </div>
+                        <div class="logout-modal-user-info">
+                            <strong><?= htmlspecialchars($adminName, ENT_QUOTES, 'UTF-8') ?></strong>
+                            <span><?= htmlspecialchars($adminRole, ENT_QUOTES, 'UTF-8') ?></span>
+                        </div>
+                    </div>
+                    <form method="POST" action="<?= BASE_URL ?>admin/logout.php" class="logout-modal-form">
+                        <?= csrfField() ?>
+                        <input type="hidden" name="confirm" value="1">
+                        <div class="logout-modal-actions">
+                            <button type="button" class="logout-btn-cancel" id="logoutModalCancel">
+                                <i class="fa-solid fa-xmark"></i>
+                                <span>Cancel</span>
+                            </button>
+                            <button type="submit" class="logout-btn-confirm">
+                                <i class="fa-solid fa-arrow-right-from-bracket"></i>
+                                <span>Yes, Log Out</span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
 
         <main class="admin-main">
             <header class="admin-header">

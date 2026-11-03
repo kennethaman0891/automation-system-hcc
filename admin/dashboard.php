@@ -71,6 +71,7 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
+    <meta name="csrf-token" content="<?= htmlspecialchars(generateCSRFToken(), ENT_QUOTES) ?>">
     <link rel="stylesheet" href="<?= BASE_URL ?>assets/css/admin.css?v=<?= (is_file(__DIR__ . '/../assets/css/admin.css') ? filemtime(__DIR__ . '/../assets/css/admin.css') : 0) ?>">
     <link rel="stylesheet" href="<?= BASE_URL ?>assets/css/admin-dash.css?v=<?= (is_file(__DIR__ . '/../assets/css/admin-dash.css') ? filemtime(__DIR__ . '/../assets/css/admin-dash.css') : 0) ?>">
 </head>
@@ -152,31 +153,186 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
                     </div>
                 </section>
 
-                <!-- ═══ WhatsApp Share Hub launcher ═══ -->
-                <section class="dash-wa" id="dashWaLauncher" role="link" tabindex="0"
-                         data-href="whatsapp_share.php"
-                         aria-label="Open the WhatsApp Share Hub">
-                    <span class="dash-wa-orb" aria-hidden="true"><i class="fa-brands fa-whatsapp"></i></span>
-                    <div class="dash-wa-main">
-                        <div class="dash-wa-head">
-                            <h2>WhatsApp Share Hub</h2>
-                            <span class="dash-wa-live"><span class="dash-wa-dot" aria-hidden="true"></span> Live</span>
+                <!-- ═══ WhatsApp Hub Advertisement Showcase ═══ -->
+                <section class="dash-wa-promo-card" id="dashWaLauncher" aria-label="WhatsApp Parent Communication Hub">
+                    <!-- 1. Clean & Professional WhatsApp Hub Header -->
+                    <div class="dash-wa-promo-header">
+                        <div class="dash-wa-promo-branding">
+                            <span class="dash-wa-promo-orb" aria-hidden="true"><i class="fa-brands fa-whatsapp"></i></span>
+                            <div class="dash-wa-promo-meta">
+                                <div class="dash-wa-title-row">
+                                    <h2 class="dash-wa-promo-title">WhatsApp Share &amp; Dispatch Hub</h2>
+                                    <span class="dash-wa-live-badge"><span class="dash-wa-dot"></span> Active</span>
+                                </div>
+                                <p class="dash-wa-promo-subtitle">
+                                    Instant academic dispatch for Report Cards, Unit Test Slips &amp; parent notifications.
+                                </p>
+                            </div>
                         </div>
-                        <p class="dash-wa-sub">Broadcast report cards, unit-test slips and bonafide certificates straight to parent WhatsApp.</p>
-                        <div class="dash-wa-stats">
-                            <span><i class="fas fa-address-book" aria-hidden="true"></i> <?= (int)$waContacts ?> parents</span>
-                            <span class="is-ok"><i class="fas fa-check-double" aria-hidden="true"></i> <?= (int)$waSent ?> sent</span>
-                            <span class="is-wait"><i class="fas fa-clock" aria-hidden="true"></i> <?= (int)$waPending ?> pending</span>
+
+                        <div class="dash-wa-promo-header-actions">
+                            <div class="dash-wa-stats-bar">
+                                <div class="dash-wa-stat-item" title="Verified parent phone numbers">
+                                    <span class="stat-label">Parents</span>
+                                    <span class="stat-num"><?= (int)$waContacts ?></span>
+                                </div>
+                                <span class="dash-wa-stat-sep" aria-hidden="true"></span>
+                                <div class="dash-wa-stat-item is-sent" title="Total messages sent">
+                                    <span class="stat-label">Dispatched</span>
+                                    <span class="stat-num"><?= (int)$waSent ?></span>
+                                </div>
+                                <span class="dash-wa-stat-sep" aria-hidden="true"></span>
+                                <div class="dash-wa-stat-item is-queue" title="Messages in queue">
+                                    <span class="stat-label">In Queue</span>
+                                    <span class="stat-num"><?= (int)$waPending ?></span>
+                                </div>
+                            </div>
+                            <a href="whatsapp_share.php" class="btn-wa-launch-hub" title="Open Complete WhatsApp Share Hub">
+                                <span>Open Hub</span>
+                                <i class="fas fa-arrow-up-right-from-square"></i>
+                            </a>
                         </div>
                     </div>
-                    <div class="dash-wa-actions">
-                        <div class="dash-wa-chips">
-                            <a href="whatsapp_share.php?doc_type=report_card" class="dash-wa-chip"><i class="fas fa-file-lines" aria-hidden="true"></i> Report Card</a>
-                            <a href="whatsapp_share.php?doc_type=unit_test" class="dash-wa-chip"><i class="fas fa-pen-to-square" aria-hidden="true"></i> Unit Test</a>
-                            <a href="whatsapp_share.php?doc_type=bonafide" class="dash-wa-chip"><i class="fas fa-certificate" aria-hidden="true"></i> Bonafide</a>
-                            <a href="whatsapp_share.php?doc_type=announcement" class="dash-wa-chip"><i class="fas fa-bullhorn" aria-hidden="true"></i> Notice</a>
+
+                    <!-- 2. WAY MORE BROADER VIDEO STAGE -->
+                    <div class="dash-wa-video-stage">
+                        <div class="dash-wa-video-container" id="dashWaVideoWrapper">
+                            <video
+                                id="dashWaPromoVideo"
+                                class="dash-wa-video-player"
+                                autoplay
+                                muted
+                                loop
+                                playsinline
+                                preload="metadata"
+                                poster="<?= BASE_URL ?>assets/images/wa-promo-poster.jpg?v=<?= (file_exists(__DIR__ . '/../assets/images/wa-promo-poster.jpg') ? filemtime(__DIR__ . '/../assets/images/wa-promo-poster.jpg') : 1) ?>"
+                                src="<?= BASE_URL ?>assets/videos/whatsapp-hub-promo.mp4?v=<?= (file_exists(__DIR__ . '/../assets/videos/whatsapp-hub-promo.mp4') ? filemtime(__DIR__ . '/../assets/videos/whatsapp-hub-promo.mp4') : 1) ?>">
+                                Your browser does not support HTML5 video.
+                            </video>
+
+                            <!-- Video Overlay UI (Advertisement Overlays) -->
+                            <div class="dash-wa-video-overlay">
+                                <!-- Top Bar -->
+                                <div class="dash-wa-video-topbar">
+                                    <div class="video-tag-chip">
+                                        <i class="fa-brands fa-whatsapp"></i>
+                                        <span>HCC WhatsApp Parent Portal • Live Showcase</span>
+                                    </div>
+                                    <div class="video-controls-compact">
+                                        <button type="button" class="btn-video-ctrl" id="waVideoPlayPauseBtn" title="Play / Pause Video" aria-label="Play or pause video">
+                                            <i class="fas fa-pause"></i>
+                                        </button>
+                                        <button type="button" class="btn-video-ctrl" id="waVideoMuteBtn" title="Unmute Audio" aria-label="Mute or unmute audio">
+                                            <i class="fas fa-volume-xmark"></i>
+                                        </button>
+                                        <button type="button" class="btn-video-ctrl" id="waVideoFullscreenBtn" title="Widescreen Theater Fullscreen" aria-label="Toggle fullscreen video">
+                                            <i class="fas fa-expand"></i>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Floating Interactive Feature Callouts -->
+                                <div class="dash-wa-video-callouts">
+                                    <div class="wa-callout-card">
+                                        <div class="wa-callout-icon"><i class="fas fa-file-pdf"></i></div>
+                                        <div class="wa-callout-body">
+                                            <strong>Instant 1-Click PDF Dispatch</strong>
+                                            <small>Direct delivery for Semester Report Cards &amp; Unit Test Slips</small>
+                                        </div>
+                                    </div>
+                                    <div class="wa-callout-card">
+                                        <div class="wa-callout-icon"><i class="fas fa-check-double"></i></div>
+                                        <div class="wa-callout-body">
+                                            <strong>Live Delivery Verification</strong>
+                                            <small>Real-time delivery receipts &amp; parent roster database synchronization</small>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Bottom Progress & Quick Actions -->
+                                <div class="dash-wa-video-bottombar">
+                                    <div class="video-progress-wrap" id="waVideoProgressWrap" title="Click to seek">
+                                        <div class="video-progress-bar" id="waVideoProgressBar"></div>
+                                    </div>
+                                    <div class="video-bottom-meta">
+                                        <span class="video-status-text"><span class="live-recording-dot"></span> Automated Portal Preview</span>
+                                        <div class="video-right-actions">
+                                            <button type="button" class="btn-change-video-link" id="waChangeVideoBtn" title="Change promotional video source">
+                                                <i class="fas fa-sliders"></i> Video Settings
+                                            </button>
+                                            <a href="whatsapp_share.php" class="btn-video-cta" title="Launch WhatsApp Share Hub">
+                                                <span>Launch Workspace</span> <i class="fas fa-paper-plane"></i>
+                                            </a>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Video Settings Floating Modal -->
+                            <div class="dash-wa-video-settings-panel" id="waVideoSettingsPanel" style="display:none;">
+                                <div class="settings-panel-inner">
+                                    <div class="settings-panel-head">
+                                        <h4><i class="fas fa-video"></i> Video Advertisement Settings</h4>
+                                        <button type="button" class="btn-close-settings" id="waCloseVideoSettings">&times;</button>
+                                    </div>
+                                    <div class="settings-panel-body">
+                                        <p class="text-muted" style="font-size:0.8rem;margin-bottom:12px;">Choose or change the promotional video displayed in the WhatsApp Hub advertisement:</p>
+                                        <div class="video-source-options">
+                                            <label class="video-opt-label">
+                                                <input type="radio" name="video_source_choice" value="default" checked>
+                                                <span>Official WhatsApp Share Hub Motion Graphics (1080p Full HD)</span>
+                                            </label>
+                                            <label class="video-opt-label" style="margin-top:6px;">
+                                                <input type="radio" name="video_source_choice" value="custom">
+                                                <span>Custom Video URL / Path:</span>
+                                            </label>
+                                            <input type="text" id="customVideoUrlInput" class="form-control form-control-sm" placeholder="e.g. assets/videos/custom.mp4 or https://..." style="margin-top:4px;font-size:0.78rem;padding:6px 10px;border-radius:6px;border:1px solid #cbd5e1;width:100%;">
+                                        </div>
+                                        <div style="margin-top:14px;display:flex;justify-content:flex-end;gap:8px;">
+                                            <button type="button" class="btn btn-sm btn-secondary" id="waCancelVideoSettings" style="padding:5px 12px;font-size:0.78rem;">Cancel</button>
+                                            <button type="button" class="btn btn-sm btn-primary" id="waSaveVideoSettings" style="padding:5px 14px;font-size:0.78rem;background:#00a884;border:none;">Apply Video</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
-                        <a href="whatsapp_share.php" class="dash-wa-open">Open Hub <i class="fas fa-arrow-right" aria-hidden="true"></i></a>
+                    </div>
+
+                    <!-- 3. Key Feature Pillars & Direct Document Dispatch Shortcuts -->
+                    <div class="dash-wa-promo-footer">
+                        <div class="dash-wa-features-grid">
+                            <div class="dash-wa-feat-item">
+                                <i class="fas fa-bolt feat-icon"></i>
+                                <div class="feat-body">
+                                    <strong>1-Click Direct Delivery</strong>
+                                    <span>Send PDFs directly to parent chat without manual downloads or external tools</span>
+                                </div>
+                            </div>
+                            <div class="dash-wa-feat-item">
+                                <i class="fas fa-database feat-icon"></i>
+                                <div class="feat-body">
+                                    <strong>Synced Parent Directory</strong>
+                                    <span>Filtered by Class, Std, Division &amp; Roll No with instant database phone lookup</span>
+                                </div>
+                            </div>
+                            <div class="dash-wa-feat-item">
+                                <i class="fas fa-shield-halved feat-icon"></i>
+                                <div class="feat-body">
+                                    <strong>Secure &amp; Official School Branding</strong>
+                                    <span>Tamper-proof PDF generation with official school seal, principal sign &amp; verified badges</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="dash-wa-quick-dispatch">
+                            <span class="quick-dispatch-label"><i class="fas fa-paperclip"></i> Quick Batch Dispatch:</span>
+                            <div class="quick-dispatch-chips">
+                                <a href="whatsapp_share.php?doc_type=report_card" class="dash-wa-chip"><i class="fas fa-file-lines" aria-hidden="true"></i> Report Cards</a>
+                                <a href="whatsapp_share.php?doc_type=unit_test" class="dash-wa-chip"><i class="fas fa-pen-to-square" aria-hidden="true"></i> Unit Test Slips</a>
+                                <a href="whatsapp_share.php?doc_type=bonafide" class="dash-wa-chip"><i class="fas fa-certificate" aria-hidden="true"></i> Bonafide Certificates</a>
+                                <a href="whatsapp_share.php?doc_type=announcement" class="dash-wa-chip"><i class="fas fa-bullhorn" aria-hidden="true"></i> School Notices</a>
+                            </div>
+                        </div>
                     </div>
                 </section>
 
@@ -364,22 +520,157 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
         </main>
     </div>
     <script>
-        /* WhatsApp launcher: whole card is clickable / keyboard-activatable. */
+        /* ═══ WhatsApp Hub Advertisement & Broad Video Controller ═══ */
     (function () {
-        var launcher = document.getElementById('dashWaLauncher');
-        if (!launcher) return;
-        var target = launcher.getAttribute('data-href') || 'whatsapp_share.php';
-        launcher.addEventListener('click', function (e) {
-            // Let the inner chips & "Open Hub" link behave normally.
-            if (e.target.closest('a, button')) return;
-            window.location.href = target;
-        });
-        launcher.addEventListener('keydown', function (e) {
-            if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
-                e.preventDefault();
-                window.location.href = target;
+        var video = document.getElementById('dashWaPromoVideo');
+        var wrapper = document.getElementById('dashWaVideoWrapper');
+        var playPauseBtn = document.getElementById('waVideoPlayPauseBtn');
+        var muteBtn = document.getElementById('waVideoMuteBtn');
+        var fsBtn = document.getElementById('waVideoFullscreenBtn');
+        var progressBar = document.getElementById('waVideoProgressBar');
+        var progressWrap = document.getElementById('waVideoProgressWrap');
+        var settingsBtn = document.getElementById('waChangeVideoBtn');
+        var settingsPanel = document.getElementById('waVideoSettingsPanel');
+        var closeSettingsBtn = document.getElementById('waCloseVideoSettings');
+        var cancelSettingsBtn = document.getElementById('waCancelVideoSettings');
+        var saveSettingsBtn = document.getElementById('waSaveVideoSettings');
+        var customUrlInput = document.getElementById('customVideoUrlInput');
+
+        if (!video) return;
+
+        // Restore custom video source if previously saved
+        try {
+            var savedVideo = localStorage.getItem('hcc_wa_promo_video');
+            if (savedVideo) {
+                video.src = savedVideo;
+                if (customUrlInput) customUrlInput.value = savedVideo;
+                var customRadio = document.querySelector('input[name="video_source_choice"][value="custom"]');
+                if (customRadio) customRadio.checked = true;
+            }
+        } catch (e) {}
+
+        // Play / Pause toggle
+        function togglePlayPause() {
+            if (video.paused || video.ended) {
+                video.play().then(function () {
+                    if (playPauseBtn) playPauseBtn.innerHTML = '<i class="fas fa-pause"></i>';
+                }).catch(function () {});
+            } else {
+                video.pause();
+                if (playPauseBtn) playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+            }
+        }
+        if (playPauseBtn) playPauseBtn.addEventListener('click', togglePlayPause);
+
+        // Mute / Unmute toggle
+        function toggleMute() {
+            video.muted = !video.muted;
+            if (muteBtn) {
+                muteBtn.innerHTML = video.muted ? '<i class="fas fa-volume-xmark"></i>' : '<i class="fas fa-volume-high"></i>';
+                muteBtn.title = video.muted ? 'Unmute Audio' : 'Mute Audio';
+            }
+        }
+        if (muteBtn) muteBtn.addEventListener('click', toggleMute);
+
+        // Update progress bar
+        video.addEventListener('timeupdate', function () {
+            if (progressBar && video.duration) {
+                var pct = (video.currentTime / video.duration) * 100;
+                progressBar.style.width = pct + '%';
             }
         });
+
+        // Click on progress bar to seek
+        if (progressWrap) {
+            progressWrap.addEventListener('click', function (e) {
+                if (!video.duration) return;
+                var rect = progressWrap.getBoundingClientRect();
+                var pos = (e.clientX - rect.left) / rect.width;
+                video.currentTime = pos * video.duration;
+            });
+        }
+
+        // Fullscreen Theater
+        function toggleFullscreen() {
+            var target = wrapper || video;
+            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                if (target.requestFullscreen) {
+                    target.requestFullscreen();
+                } else if (target.webkitRequestFullscreen) {
+                    target.webkitRequestFullscreen();
+                }
+                if (fsBtn) fsBtn.innerHTML = '<i class="fas fa-compress"></i>';
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                } else if (document.webkitExitFullscreen) {
+                    document.webkitExitFullscreen();
+                }
+                if (fsBtn) fsBtn.innerHTML = '<i class="fas fa-expand"></i>';
+            }
+        }
+        if (fsBtn) fsBtn.addEventListener('click', toggleFullscreen);
+
+        document.addEventListener('fullscreenchange', function () {
+            if (!document.fullscreenElement && fsBtn) {
+                fsBtn.innerHTML = '<i class="fas fa-expand"></i>';
+            }
+        });
+
+        // Settings Modal Toggle
+        if (settingsBtn && settingsPanel) {
+            settingsBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                settingsPanel.style.display = (settingsPanel.style.display === 'none' || !settingsPanel.style.display) ? 'block' : 'none';
+            });
+        }
+        if (closeSettingsBtn && settingsPanel) {
+            closeSettingsBtn.addEventListener('click', function () { settingsPanel.style.display = 'none'; });
+        }
+        if (cancelSettingsBtn && settingsPanel) {
+            cancelSettingsBtn.addEventListener('click', function () { settingsPanel.style.display = 'none'; });
+        }
+
+        if (saveSettingsBtn) {
+            saveSettingsBtn.addEventListener('click', function () {
+                var checkedChoice = document.querySelector('input[name="video_source_choice"]:checked');
+                var val = checkedChoice ? checkedChoice.value : 'default';
+                if (val === 'custom') {
+                    var customUrl = (customUrlInput ? customUrlInput.value.trim() : '');
+                    if (customUrl) {
+                        try { localStorage.setItem('hcc_wa_promo_video', customUrl); } catch (e) {}
+                        video.src = customUrl;
+                        video.load();
+                        video.play().catch(function () {});
+                    }
+                } else {
+                    try { localStorage.removeItem('hcc_wa_promo_video'); } catch (e) {}
+                    video.src = '<?= BASE_URL ?>assets/videos/whatsapp-hub-promo.mp4?v=<?= (file_exists(__DIR__ . '/../assets/videos/whatsapp-hub-promo.mp4') ? filemtime(__DIR__ . '/../assets/videos/whatsapp-hub-promo.mp4') : 1) ?>';
+                    video.load();
+                    video.play().catch(function () {});
+                }
+                if (settingsPanel) settingsPanel.style.display = 'none';
+            });
+        }
+
+        // Auto-pause video when out of viewport to optimize CPU/RAM
+        if ('IntersectionObserver' in window) {
+            var observer = new IntersectionObserver(function (entries) {
+                entries.forEach(function (entry) {
+                    if (!entry.isIntersecting) {
+                        if (!video.paused) video.pause();
+                        if (playPauseBtn) playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+                    } else {
+                        if (video.paused && !video.ended) {
+                            video.play().then(function () {
+                                if (playPauseBtn) playPauseBtn.innerHTML = '<i class="fas fa-pause"></i>';
+                            }).catch(function () {});
+                        }
+                    }
+                });
+            }, { threshold: 0.25 });
+            observer.observe(video);
+        }
     })();
 
         /* Header notification bell: toggle dropdown + mark-as-read on open. */
@@ -462,6 +753,16 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
             });
         }
     })();
+    </script>
+    <script src="<?= BASE_URL ?>assets/vendor/jspdf@2.5.1/jspdf.umd.min.js"></script>
+    <script src="<?= BASE_URL ?>assets/js/hcc-logo-base64.js?v=<?= (is_file(__DIR__ . '/../assets/js/hcc-logo-base64.js') ? filemtime(__DIR__ . '/../assets/js/hcc-logo-base64.js') : 0) ?>"></script>
+    <script type="application/json" id="waHubData">
+        <?= json_encode([
+            "schoolName" => $schoolName,
+            "waContacts" => (int)$waContacts,
+            "waSent"     => (int)$waSent,
+            "waPending"  => (int)$waPending
+        ], JSON_UNESCAPED_UNICODE) ?>
     </script>
     <script src="<?= BASE_URL ?>assets/js/admin.js?v=<?= (is_file(__DIR__ . '/../assets/js/admin.js') ? filemtime(__DIR__ . '/../assets/js/admin.js') : 0) ?>"></script>
 </body>

@@ -398,7 +398,14 @@ class WaConversationHeader extends HTMLElement {
           await this.store.chatAction(chat.id, 'mute', { mute: !chat.is_muted });
           this.render();
         } else if (action === 'clear-chat') {
-          if (confirm(`Clear all messages with ${chat.name}?`)) {
+          const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
+          const confirmed = await confirmFn({
+            title: 'Clear Chat Messages',
+            message: `Clear all messages with ${chat.name}?`,
+            confirmText: 'Clear Messages',
+            type: 'danger'
+          });
+          if (confirmed) {
             await this.store.chatAction(chat.id, 'clear');
             this.dispatchEvent(new CustomEvent('chat-cleared', { detail: { chatId: chat.id }, bubbles: true, composed: true }));
           }
@@ -1159,9 +1166,17 @@ class WaMessageBubble extends HTMLElement {
           this.store?.updateMessage(msg.id, { is_starred: msg.is_starred });
           this.render();
         } else if (action === 'delete') {
-          if (confirm('Delete this message?')) {
-            this.remove();
-          }
+          const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
+          confirmFn({
+            title: 'Delete Message',
+            message: 'Are you sure you want to delete this message?',
+            confirmText: 'Delete',
+            type: 'danger'
+          }).then((confirmed) => {
+            if (confirmed) {
+              this.remove();
+            }
+          });
         } else if (action === 'forward') {
           alert('Select a student contact to forward this message.');
         }

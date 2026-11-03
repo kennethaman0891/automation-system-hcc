@@ -522,11 +522,19 @@
         const resetSentStatusBtn = document.getElementById('resetSentStatusBtn');
         if (resetSentStatusBtn) {
             resetSentStatusBtn.addEventListener('click', () => {
-                if (confirm('Reset sent status for this entire group?')) {
-                    sentSet.clear();
-                    localStorage.removeItem(sentStorageKey);
-                    updateStats();
-                }
+                const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
+                confirmFn({
+                    title: 'Reset Sent Status',
+                    message: 'Reset sent status for this entire group?',
+                    confirmText: 'Reset Sent Status',
+                    type: 'danger'
+                }).then((confirmed) => {
+                    if (confirmed) {
+                        sentSet.clear();
+                        localStorage.removeItem(sentStorageKey);
+                        updateStats();
+                    }
+                });
             });
         }
 

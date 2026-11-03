@@ -570,22 +570,30 @@
       const col = this.state.columns.find((c) => c.id === colId);
       if (!col) return;
 
-      if (!confirm(`Are you sure you want to remove the column "${col.label}"?`)) return;
+      const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
+      confirmFn({
+        title: 'Remove Class Column',
+        message: `Are you sure you want to remove the column "${col.label}"? All cell marks/subjects in this column will be cleared.`,
+        confirmText: 'Remove Column',
+        type: 'danger'
+      }).then((confirmed) => {
+        if (!confirmed) return;
 
-      this.state.columns = this.state.columns.filter((c) => c.id !== colId);
+        this.state.columns = this.state.columns.filter((c) => c.id !== colId);
 
-      // Clean up cell entries
-      this.state.rows.forEach((r) => {
-        r.slots.forEach((s) => {
-          if (s.cells && s.cells[colId] !== undefined) {
-            delete s.cells[colId];
-          }
+        // Clean up cell entries
+        this.state.rows.forEach((r) => {
+          r.slots.forEach((s) => {
+            if (s.cells && s.cells[colId] !== undefined) {
+              delete s.cells[colId];
+            }
+          });
         });
-      });
 
-      this.setDirty(true);
-      this.render();
-      this.showToast(`Removed column "${col.label}"`, 'info');
+        this.setDirty(true);
+        this.render();
+        this.showToast(`Removed column "${col.label}"`, 'info');
+      });
     }
 
     /**
@@ -685,25 +693,48 @@
         this.showToast(`Removed time slot`, 'info');
       } else {
         // Only 1 slot left for this date
-        if (confirm(`This is the only time slot for ${dateObj.date} (${dateObj.day}). Deleting it will remove the entire date row. Proceed?`)) {
-          this.deleteDateRow(dateId);
-        }
+        const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
+        confirmFn({
+          title: 'Delete Date Schedule',
+          message: `This is the only time slot for ${dateObj.date} (${dateObj.day}). Deleting it will remove the entire date row. Proceed?`,
+          confirmText: 'Delete Date Row',
+          type: 'danger'
+        }).then((confirmed) => {
+          if (confirmed) {
+            this.deleteDateRow(dateId, true);
+          }
+        });
       }
     }
 
     /**
      * 6. Delete Entire Date Row
      */
-    deleteDateRow(dateId) {
+    deleteDateRow(dateId, skipConfirm = false) {
       const dateObj = this.state.rows.find((r) => r.dateId === dateId);
       if (!dateObj) return;
 
-      if (confirm(`Are you sure you want to delete the schedule for ${dateObj.date} (${dateObj.day})?`)) {
+      const doDelete = () => {
         this.state.rows = this.state.rows.filter((r) => r.dateId !== dateId);
         this.setDirty(true);
         this.render();
         this.showToast(`Deleted date row`, 'info');
+      };
+
+      if (skipConfirm) {
+        doDelete();
+        return;
       }
+
+      const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
+      confirmFn({
+        title: 'Delete Date Schedule',
+        message: `Are you sure you want to delete the schedule for ${dateObj.date} (${dateObj.day})?`,
+        confirmText: 'Delete Date Row',
+        type: 'danger'
+      }).then((confirmed) => {
+        if (confirmed) doDelete();
+      });
     }
 
     /**
@@ -841,8 +872,20 @@
       select.onchange = (e) => {
         const id = e.target.value;
         if (!id) return;
-        if (this.isDirty && !confirm('You have unsaved changes. Discard and switch timetable?')) {
-          e.target.value = this.state.metadata.id || '';
+        if (this.isDirty) {
+          const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
+          confirmFn({
+            title: 'Unsaved Timetable Changes',
+            message: 'You have unsaved changes in this timetable. Discard them and switch to another timetable?',
+            confirmText: 'Discard & Switch',
+            type: 'warning'
+          }).then((confirmed) => {
+            if (!confirmed) {
+              e.target.value = this.state.metadata.id || '';
+              return;
+            }
+            this.loadTimetable(id);
+          });
           return;
         }
         this.loadTimetable(id);
@@ -918,15 +961,28 @@
     }
 
     createNewTimetable() {
-      if (this.isDirty && !confirm('You have unsaved changes. Discard and create new timetable?')) {
+      const doCreate = () => {
+        this.state = this.getDefaultState();
+        this.state.metadata.id = null;
+        this.state.metadata.title = 'New Examination Schedule ' + new Date().getFullYear();
+        this.setDirty(false);
+        this.render();
+        this.showToast('Created new timetable draft', 'info');
+      };
+
+      if (this.isDirty) {
+        const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
+        confirmFn({
+          title: 'Unsaved Changes',
+          message: 'You have unsaved changes in the current timetable. Discard and create a new timetable draft?',
+          confirmText: 'Discard & Create New',
+          type: 'warning'
+        }).then((confirmed) => {
+          if (confirmed) doCreate();
+        });
         return;
       }
-      this.state = this.getDefaultState();
-      this.state.metadata.id = null;
-      this.state.metadata.title = 'New Examination Schedule ' + new Date().getFullYear();
-      this.setDirty(false);
-      this.render();
-      this.showToast('Created new timetable draft', 'info');
+      doCreate();
     }
 
     duplicateTimetable() {
@@ -940,12 +996,24 @@
     openPrintPreview() {
       const id = this.state.metadata.id;
       if (this.isDirty) {
-        if (confirm('You have unsaved changes. Would you like to save before opening print preview?')) {
-          this.saveTimetable().then(() => {
-            window.open(`timetable_print.php?id=${encodeURIComponent(this.state.metadata.id || 'draft')}`, '_blank');
-          });
-          return;
-        }
+        const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
+        confirmFn({
+          title: 'Unsaved Timetable Changes',
+          message: 'You have unsaved changes. Would you like to save before opening print preview?',
+          confirmText: 'Save & Preview',
+          cancelText: 'Preview Unsaved',
+          type: 'warning'
+        }).then((confirmed) => {
+          if (confirmed) {
+            this.saveTimetable().then(() => {
+              window.open(`timetable_print.php?id=${encodeURIComponent(this.state.metadata.id || 'draft')}`, '_blank');
+            });
+          } else {
+            sessionStorage.setItem('hcc_timetable_preview_data', JSON.stringify(this.state));
+            window.open(`timetable_print.php?id=${encodeURIComponent(id || 'preview')}`, '_blank');
+          }
+        });
+        return;
       }
 
       // Store current state in sessionStorage for instant preview even before saving
