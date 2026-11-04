@@ -20,6 +20,9 @@
       this.activeInput = null;
       this.isDirty = false;
       this.savedTimetables = [];
+      this.matrixDensity = 'comfortable'; // 'compact', 'comfortable', 'spacious'
+      this.searchQuery = '';
+      this.isFullscreen = false;
 
       // Priority #1: Prompt & Fixed Statement Generator State
       this.generatorState = {
@@ -298,6 +301,7 @@
       this.container.addEventListener('input', (e) => this.handleInput(e));
       this.container.addEventListener('change', (e) => this.handleChange(e));
       this.container.addEventListener('click', (e) => this.handleClick(e));
+      this.container.addEventListener('keydown', (e) => this.handleKeyDown(e));
     }
 
     /**
@@ -305,6 +309,12 @@
      */
     handleInput(e) {
       const target = e.target;
+
+      // 0. Search & Filter Input
+      if (target.matches('#matrixSearchInput')) {
+        this.handleSearchInput(target.value);
+        return;
+      }
 
       // 1. Subject Cell Input
       if (target.matches('.cell-subject-input')) {
@@ -318,6 +328,19 @@
           if (slotObj) {
             slotObj.cells[colId] = target.value;
             this.setDirty(true);
+
+            // Update subject category border on parent cell in real time
+            const cellTd = target.closest('.td-matrix-cell');
+            if (cellTd) {
+              cellTd.setAttribute('data-cat', this.getSubjectCategory(target.value));
+            }
+
+            // Update search highlight if active
+            if (this.searchQuery && target.value.toLowerCase().includes(this.searchQuery)) {
+              target.classList.add('cell-search-match');
+            } else {
+              target.classList.remove('cell-search-match');
+            }
           }
         }
       }
@@ -341,11 +364,71 @@
       else if (target.matches('#ttExamTitle')) {
         this.state.metadata.title = target.value;
         this.setDirty(true);
+        this.updateOverviewStripDom();
       } else if (target.matches('#ttExamInstructions')) {
         this.state.metadata.instructions = target.value;
         this.setDirty(true);
       } else if (target.matches('#genFreeformPrompt')) {
         this.generatorState.freeformPrompt = target.value;
+      }
+    }
+
+    /**
+     * Handle Keyboard Navigation across Matrix Cells
+     * Excel-like navigation: Arrow Up/Down/Left/Right and Enter
+     */
+    handleKeyDown(e) {
+      const input = e.target;
+      if (!input || !input.matches('.cell-subject-input')) return;
+
+      const td = input.closest('.td-matrix-cell');
+      if (!td) return;
+
+      const tr = td.closest('tr');
+      if (!tr) return;
+
+      const colId = td.dataset.colId;
+      const allRows = Array.from(this.container.querySelectorAll('#timetableMatrixTable tbody tr'));
+      const currentRowIdx = allRows.indexOf(tr);
+
+      if (e.key === 'ArrowDown' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault();
+        const nextRow = allRows[currentRowIdx + 1];
+        if (nextRow) {
+          const nextInput = nextRow.querySelector(`.td-matrix-cell[data-col-id="${colId}"] .cell-subject-input`);
+          if (nextInput) {
+            nextInput.focus();
+            nextInput.select();
+          }
+        }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const prevRow = allRows[currentRowIdx - 1];
+        if (prevRow) {
+          const prevInput = prevRow.querySelector(`.td-matrix-cell[data-col-id="${colId}"] .cell-subject-input`);
+          if (prevInput) {
+            prevInput.focus();
+            prevInput.select();
+          }
+        }
+      } else if (e.key === 'ArrowRight' && input.selectionEnd === input.value.length) {
+        const nextCell = td.nextElementSibling;
+        if (nextCell && nextCell.matches('.td-matrix-cell')) {
+          const nextInput = nextCell.querySelector('.cell-subject-input');
+          if (nextInput) {
+            nextInput.focus();
+            nextInput.select();
+          }
+        }
+      } else if (e.key === 'ArrowLeft' && input.selectionStart === 0) {
+        const prevCell = td.previousElementSibling;
+        if (prevCell && prevCell.matches('.td-matrix-cell')) {
+          const prevInput = prevCell.querySelector('.cell-subject-input');
+          if (prevInput) {
+            prevInput.focus();
+            prevInput.select();
+          }
+        }
       }
     }
 
@@ -363,11 +446,12 @@
           if (prop === 'hasExtendedSlot') {
             const extSelect = this.container.querySelector('#genExtendedSlot');
             if (extSelect) extSelect.style.display = target.checked ? 'inline-block' : 'none';
-            this.updateGeneratorDaysListDom();
           }
         } else {
           this.generatorState[prop] = target.value;
         }
+        this.updateGeneratorScheduleBannerDom();
+        this.updateGeneratorDaysListDom();
       }
       else if (target.dataset.action === 'toggle-statement-mode' || target.id === 'chkUseFixedStatement') {
         this.generatorState.useFixedStatement = target.checked;
@@ -401,6 +485,7 @@
             dayBadge.textContent = dateObj.day;
           }
           this.setDirty(true);
+          this.updateOverviewStripDom();
         }
       }
 
@@ -408,12 +493,14 @@
       else if (target.matches('#ttAcademicYear')) {
         this.state.metadata.academic_year = target.value;
         this.setDirty(true);
+        this.updateOverviewStripDom();
       } else if (target.matches('#ttExamType')) {
         this.state.metadata.exam_type = target.value;
         this.setDirty(true);
       } else if (target.matches('#ttStatusSelect')) {
         this.state.metadata.status = target.value;
         this.setDirty(true);
+        this.updateOverviewStripDom();
       }
     }
 
@@ -427,9 +514,32 @@
       const action = btn.dataset.action;
 
       switch (action) {
+        case 'set-generator-mode':
+          this.generatorState.useFixedStatement = btn.dataset.mode === 'statement';
+          this.updateGeneratorBodyDom();
+          this.updateGeneratorModeButtons();
+          break;
+
         case 'toggle-statement-mode':
           this.generatorState.useFixedStatement = btn.checked !== undefined ? btn.checked : !this.generatorState.useFixedStatement;
           this.updateGeneratorBodyDom();
+          this.updateGeneratorModeButtons();
+          break;
+
+        case 'set-density':
+          this.setDensity(btn.dataset.density);
+          break;
+
+        case 'clear-search':
+          this.clearSearch();
+          break;
+
+        case 'toggle-fullscreen':
+          this.toggleFullscreen();
+          break;
+
+        case 'fill-row':
+          this.fillRowSubject(btn.dataset.dateId, btn.dataset.slotId);
           break;
 
         case 'add-gen-day':
@@ -1109,6 +1219,510 @@
 
     /**
      * ============================================================
+     * VISUAL POLISH & CATEGORY HELPERS
+     * ============================================================
+     */
+
+    /**
+     * Map subject title to standardized category accent
+     * lang: Indigo/Blue | math: Amber/Gold | sci: Emerald/Green | ss: Crimson | tech: Cyan | off: Gray
+     */
+    getSubjectCategory(name) {
+      if (!name) return '';
+      const n = String(name).trim().toUpperCase();
+      if (n === '--------' || n === '-' || n === 'NO EXAM' || n === 'OFF' || n.includes('RECESS')) return 'off';
+      if (n.includes('MATH') || n.includes('ALGEBRA') || n.includes('GEOMETRY') || n.includes('ARITHMETIC')) return 'math';
+      if (n.includes('SCI') || n.includes('EVS') || n.includes('PHYSIC') || n.includes('CHEM') || n.includes('BIO')) return 'sci';
+      if (n.includes('ENG') || n.includes('MARATHI') || n.includes('HINDI') || n.includes('SANSKRIT') || n.includes('URDU') || n.includes('LANG')) return 'lang';
+      if (n.includes('HIST') || n.includes('GEOG') || n.includes('CIVIC') || n.includes('SOC') || n.includes('POL') || n.includes('ECON')) return 'ss';
+      if (n.includes('DRAW') || n.includes('COMP') || n.includes('ART') || n.includes('PE') || n.includes('PHYSICAL') || n.includes('WORK') || n.includes('CRAFT')) return 'tech';
+      return 'other';
+    }
+
+    /**
+     * Calculate generator dates dynamically skipping Sundays
+     */
+    calculateGeneratorDates() {
+      const gs = this.generatorState;
+      let curr = new Date((gs.startDate || '2026-10-23') + 'T00:00:00');
+      if (isNaN(curr.getTime())) curr = new Date();
+
+      const daysArr = [];
+      let sundaysSkipped = 0;
+      const totalDays = (gs.days && gs.days.length) || 1;
+
+      for (let i = 0; i < totalDays; i++) {
+        if (gs.skipSundays) {
+          while (curr.getDay() === 0) {
+            sundaysSkipped++;
+            curr.setDate(curr.getDate() + 1);
+          }
+        }
+        const dStr = curr.toISOString().split('T')[0];
+        const dayShort = new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(curr);
+        const dayMonth = new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'short' }).format(curr);
+        daysArr.push({
+          date: dStr,
+          dayShort: dayShort,
+          formatted: `${dayMonth} • ${dayShort}`
+        });
+        curr.setDate(curr.getDate() + 1);
+      }
+
+      return {
+        days: daysArr,
+        sundaysSkipped: sundaysSkipped,
+        startDateFormatted: daysArr.length > 0 ? daysArr[0].formatted : '',
+        endDateFormatted: daysArr.length > 0 ? daysArr[daysArr.length - 1].formatted : ''
+      };
+    }
+
+    /**
+     * Live Schedule Breakdown Banner
+     */
+    renderLiveScheduleBannerHtml() {
+      const gs = this.generatorState;
+      const calc = this.calculateGeneratorDates();
+
+      return `
+        <div class="tt-live-schedule-banner" id="genLiveScheduleBanner">
+          <i class="fa-solid fa-calendar-check"></i>
+          <div class="banner-text">
+            <strong>Schedule Breakdown:</strong> ${gs.days.length} Examination Days from <strong>${calc.startDateFormatted}</strong> to <strong>${calc.endDateFormatted}</strong>
+            ${calc.sundaysSkipped > 0 ? `<span class="banner-pill"><i class="fa-solid fa-ban" style="color:#dc2626;"></i> ${calc.sundaysSkipped} Sundays Skipped</span>` : ''}
+            <span class="banner-pill"><i class="fa-regular fa-clock" style="color:var(--tt-brand);"></i> Primary: ${this.escapeHtml(gs.primarySlot)}</span>
+            ${gs.hasExtendedSlot ? `<span class="banner-pill"><i class="fa-solid fa-bolt" style="color:var(--tt-gold-dark);"></i> Extended High School: ${this.escapeHtml(gs.extendedSlot)}</span>` : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    /**
+     * Top Overview Metric Ribbon
+     */
+    renderOverviewStripHtml() {
+      const title = this.state.metadata.title || 'Examination Schedule';
+      const year = this.state.metadata.academic_year || '2026-27';
+      const status = this.state.metadata.status || 'draft';
+      const daysCount = this.state.rows.length;
+      const classCount = this.state.columns.length;
+      const slotsCount = this.getTotalSlotsCount();
+
+      let dateRangeStr = 'No dates scheduled';
+      if (daysCount > 0) {
+        const d1 = this.state.rows[0].date;
+        const dEnd = this.state.rows[daysCount - 1].date;
+        try {
+          const f1 = new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'short' }).format(new Date(d1 + 'T00:00:00'));
+          const fEnd = new Intl.DateTimeFormat('en-US', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(dEnd + 'T00:00:00'));
+          dateRangeStr = `${f1} – ${fEnd}`;
+        } catch (e) {
+          dateRangeStr = `${d1} to ${dEnd}`;
+        }
+      }
+
+      return `
+        <div class="tt-overview-strip" id="ttOverviewStrip">
+          <div class="tt-metric-card card-blueprint">
+            <div class="tt-metric-icon icon-maroon">
+              <i class="fa-solid fa-graduation-cap"></i>
+            </div>
+            <div class="tt-metric-body">
+              <span class="tt-metric-label">Active Examination</span>
+              <span class="tt-metric-value" title="${this.escapeHtml(title)}">${this.escapeHtml(title)}</span>
+              <span class="tt-metric-sub">
+                <span class="badge-status ${status}" style="padding:2px 8px;font-size:0.68rem;">
+                  <span class="beacon-dot"></span> ${status.toUpperCase()}
+                </span>
+                <span>• AY ${this.escapeHtml(year)}</span>
+              </span>
+            </div>
+          </div>
+
+          <div class="tt-metric-card card-dates">
+            <div class="tt-metric-icon icon-blue">
+              <i class="fa-solid fa-calendar-days"></i>
+            </div>
+            <div class="tt-metric-body">
+              <span class="tt-metric-label">Schedule Span</span>
+              <span class="tt-metric-value">${daysCount} Exam Days</span>
+              <span class="tt-metric-sub"><i class="fa-regular fa-calendar-check" style="color:#0284c7;"></i> ${dateRangeStr}</span>
+            </div>
+          </div>
+
+          <div class="tt-metric-card card-classes">
+            <div class="tt-metric-icon icon-gold">
+              <i class="fa-solid fa-chalkboard-user"></i>
+            </div>
+            <div class="tt-metric-body">
+              <span class="tt-metric-label">Standards Covered</span>
+              <span class="tt-metric-value">${classCount} Classes</span>
+              <span class="tt-metric-sub"><i class="fa-solid fa-layer-group" style="color:#8a6d0f;"></i> ${this.state.columns.map((c) => c.label).slice(0, 3).join(', ')}${classCount > 3 ? '...' : ''}</span>
+            </div>
+          </div>
+
+          <div class="tt-metric-card card-load">
+            <div class="tt-metric-icon icon-emerald">
+              <i class="fa-solid fa-clock"></i>
+            </div>
+            <div class="tt-metric-body">
+              <span class="tt-metric-label">Sessions &amp; Slots</span>
+              <span class="tt-metric-value">${slotsCount} Slots</span>
+              <span class="tt-metric-sub"><i class="fa-solid fa-check-double" style="color:#059669;"></i> Math Rowspan Invariant Active</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    /**
+     * Update Overview Strip in DOM without full re-render
+     */
+    updateOverviewStripDom() {
+      const strip = this.container.querySelector('#ttOverviewStrip');
+      if (strip) {
+        const temp = document.createElement('div');
+        temp.innerHTML = this.renderOverviewStripHtml();
+        const newStrip = temp.firstElementChild;
+        if (newStrip) {
+          strip.replaceWith(newStrip);
+        }
+      }
+    }
+
+    /**
+     * Update Generator Mode Buttons UI
+     */
+    updateGeneratorModeButtons() {
+      const btns = this.container.querySelectorAll('.tt-segment-btn');
+      btns.forEach((b) => {
+        const isStatement = b.dataset.mode === 'statement';
+        b.classList.toggle('active', this.generatorState.useFixedStatement === isStatement);
+      });
+    }
+
+    /**
+     * Update Generator Live Schedule Banner in DOM
+     */
+    updateGeneratorScheduleBannerDom() {
+      const banner = this.container.querySelector('#genLiveScheduleBanner');
+      if (banner && this.generatorState.useFixedStatement) {
+        const temp = document.createElement('div');
+        temp.innerHTML = this.renderLiveScheduleBannerHtml();
+        const newBanner = temp.firstElementChild;
+        if (newBanner) {
+          banner.replaceWith(newBanner);
+        }
+      }
+    }
+
+    /**
+     * Search & Filter Handling
+     */
+    handleSearchInput(query) {
+      this.searchQuery = (query || '').trim().toLowerCase();
+      this.applySearchHighlight();
+    }
+
+    clearSearch() {
+      this.searchQuery = '';
+      const input = this.container.querySelector('#matrixSearchInput');
+      if (input) input.value = '';
+      this.applySearchHighlight();
+      const clearBtn = this.container.querySelector('.matrix-search-clear');
+      if (clearBtn) clearBtn.remove();
+    }
+
+    applySearchHighlight() {
+      const inputs = this.container.querySelectorAll('.cell-subject-input');
+      let matches = 0;
+      inputs.forEach((input) => {
+        if (this.searchQuery && input.value.toLowerCase().includes(this.searchQuery)) {
+          input.classList.add('cell-search-match');
+          matches++;
+        } else {
+          input.classList.remove('cell-search-match');
+        }
+      });
+
+      // Update clear button
+      const searchBox = this.container.querySelector('.matrix-search-box');
+      let clearBtn = searchBox ? searchBox.querySelector('.matrix-search-clear') : null;
+      if (this.searchQuery) {
+        if (!clearBtn && searchBox) {
+          clearBtn = document.createElement('button');
+          clearBtn.type = 'button';
+          clearBtn.className = 'matrix-search-clear';
+          clearBtn.dataset.action = 'clear-search';
+          clearBtn.title = 'Clear search highlight';
+          clearBtn.innerHTML = '&times;';
+          searchBox.appendChild(clearBtn);
+        }
+      } else if (clearBtn) {
+        clearBtn.remove();
+      }
+
+      if (this.searchQuery && matches > 0) {
+        this.showToast(`Found ${matches} cells matching "${this.searchQuery}"`, 'info');
+      }
+    }
+
+    /**
+     * Density Switcher
+     */
+    setDensity(density) {
+      this.matrixDensity = density;
+      const table = this.container.querySelector('#timetableMatrixTable');
+      if (table) {
+        table.classList.remove('density-compact', 'density-comfortable', 'density-spacious');
+        table.classList.add(`density-${density}`);
+      }
+      const btns = this.container.querySelectorAll('.density-btn');
+      btns.forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.density === density);
+      });
+      this.showToast(`Table density set to ${density}`, 'info');
+    }
+
+    /**
+     * Fullscreen Mode Toggle
+     */
+    toggleFullscreen() {
+      const appCard = this.container.querySelector('.timetable-app-card');
+      if (!appCard) return;
+      this.isFullscreen = !this.isFullscreen;
+      appCard.classList.toggle('timetable-fullscreen-mode', this.isFullscreen);
+
+      const fsBtn = this.container.querySelector('#btnToggleFullscreen i');
+      if (fsBtn) {
+        fsBtn.className = this.isFullscreen ? 'fa-solid fa-compress' : 'fa-solid fa-expand';
+      }
+      const headerFsBtn = document.querySelector('#headerFullscreenBtn i');
+      if (headerFsBtn) {
+        headerFsBtn.className = this.isFullscreen ? 'fa-solid fa-compress' : 'fa-solid fa-expand';
+      }
+      this.showToast(this.isFullscreen ? 'Entered Fullscreen Matrix Mode' : 'Exited Fullscreen', 'info');
+    }
+
+    /**
+     * Replicate a subject across all classes for a specific slot with 1 click
+     */
+    fillRowSubject(dateId, slotId) {
+      this.openFillRowModal(dateId, slotId);
+    }
+
+    /**
+     * Interactive Quick-Fill Modal with 1-click subject chips & custom input
+     */
+    openFillRowModal(dateId, slotId) {
+      const dateObj = this.state.rows.find((r) => r.dateId === dateId);
+      if (!dateObj) return;
+
+      this.closeFillRowModal();
+
+      const slots = dateObj.slots || [];
+      const presets = (this.state.presets && this.state.presets.subjects && this.state.presets.subjects.length > 0)
+        ? this.state.presets.subjects
+        : ['ENGLISH', 'MARATHI', 'HINDI', 'MATHEMATICS', 'SCIENCE', 'SOCIAL SCIENCE', 'IT / COMPUTER', '--------'];
+
+      // Build Slot Picker HTML
+      let slotOptionsHtml = '';
+      if (slots.length > 1) {
+        slotOptionsHtml = `
+          <div class="tt-target-slot-picker">
+            <label for="fillTargetSlotSelect" style="font-size:0.75rem;font-weight:700;color:var(--tt-text-muted);display:block;margin-bottom:4px;">APPLY TO:</label>
+            <select id="fillTargetSlotSelect" class="tt-target-slot-select">
+              <option value="all">⚡ All Slots on this Date (${slots.length} sessions)</option>
+              ${slots
+                .map(
+                  (s, idx) => `
+                <option value="${s.slotId}" ${s.slotId === slotId ? 'selected' : ''}>
+                  Slot ${idx + 1}: ${this.escapeHtml(s.time || 'Untitled')}
+                </option>
+              `
+                )
+                .join('')}
+            </select>
+          </div>
+        `;
+      } else if (slots.length === 1) {
+        slotOptionsHtml = `
+          <input type="hidden" id="fillTargetSlotSelect" value="${slots[0].slotId}">
+          <div style="font-size:0.8rem;color:var(--tt-brand-deep);font-weight:600;">
+            <i class="fa-regular fa-clock" style="color:var(--tt-gold-dark);margin-right:4px;"></i>
+            Slot: <strong>${this.escapeHtml(slots[0].time || 'Standard Slot')}</strong> (${this.state.columns.length} Classes)
+          </div>
+        `;
+      }
+
+      // Build Preset Chips HTML
+      const chipsHtml = presets
+        .map((sub) => {
+          const isOff = sub.includes('---');
+          const cat = this.getSubjectCategory(sub);
+          return `
+            <button type="button" class="tt-preset-chip-btn ${isOff ? 'chip-off' : ''}" data-action="apply-fill-preset" data-subject="${this.escapeHtml(sub)}">
+              <span class="chip-dot" style="width:7px;height:7px;border-radius:50%;background:var(--tt-cat-${cat}, #7a2238);display:inline-block;"></span>
+              <span>${this.escapeHtml(sub)}</span>
+            </button>
+          `;
+        })
+        .join('');
+
+      const modalHtml = `
+        <div class="tt-modal-backdrop" id="ttQuickFillModal">
+          <div class="tt-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="fillModalTitle">
+            <div class="tt-modal-header">
+              <h3 id="fillModalTitle">
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+                <span>Quick Fill Row Subjects</span>
+              </h3>
+              <button type="button" class="tt-modal-close" data-action="close-fill-modal" title="Close (Esc)">&times;</button>
+            </div>
+            <div class="tt-modal-body">
+              <div class="tt-modal-target-card">
+                <div class="tt-target-date-badge">
+                  <i class="fa-solid fa-calendar-day"></i>
+                  <span>${this.escapeHtml(dateObj.date)}</span>
+                  <span class="day-chip" style="background:var(--tt-brand-soft);color:var(--tt-brand);padding:2px 7px;border-radius:12px;font-size:0.75rem;">${this.escapeHtml(dateObj.day)}</span>
+                </div>
+                ${slotOptionsHtml}
+              </div>
+
+              <div class="tt-modal-section-title">
+                <span>1-Click Subject Presets</span>
+                <small style="text-transform:none;color:var(--tt-text-muted);">Instant fill across all classes</small>
+              </div>
+              <div class="tt-preset-chips-grid">
+                ${chipsHtml}
+              </div>
+
+              <div class="tt-modal-section-title">
+                <span>Or Type Custom Subject</span>
+              </div>
+              <div class="tt-custom-fill-row">
+                <input type="text" id="fillCustomSubjectInput" class="tt-custom-fill-input" list="subjectsList" placeholder="e.g. MATHEMATICS, ENVIRONMENTAL STUDIES..." autocomplete="off">
+                <button type="button" class="btn-timetable btn-primary" data-action="apply-fill-custom" style="padding:0 16px;white-space:nowrap;">
+                  <i class="fa-solid fa-fill-drip"></i> Apply
+                </button>
+              </div>
+
+              <label class="tt-modal-option">
+                <input type="checkbox" id="fillOnlyEmptyCheckbox">
+                <span>Only fill empty cells (do not overwrite existing subjects)</span>
+              </label>
+            </div>
+            <div class="tt-modal-footer">
+              <button type="button" class="btn-timetable btn-secondary" data-action="close-fill-modal">Cancel</button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+      const modalEl = document.getElementById('ttQuickFillModal');
+      const inputEl = document.getElementById('fillCustomSubjectInput');
+      if (inputEl) inputEl.focus();
+
+      const modalClickHandler = (e) => {
+        if (e.target === modalEl) {
+          this.closeFillRowModal();
+          return;
+        }
+        const btn = e.target.closest('button');
+        if (!btn) return;
+
+        const action = btn.dataset.action;
+        if (action === 'close-fill-modal') {
+          this.closeFillRowModal();
+        } else if (action === 'apply-fill-preset') {
+          const sub = btn.dataset.subject;
+          this.executeFillRow(dateId, sub);
+        } else if (action === 'apply-fill-custom') {
+          const sub = inputEl ? inputEl.value.trim() : '';
+          if (!sub) {
+            this.showToast('Please type a subject name or pick a preset chip', 'warning');
+            return;
+          }
+          this.executeFillRow(dateId, sub);
+        }
+      };
+
+      const modalKeyHandler = (e) => {
+        if (e.key === 'Escape') {
+          this.closeFillRowModal();
+        } else if (e.key === 'Enter' && e.target === inputEl) {
+          e.preventDefault();
+          const sub = inputEl ? inputEl.value.trim() : '';
+          if (sub) {
+            this.executeFillRow(dateId, sub);
+          }
+        }
+      };
+
+      modalEl.addEventListener('click', modalClickHandler);
+      window.addEventListener('keydown', modalKeyHandler);
+      this._modalCleanup = () => {
+        modalEl.removeEventListener('click', modalClickHandler);
+        window.removeEventListener('keydown', modalKeyHandler);
+      };
+    }
+
+    /**
+     * Close Quick-Fill Modal
+     */
+    closeFillRowModal() {
+      if (this._modalCleanup) {
+        this._modalCleanup();
+        this._modalCleanup = null;
+      }
+      const existing = document.getElementById('ttQuickFillModal');
+      if (existing) existing.remove();
+    }
+
+    /**
+     * Apply Fill Subject to Date Row
+     */
+    executeFillRow(dateId, subject) {
+      const dateObj = this.state.rows.find((r) => r.dateId === dateId);
+      if (!dateObj) return;
+
+      const slotSelect = document.getElementById('fillTargetSlotSelect');
+      const targetSlotVal = slotSelect ? slotSelect.value : 'all';
+      const onlyEmptyCheckbox = document.getElementById('fillOnlyEmptyCheckbox');
+      const onlyEmpty = onlyEmptyCheckbox ? onlyEmptyCheckbox.checked : false;
+
+      let targetSlots = [];
+      if (targetSlotVal === 'all') {
+        targetSlots = dateObj.slots || [];
+      } else {
+        const found = (dateObj.slots || []).find((s) => s.slotId === targetSlotVal);
+        if (found) targetSlots = [found];
+      }
+
+      if (targetSlots.length === 0) return;
+
+      let changedCount = 0;
+      targetSlots.forEach((slot) => {
+        if (!slot.cells) slot.cells = {};
+        this.state.columns.forEach((col) => {
+          const current = (slot.cells[col.id] || '').trim();
+          if (!onlyEmpty || !current) {
+            slot.cells[col.id] = subject;
+            changedCount++;
+          }
+        });
+      });
+
+      this.closeFillRowModal();
+      this.setDirty(true);
+      this.render();
+      this.showToast(`Applied "${subject}" across ${changedCount} class slots`, 'success');
+    }
+
+    /**
+     * ============================================================
      * PRIORITY #1: PROMPT & FIXED STATEMENT GENERATOR STUDIO
      * ============================================================
      */
@@ -1125,13 +1739,17 @@
           <div class="tt-gen-header">
             <div class="tt-gen-title">
               <span class="tt-gen-title-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></span>
-              <h2>Timetable Generation Studio <span class="tt-priority-pill">Priority #1</span></h2>
+              <h2>Timetable Generation Studio <span class="tt-priority-pill">Smart Engine</span></h2>
             </div>
             <div class="tt-gen-controls">
-              <label class="tt-checkbox-wrapper" title="Toggle between structured institutional statement and freeform prompt">
-                <input type="checkbox" id="chkUseFixedStatement" data-action="toggle-statement-mode" ${this.generatorState.useFixedStatement ? 'checked' : ''}>
-                <span>Use Fixed Institutional Statement Template</span>
-              </label>
+              <div class="tt-segmented-control" role="tablist">
+                <button type="button" class="tt-segment-btn ${this.generatorState.useFixedStatement ? 'active' : ''}" data-action="set-generator-mode" data-mode="statement">
+                  <i class="fa-solid fa-wand-magic-sparkles"></i> Institutional Studio
+                </button>
+                <button type="button" class="tt-segment-btn ${!this.generatorState.useFixedStatement ? 'active' : ''}" data-action="set-generator-mode" data-mode="prompt">
+                  <i class="fa-solid fa-comment-dots"></i> Freeform AI Prompt
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1145,8 +1763,8 @@
               <span>Generate Timetable Matrix</span>
             </button>
             <span class="gen-info-caption">
-              <i class="fa-solid fa-circle-info" style="color:var(--tt-gold-dark);"></i>
-              Auto-calculates dates, skips Sundays, configures multi-slot rowspans, and populates the matrix below instantly.
+              <i class="fa-solid fa-circle-check" style="color:var(--tt-gold-dark);"></i>
+              Auto-calculates calendar dates, skips Sundays, configures multi-slot rowspans, and populates the matrix below instantly.
             </span>
           </div>
         </div>
@@ -1171,6 +1789,9 @@
 
       return `
         <div class="tt-statement-box">
+          <!-- Live Date & Breakdown Banner -->
+          ${this.renderLiveScheduleBannerHtml()}
+
           <div class="statement-sentence">
             <span>Generate an authentic</span>
             <select class="statement-select" data-gen="examType">
@@ -1241,11 +1862,12 @@
     }
 
     /**
-     * Render the list of Day Cards in Fixed Statement
+     * Render the list of Day Cards in Fixed Statement with dynamic date badges
      */
     renderGeneratorDaysListHtml(subjects) {
       const gs = this.generatorState;
       const subList = subjects.length > 0 ? subjects : this.state.presets.subjects;
+      const calc = this.calculateGeneratorDates();
 
       return gs.days
         .map(
@@ -1253,7 +1875,8 @@
         <div class="statement-day-card">
           <div class="day-card-number">
             <span class="badge-dot"></span>
-            <span>Day ${d.dayNum || idx + 1}</span>
+            <span class="day-title">Day ${d.dayNum || idx + 1}</span>
+            <span class="day-card-date-chip">${calc.days[idx]?.formatted || ''}</span>
           </div>
           <div class="day-card-inputs">
             <select class="day-card-select" data-action="change-gen-day-subject" data-day-index="${idx}">
@@ -1711,7 +2334,10 @@
 
       // 2. Render Shell / Frame
       this.container.innerHTML = `
-        <div class="timetable-app-card">
+        <!-- 0. Top Overview Metrics Strip -->
+        ${this.renderOverviewStripHtml()}
+
+        <div class="timetable-app-card ${this.isFullscreen ? 'timetable-fullscreen-mode' : ''}">
           <!-- 1. Priority #1: Timetable Generation Studio -->
           ${this.renderGeneratorStudioHtml()}
 
@@ -1725,7 +2351,7 @@
                 <i class="fa-solid fa-chevron-down select-chevron"></i>
               </div>
               <span class="badge-status ${this.state.metadata.status}">
-                <i class="fa-solid fa-circle" style="font-size:0.5rem;"></i>
+                <span class="beacon-dot"></span>
                 ${this.state.metadata.status}
               </span>
               <span id="ttDirtyBadge" class="badge-status dirty" style="display: ${this.isDirty ? 'inline-flex' : 'none'};">
@@ -1734,9 +2360,23 @@
               </span>
             </div>
 
+            <!-- Utility Controls: Search Highlight & Density Switcher -->
+            <div class="matrix-utility-group">
+              <div class="matrix-search-box">
+                <i class="fa-solid fa-magnifying-glass matrix-search-icon"></i>
+                <input type="text" id="matrixSearchInput" class="matrix-search-input" placeholder="Highlight subject..." value="${this.escapeHtml(this.searchQuery)}">
+                ${this.searchQuery ? '<button type="button" class="matrix-search-clear" data-action="clear-search" title="Clear highlight">&times;</button>' : ''}
+              </div>
+              <div class="density-toggle-group" title="Adjust table row height and padding">
+                <button type="button" class="density-btn ${this.matrixDensity === 'compact' ? 'active' : ''}" data-action="set-density" data-density="compact">Compact</button>
+                <button type="button" class="density-btn ${this.matrixDensity === 'comfortable' ? 'active' : ''}" data-action="set-density" data-density="comfortable">Comfortable</button>
+                <button type="button" class="density-btn ${this.matrixDensity === 'spacious' ? 'active' : ''}" data-action="set-density" data-density="spacious">Spacious</button>
+              </div>
+            </div>
+
             <!-- Action Toolbar Buttons -->
             <div class="timetable-actions-toolbar">
-              <button type="button" class="btn-timetable btn-primary" id="btnSaveTimetable" data-action="save">
+              <button type="button" class="btn-timetable btn-primary ${this.isDirty ? 'pulse-save' : ''}" id="btnSaveTimetable" data-action="save">
                 <i class="fa-solid fa-floppy-disk"></i>
                 <span>Save Schedule</span>
               </button>
@@ -1750,11 +2390,14 @@
               </button>
               <button type="button" class="btn-timetable btn-secondary" data-action="print-preview">
                 <i class="fa-solid fa-print"></i>
-                <span>Print / Preview</span>
+                <span>Print</span>
               </button>
               <button type="button" class="btn-timetable btn-secondary" data-action="export-csv">
                 <i class="fa-solid fa-file-csv"></i>
                 <span>CSV</span>
+              </button>
+              <button type="button" class="btn-timetable btn-secondary" id="btnToggleFullscreen" data-action="toggle-fullscreen" title="Toggle Fullscreen Matrix View">
+                <i class="fa-solid ${this.isFullscreen ? 'fa-compress' : 'fa-expand'}"></i>
               </button>
               <button type="button" class="btn-timetable btn-secondary" data-action="duplicate" title="Duplicate this schedule">
                 <i class="fa-regular fa-copy"></i>
@@ -1770,12 +2413,12 @@
 
           <!-- 4. Dynamic Matrix Table Container -->
           <div class="timetable-matrix-container">
-            <table class="timetable-matrix" id="timetableMatrixTable">
+            <table class="timetable-matrix density-${this.matrixDensity || 'comfortable'}" id="timetableMatrixTable">
               <thead>
                 <tr>
-                  <th class="th-sticky-day">DAY</th>
-                  <th class="th-sticky-date">DATE</th>
-                  <th class="th-sticky-time">TIME / SLOT</th>
+                  <th class="th-sticky-day"><i class="fa-regular fa-calendar" style="margin-right:4px;"></i> DAY</th>
+                  <th class="th-sticky-date"><i class="fa-solid fa-calendar-day" style="margin-right:4px;"></i> DATE</th>
+                  <th class="th-sticky-time"><i class="fa-regular fa-clock" style="margin-right:4px;"></i> TIME / SLOT</th>
                   ${this.state.columns
                     .map(
                       (col) => `
@@ -1788,7 +2431,7 @@
                   `
                     )
                     .join('')}
-                  <th class="th-actions">ACTIONS</th>
+                  <th class="th-actions"><i class="fa-solid fa-sliders" style="margin-right:4px;"></i> ACTIONS</th>
                 </tr>
               </thead>
               <tbody>
@@ -1805,7 +2448,7 @@
               <span><i class="fa-regular fa-clock"></i> ${this.getTotalSlotsCount()} Scheduled Slots</span>
             </div>
             <div>
-              <small>Click any cell to type or choose from autocomplete datalist. Use top chips for rapid filling.</small>
+              <small><i class="fa-solid fa-keyboard" style="color:var(--tt-gold-dark);margin-right:4px;"></i> Use Arrow Keys or Enter to navigate between cells. Type subject or pick from datalist.</small>
             </div>
           </div>
         </div>
@@ -1874,6 +2517,9 @@
             <td class="td-sticky-time">
               <div class="time-slot-wrapper">
                 <input type="text" class="time-slot-input" list="timeSlotsList" data-date-id="${dateObj.dateId}" data-slot-id="${slotObj.slotId}" value="${this.escapeHtml(slotObj.time)}" placeholder="Time slot...">
+                <button type="button" class="btn-slot-fill" data-action="fill-row" data-date-id="${dateObj.dateId}" data-slot-id="${slotObj.slotId}" title="Quick fill all classes for this time slot">
+                  <i class="fa-solid fa-wand-magic-sparkles"></i>
+                </button>
                 <button type="button" class="btn-slot-delete" data-action="delete-slot" data-date-id="${dateObj.dateId}" data-slot-id="${slotObj.slotId}" title="Delete time slot">
                   <i class="fa-solid fa-xmark"></i>
                 </button>
@@ -1881,12 +2527,14 @@
             </td>
           `;
 
-          // Every Slot: Render Subject Cells for all columns
+          // Every Slot: Render Subject Cells for all columns with category accent
           this.state.columns.forEach((col) => {
             const cellValue = (slotObj.cells && slotObj.cells[col.id]) || '';
+            const cat = this.getSubjectCategory(cellValue);
+            const isMatch = this.searchQuery && cellValue.toLowerCase().includes(this.searchQuery);
             html += `
-              <td class="td-matrix-cell" data-col-id="${col.id}">
-                <input type="text" class="cell-subject-input" list="subjectsList" data-date-id="${dateObj.dateId}" data-slot-id="${slotObj.slotId}" data-col-id="${col.id}" value="${this.escapeHtml(cellValue)}" placeholder="—">
+              <td class="td-matrix-cell" data-cat="${cat}" data-col-id="${col.id}">
+                <input type="text" class="cell-subject-input ${isMatch ? 'cell-search-match' : ''}" list="subjectsList" data-date-id="${dateObj.dateId}" data-slot-id="${slotObj.slotId}" data-col-id="${col.id}" value="${this.escapeHtml(cellValue)}" placeholder="—">
               </td>
             `;
           });
@@ -1895,12 +2543,18 @@
           if (sIdx === 0) {
             html += `
               <td class="td-row-actions" rowspan="${N}">
-                <div class="row-actions-group">
-                  <button type="button" class="btn-add-slot-row" data-action="add-slot" data-date-id="${dateObj.dateId}" title="Add time slot to this date">
-                    <i class="fa-solid fa-plus"></i> Slot
+                <div class="row-actions-pod" role="group" aria-label="Date actions">
+                  <button type="button" class="row-pod-btn btn-add-slot-row" data-action="add-slot" data-date-id="${dateObj.dateId}" title="Add another exam slot to this date">
+                    <i class="fa-solid fa-plus"></i>
+                    <span>Slot</span>
                   </button>
-                  <button type="button" class="btn-delete-date-row" data-action="delete-date" data-date-id="${dateObj.dateId}" title="Delete entire date">
-                    <i class="fa-regular fa-trash-can"></i> Date
+                  <button type="button" class="row-pod-btn btn-fill-row" data-action="fill-row" data-date-id="${dateObj.dateId}" data-slot-id="${slotObj.slotId}" title="Quick fill all classes for this date with a subject">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                    <span>Fill</span>
+                  </button>
+                  <button type="button" class="row-pod-btn btn-delete-date-row" data-action="delete-date" data-date-id="${dateObj.dateId}" title="Delete entire exam date">
+                    <i class="fa-regular fa-trash-can"></i>
+                    <span>Del</span>
                   </button>
                 </div>
               </td>

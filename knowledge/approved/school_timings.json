@@ -1,0 +1,33 @@
+{
+  "academic_year": "2026-2027",
+  "daily_school_schedules": {
+    "Pre-Primary": {
+      "grades": "Nursery, LKG, UKG",
+      "monday_to_friday": "08:30 AM to 12:00 PM",
+      "saturday": "Holiday (No classes)",
+      "recess": "10:15 AM to 10:45 AM"
+    },
+    "Primary": {
+      "grades": "Grade 1 to Grade 5",
+      "monday_to_friday": "07:50 AM to 01:30 PM",
+      "saturday": "07:50 AM to 11:30 AM",
+      "assembly": "07:50 AM to 08:10 AM",
+      "short_break": "09:40 AM to 09:55 AM",
+      "lunch_recess": "11:25 AM to 11:55 AM"
+    },
+    "Secondary": {
+      "grades": "Grade 6 to Grade 10",
+      "monday_to_friday": "07:50 AM to 02:00 PM",
+      "saturday": "07:50 AM to 12:00 PM",
+      "assembly": "07:50 AM to 08:10 AM",
+      "short_break": "09:40 AM to 09:55 AM",
+      "lunch_recess": "11:55 AM to 12:25 PM"
+    }
+  },
+  "admission_office_and_visitor_timings": {
+    "working_days": "Monday to Saturday",
+    "enquiry_and_form_submission_hours": "09:00 AM to 03:30 PM (Mon-Fri) | 09:00 AM to 01:00 PM (Sat)",
+    "principal_meeting_hours": "10:30 AM to 12:30 PM (By prior appointment on working days)",
+    "holidays": "Sundays and government-declared public holidays"
+  }
+}

@@ -17,14 +17,23 @@ $tempMsgId = $input['temp_msg_id'] ?? '';
 $waMsgId = $input['wa_msg_id'] ?? '';
 $status = $input['status'] ?? 'sent';
 
-if (!$tempMsgId || !$waMsgId) {
-    waJsonResponse(['success' => false, 'error' => 'temp_msg_id and wa_msg_id required'], 400);
+if (!$tempMsgId) {
+    waJsonResponse(['success' => false, 'error' => 'temp_msg_id required'], 400);
 }
 
-$db->prepare("
-    UPDATE whatsapp_messages 
-    SET wa_msg_id = ?, status = ?, metadata = JSON_SET(COALESCE(metadata, '{}'), '$.temp', false)
-    WHERE wa_msg_id = ?
-")->execute([$waMsgId, $status, $tempMsgId]);
+// wa_msg_id is only known when the message actually went out; failure updates omit it.
+if ($waMsgId) {
+    $db->prepare("
+        UPDATE whatsapp_messages
+        SET wa_msg_id = ?, status = ?, metadata = JSON_SET(COALESCE(metadata, '{}'), '$.temp', false)
+        WHERE wa_msg_id = ?
+    ")->execute([$waMsgId, $status, $tempMsgId]);
+} else {
+    $db->prepare("
+        UPDATE whatsapp_messages
+        SET status = ?, metadata = JSON_SET(COALESCE(metadata, '{}'), '$.temp', false)
+        WHERE wa_msg_id = ?
+    ")->execute([$status, $tempMsgId]);
+}
 
 waJsonResponse(['success' => true]);

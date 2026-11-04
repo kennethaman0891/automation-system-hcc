@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keeps the HCC WhatsApp bridge running at login and restarts it if it ever stops.
+
+  Install:
+    cp automation/com.hcc.whatsapp-bridge.plist ~/Library/LaunchAgents/
+    launchctl unload ~/Library/LaunchAgents/com.hcc.whatsapp-bridge.plist 2>/dev/null
+    launchctl load   ~/Library/LaunchAgents/com.hcc.whatsapp-bridge.plist
+
+  Status / logs:
+    launchctl list | grep hcc
+    tail -f /tmp/whatsapp-bridge.log
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.hcc.whatsapp-bridge.plist
+    rm ~/Library/LaunchAgents/com.hcc.whatsapp-bridge.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hcc.whatsapp-bridge</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/XAMPP/xamppfiles/htdocs/hcc/automation/start-bridge.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Applications/XAMPP/xamppfiles/htdocs/hcc/automation</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>15</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/whatsapp-bridge.launchd.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/whatsapp-bridge.launchd.log</string>
+</dict>
+</plist>

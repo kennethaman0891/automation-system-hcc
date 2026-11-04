@@ -55,8 +55,75 @@ switch ($action) {
         }
         break;
         
+    case 'sync':
+        // Persist bridge session + QR state (POSTed as JSON by the Puppeteer bridge)
+        $payload = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($payload)) {
+            $payload = $_POST;
+        }
+
+        $toMysql = function ($v) {
+            if (!$v) return null;
+            $ts = strtotime((string)$v);
+            return $ts ? date('Y-m-d H:i:s', $ts) : null;
+        };
+
+        $sql = "INSERT INTO whatsapp_sessions
+                (session_name, user_data_dir, qr_code, qr_expires_at, is_connected, connected_at,
+                 last_poll_at, phone_number, device_name, platform, cookies, local_storage, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())
+                ON DUPLICATE KEY UPDATE
+                    user_data_dir = VALUES(user_data_dir),
+                    qr_code = VALUES(qr_code),
+                    qr_expires_at = VALUES(qr_expires_at),
+                    is_connected = VALUES(is_connected),
+                    connected_at = VALUES(connected_at),
+                    last_poll_at = VALUES(last_poll_at),
+                    phone_number = VALUES(phone_number),
+                    device_name = VALUES(device_name),
+                    platform = VALUES(platform),
+                    cookies = VALUES(cookies),
+                    local_storage = VALUES(local_storage),
+                    updated_at = NOW()";
+
+        $stmt = $db->prepare($sql);
+        try {
+            $stmt->execute([
+                $payload['session_name'] ?? 'default',
+                $payload['user_data_dir'] ? mb_substr((string)$payload['user_data_dir'], 0, 500) : null,
+                $payload['qr_code'] ?? null,
+                $toMysql($payload['qr_expires_at'] ?? null),
+                !empty($payload['is_connected']) ? 1 : 0,
+                $toMysql($payload['connected_at'] ?? null),
+                $toMysql($payload['last_poll_at'] ?? null) ?? date('Y-m-d H:i:s'),
+                $payload['phone_number'] ? mb_substr((string)$payload['phone_number'], 0, 50) : null,
+                $payload['device_name'] ? mb_substr((string)$payload['device_name'], 0, 255) : null,
+                $payload['platform'] ? mb_substr((string)$payload['platform'], 0, 100) : null,
+                isset($payload['cookies']) ? json_encode($payload['cookies']) : null,
+                isset($payload['local_storage']) ? json_encode($payload['local_storage']) : null,
+            ]);
+        } catch (Throwable $e) {
+            waJsonResponse([
+                'success' => false,
+                'error' => 'Session sync failed: ' . $e->getMessage()
+            ], 500);
+        }
+
+        waJsonResponse(['success' => true]);
+        break;
+
+    case 'poll':
+        $payload = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($payload)) {
+            $payload = $_POST;
+        }
+        $lastPoll = !empty($payload['last_poll_at']) ? date('Y-m-d H:i:s', strtotime((string)$payload['last_poll_at'])) : date('Y-m-d H:i:s');
+        $db->prepare("UPDATE whatsapp_sessions SET last_poll_at = ?, updated_at = NOW() WHERE session_name = 'default'")
+           ->execute([$lastPoll]);
+        waJsonResponse(['success' => true]);
+        break;
+
     case 'refresh_qr':
-        // Signal bridge to generate new QR (via file flag or Redis)
         $flagFile = '/tmp/whatsapp_qr_refresh_' . session_id();
         file_put_contents($flagFile, time());
         

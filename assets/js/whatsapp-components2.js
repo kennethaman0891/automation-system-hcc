@@ -106,6 +106,9 @@ class WaConversationHeader extends HTMLElement {
     const displayName = chat.name || studentData.name || 'Student';
     const subTitle = parentPhone ? `${parentPhone}` : '';
 
+    const isEnquiry = !!(chat.metadata?.is_enquiry || chat.metadata?.enquiry_id || chat.enquiry);
+    const enquiryStatus = chat.metadata?.status || chat.enquiry?.status || (isEnquiry ? 'NEW' : '');
+
     this.shadowRoot.innerHTML = `
       <style>
         :host {
@@ -197,6 +200,47 @@ class WaConversationHeader extends HTMLElement {
           align-items: center;
           gap: 4px;
         }
+        .wa-header-enquiry-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          padding: 2px 8px;
+          border-radius: 999px;
+          font-size: 11px;
+          font-weight: 700;
+          text-transform: uppercase;
+          margin-left: 8px;
+          cursor: pointer;
+          vertical-align: middle;
+        }
+        .status-NEW { background: #dbeafe; color: #1e40af; }
+        .status-CONTACTED { background: #fef3c7; color: #92400e; }
+        .status-INFORMATION_SHARED { background: #f3e8ff; color: #6b21a8; }
+        .status-INTERESTED { background: #ccfbf1; color: #115e59; }
+        .status-VISIT_PLANNED { background: #e0e7ff; color: #3730a3; }
+        .status-DOCUMENTS_PENDING { background: #ffedd5; color: #9a3412; }
+        .status-APPLICATION_SUBMITTED { background: #cffafe; color: #155e75; }
+        .status-ENROLLED { background: #dcfce7; color: #166534; }
+        .status-CLOSED { background: #f1f5f9; color: #475569; }
+        .wa-header-btn-enquiry {
+          background: #e0f2fe;
+          color: #0369a1;
+          border: 1px solid #bae6fd;
+          border-radius: 6px;
+          padding: 4px 10px;
+          font-size: 12px;
+          font-weight: 700;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          transition: all 0.15s ease;
+        }
+        .wa-header-btn-enquiry:hover {
+          background: #0284c7;
+          color: #ffffff;
+          border-color: #0284c7;
+        }
         
         /* IN-CHAT SEARCH BAR */
         .wa-inchat-search {
@@ -282,6 +326,7 @@ class WaConversationHeader extends HTMLElement {
           <div class="wa-header-name">
             ${this.escapeHtml(displayName)}
             ${subTitle ? `<span class="phone">(${this.escapeHtml(subTitle)})</span>` : ''}
+            ${enquiryStatus ? `<span class="wa-header-enquiry-badge status-${enquiryStatus}" id="header-enquiry-badge" title="Admission Pipeline Status: ${enquiryStatus}">🎓 ${enquiryStatus}</span>` : ''}
           </div>
           <div class="wa-header-status" id="header-status-line">
             ${this.getStatusHtml(chat)}
@@ -289,6 +334,11 @@ class WaConversationHeader extends HTMLElement {
         </div>
         
         <div class="wa-header-actions">
+          ${isEnquiry ? `
+            <button class="wa-header-btn-enquiry" id="btn-open-enquiry-panel" title="Open Admission Enquiry & Pipeline Drawer">
+              🎓 Pipeline
+            </button>
+          ` : ''}
           <!-- Audio Call button -->
           <wa-icon-button id="btn-audio-call" icon="call" tooltip="Voice call"></wa-icon-button>
           <!-- Video Call button -->
@@ -313,6 +363,9 @@ class WaConversationHeader extends HTMLElement {
       
       <!-- CONVERSATION DROPDOWN MENU -->
       <div class="wa-convo-menu" id="convo-dropdown">
+        ${isEnquiry ? `
+          <button class="wa-convo-item" data-action="enquiry-pipeline">🎓 Admission Pipeline</button>
+        ` : ''}
         <button class="wa-convo-item" data-action="contact-info">ℹ️ Contact info</button>
         <button class="wa-convo-item" data-action="select-messages">☑️ Select messages</button>
         <button class="wa-convo-item" data-action="mute-chat">🔕 ${chat.is_muted ? 'Unmute notifications' : 'Mute notifications'}</button>
@@ -338,6 +391,14 @@ class WaConversationHeader extends HTMLElement {
     const openContactInfo = () => {
       this.dispatchEvent(new CustomEvent('open-contact-drawer', { detail: { chat }, bubbles: true, composed: true }));
     };
+    const openEnquiryDrawer = () => {
+      this.dispatchEvent(new CustomEvent('open-enquiry-drawer', { detail: { chat }, bubbles: true, composed: true }));
+    };
+    this.shadowRoot.querySelector('#header-enquiry-badge')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openEnquiryDrawer();
+    });
+    this.shadowRoot.querySelector('#btn-open-enquiry-panel')?.addEventListener('click', openEnquiryDrawer);
     this.shadowRoot.querySelector('#avatar-trigger')?.addEventListener('click', openContactInfo);
     this.shadowRoot.querySelector('#info-trigger')?.addEventListener('click', openContactInfo);
     this.shadowRoot.querySelector('#btn-contact-info')?.addEventListener('click', openContactInfo);
@@ -390,7 +451,9 @@ class WaConversationHeader extends HTMLElement {
         const action = item.dataset.action;
         dropdown?.classList.remove('open');
 
-        if (action === 'contact-info') {
+        if (action === 'enquiry-pipeline') {
+          openEnquiryDrawer();
+        } else if (action === 'contact-info') {
           openContactInfo();
         } else if (action === 'select-messages') {
           this.dispatchEvent(new CustomEvent('toggle-select-messages', { bubbles: true, composed: true }));
@@ -1445,11 +1508,23 @@ class WaComposer extends HTMLElement {
     this.bindEvents();
     this.boundReplyListener = (e) => this.setQuotedMessage(e.detail.message);
     window.addEventListener('reply-to-message', this.boundReplyListener);
+    this.boundSetTextListener = (e) => this.setText(e.detail?.text || '');
+    window.addEventListener('set-composer-text', this.boundSetTextListener);
   }
 
   disconnectedCallback() {
     window.removeEventListener('reply-to-message', this.boundReplyListener);
+    window.removeEventListener('set-composer-text', this.boundSetTextListener);
     this.stopRecordingCleanup();
+  }
+
+  setText(text) {
+    if (this.textarea) {
+      this.textarea.value = text;
+      this.updateTextareaHeight();
+      this.updateSendButtonState();
+      this.textarea.focus();
+    }
   }
 
   setQuotedMessage(msg) {
@@ -3912,7 +3987,984 @@ class WaSettings extends HTMLElement {
     });
   }
 }
-customElements.define('wa-settings', WaSettings);
+// ============ ADMISSION NEW ENQUIRY MODAL ============
+
+class WaNewEnquiryModal extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this.store = window.WhatsAppStore;
+    this.debounceTimer = null;
+  }
+
+  connectedCallback() {
+    this.render();
+  }
+
+  open() {
+    this.setAttribute('open', '');
+    this.resetForm();
+    this.loadStaffList();
+  }
+
+  close() {
+    this.removeAttribute('open');
+  }
+
+  resetForm() {
+    const form = this.shadowRoot.querySelector('#form-new-enquiry');
+    if (form) form.reset();
+    const warnBox = this.shadowRoot.querySelector('#alert-dup-warn');
+    const blockBox = this.shadowRoot.querySelector('#alert-dup-block');
+    const matchBox = this.shadowRoot.querySelector('#alert-record-match');
+    if (warnBox) warnBox.style.display = 'none';
+    if (blockBox) blockBox.style.display = 'none';
+    if (matchBox) matchBox.style.display = 'none';
+    const subBtn = this.shadowRoot.querySelector('#btn-submit-enquiry');
+    if (subBtn) subBtn.disabled = false;
+  }
+
+  async loadStaffList() {
+    try {
+      const res = await fetch('/hcc/admin/api_admission_enquiry.php?action=get_staff_list');
+      const data = await res.json();
+      if (data.success && data.data) {
+        const sel = this.shadowRoot.querySelector('#inp-staff');
+        if (sel) {
+          sel.innerHTML = data.data.map(u => `
+            <option value="${u.id}">${this.escapeHtml(u.full_name || u.username)}</option>
+          `).join('');
+        }
+      }
+    } catch (e) {}
+  }
+
+  escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  render() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host {
+          position: fixed;
+          inset: 0;
+          z-index: 100005;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          background: rgba(11,20,26,0.7);
+          backdrop-filter: blur(4px);
+          font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+          box-sizing: border-box;
+          padding: 16px;
+        }
+        :host([open]) { display: flex; }
+        
+        .wa-modal-box {
+          width: 100%;
+          max-width: 640px;
+          background: #ffffff;
+          border-radius: 12px;
+          box-shadow: 0 20px 48px rgba(0,0,0,0.3);
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+          animation: waPop 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+          max-height: 90vh;
+        }
+        @keyframes waPop {
+          from { opacity: 0; transform: scale(0.96) translateY(-6px); }
+          to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        
+        .wa-modal-head {
+          height: 52px;
+          padding: 0 20px;
+          background: #005c4b;
+          color: #ffffff;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          flex-shrink: 0;
+        }
+        .wa-modal-title {
+          font-size: 15.5px;
+          font-weight: 700;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .wa-modal-close {
+          background: none;
+          border: none;
+          color: #ffffff;
+          font-size: 22px;
+          cursor: pointer;
+          opacity: 0.8;
+          line-height: 1;
+        }
+        .wa-modal-close:hover { opacity: 1; }
+        
+        .wa-modal-body {
+          padding: 18px 22px;
+          overflow-y: auto;
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        
+        .wa-form-row {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+        }
+        .wa-form-col-full { grid-column: span 2; }
+        
+        .wa-field {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+        .wa-field label {
+          font-size: 11.5px;
+          font-weight: 700;
+          color: #334155;
+          text-transform: uppercase;
+          letter-spacing: 0.3px;
+        }
+        .wa-field input, .wa-field select, .wa-field textarea {
+          padding: 8px 12px;
+          border: 1px solid #cbd5e1;
+          border-radius: 6px;
+          font-size: 13.5px;
+          font-family: inherit;
+          color: #111b21;
+          background: #ffffff;
+          box-sizing: border-box;
+        }
+        .wa-field input:focus, .wa-field select:focus, .wa-field textarea:focus {
+          border-color: #00a884;
+          outline: none;
+          box-shadow: 0 0 0 2px rgba(0,168,132,0.2);
+        }
+        .wa-field textarea {
+          min-height: 90px;
+          resize: vertical;
+          line-height: 1.4;
+        }
+        
+        .wa-alert-box {
+          padding: 9px 12px;
+          border-radius: 6px;
+          font-size: 12px;
+          line-height: 1.4;
+          display: none;
+        }
+        .alert-warn { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
+        .alert-block { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+        .alert-match { background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
+        
+        .wa-modal-foot {
+          padding: 12px 20px;
+          background: #f8fafc;
+          border-top: 1px solid #e2e8f0;
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 10px;
+          flex-shrink: 0;
+        }
+        .wa-btn {
+          padding: 8px 16px;
+          border-radius: 6px;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+          border: none;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          transition: background 0.15s;
+        }
+        .wa-btn-secondary { background: #e2e8f0; color: #334155; }
+        .wa-btn-secondary:hover { background: #cbd5e1; }
+        .wa-btn-primary { background: #00a884; color: #ffffff; }
+        .wa-btn-primary:hover { background: #008069; }
+        .wa-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+      </style>
+      
+      <div class="wa-modal-box">
+        <div class="wa-modal-head">
+          <div class="wa-modal-title">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.816 9.816 0 0 0 12.04 2z"/></svg>
+            <span>Capture New Admission Enquiry</span>
+          </div>
+          <button type="button" class="wa-modal-close" id="btn-modal-close">&times;</button>
+        </div>
+        
+        <form id="form-new-enquiry" onsubmit="return false;">
+          <div class="wa-modal-body">
+            <!-- Real-time Alerts -->
+            <div class="wa-alert-box alert-block" id="alert-dup-block"></div>
+            <div class="wa-alert-box alert-warn" id="alert-dup-warn"></div>
+            <div class="wa-alert-box alert-match" id="alert-record-match"></div>
+
+            <div class="wa-form-row">
+              <div class="wa-field">
+                <label>Parent Name *</label>
+                <input type="text" id="inp-parent-name" placeholder="e.g. Ramesh Sharma" required>
+              </div>
+              <div class="wa-field">
+                <label>WhatsApp Phone Number *</label>
+                <input type="tel" id="inp-phone" placeholder="e.g. +91 98765 43210" required>
+              </div>
+            </div>
+
+            <div class="wa-form-row">
+              <div class="wa-field">
+                <label>Student Name (Optional)</label>
+                <input type="text" id="inp-student-name" placeholder="e.g. Akash Sharma">
+              </div>
+              <div class="wa-field">
+                <label>Interested Class / Grade *</label>
+                <select id="inp-class" required>
+                  <option value="">Select Grade</option>
+                  <option value="Nursery">Nursery</option>
+                  <option value="LKG">LKG</option>
+                  <option value="UKG">UKG</option>
+                  <option value="STD I">STD I</option>
+                  <option value="STD II">STD II</option>
+                  <option value="STD III">STD III</option>
+                  <option value="STD IV">STD IV</option>
+                  <option value="STD V">STD V</option>
+                  <option value="STD VI">STD VI</option>
+                  <option value="STD VII">STD VII</option>
+                  <option value="STD VIII">STD VIII</option>
+                  <option value="STD IX">STD IX</option>
+                  <option value="STD X">STD X</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="wa-form-row">
+              <div class="wa-field">
+                <label>Academic Year *</label>
+                <select id="inp-year" required>
+                  <option value="2025-26" selected>2025-26</option>
+                  <option value="2026-27">2026-27</option>
+                  <option value="2027-28">2027-28</option>
+                </select>
+              </div>
+              <div class="wa-field">
+                <label>Enquiry Source</label>
+                <select id="inp-source">
+                  <option value="whatsapp" selected>WhatsApp Message</option>
+                  <option value="walk_in">School Walk-in</option>
+                  <option value="phone_call">Phone Call</option>
+                  <option value="website">School Website</option>
+                  <option value="referral">Parent Referral</option>
+                  <option value="social_media">Social Media</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="wa-field wa-form-col-full">
+              <label>Parent's Original Message (Preserved &amp; Immutable) *</label>
+              <textarea id="inp-original-msg" placeholder="Paste the original WhatsApp message sent by the parent here..." required></textarea>
+              <span style="font-size:11px;color:#667781;margin-top:2px;">
+                🔒 This message is preserved in the persistent conversation record and synchronized to WhatsApp Hub.
+              </span>
+            </div>
+
+            <div class="wa-form-row">
+              <div class="wa-field">
+                <label>Assigned Staff Member</label>
+                <select id="inp-staff">
+                  <option value="1">Administrator</option>
+                </select>
+              </div>
+              <div class="wa-field">
+                <label>Staff Notes</label>
+                <input type="text" id="inp-notes" placeholder="e.g. Sibling studying in STD IV">
+              </div>
+            </div>
+          </div>
+
+          <div class="wa-modal-foot">
+            <button type="button" class="wa-btn wa-btn-secondary" id="btn-cancel">Cancel</button>
+            <button type="submit" class="wa-btn wa-btn-primary" id="btn-submit-enquiry">
+              ✓ Save Enquiry &amp; Open Chat
+            </button>
+          </div>
+        </form>
+      </div>
+    `;
+
+    this.bindEvents();
+  }
+
+  bindEvents() {
+    this.shadowRoot.querySelector('#btn-modal-close')?.addEventListener('click', () => this.close());
+    this.shadowRoot.querySelector('#btn-cancel')?.addEventListener('click', () => this.close());
+
+    // Live Duplicate Check
+    const triggerDupCheck = async () => {
+      const phone = this.shadowRoot.querySelector('#inp-phone')?.value.trim() || '';
+      const student = this.shadowRoot.querySelector('#inp-student-name')?.value.trim() || '';
+      const year = this.shadowRoot.querySelector('#inp-year')?.value || '2025-26';
+      const cls = this.shadowRoot.querySelector('#inp-class')?.value || 'STD I';
+
+      if (phone.replace(/\D/g, '').length < 10) return;
+
+      try {
+        const url = `/hcc/admin/api_admission_enquiry.php?action=check_duplicates&phone=${encodeURIComponent(phone)}&student_name=${encodeURIComponent(student)}&academic_year=${encodeURIComponent(year)}&interested_class=${encodeURIComponent(cls)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!data.success) return;
+
+        const dup = data.data;
+        const warnBox = this.shadowRoot.querySelector('#alert-dup-warn');
+        const blockBox = this.shadowRoot.querySelector('#alert-dup-block');
+        const matchBox = this.shadowRoot.querySelector('#alert-record-match');
+        const subBtn = this.shadowRoot.querySelector('#btn-submit-enquiry');
+
+        if (dup.is_blocked) {
+          blockBox.innerHTML = `<strong>⚠️ Duplicate Blocked:</strong> ${dup.block_reasons.map(this.escapeHtml).join('<br>')}`;
+          blockBox.style.display = 'block';
+          if (subBtn) subBtn.disabled = true;
+        } else {
+          blockBox.style.display = 'none';
+          if (subBtn) subBtn.disabled = false;
+        }
+
+        if (dup.is_warned && !dup.is_blocked) {
+          warnBox.innerHTML = `<strong>ℹ️ Potential Duplicate:</strong> ${dup.warn_reasons.map(this.escapeHtml).join('<br>')}<br><small>You may still proceed if this is a separate request.</small>`;
+          warnBox.style.display = 'block';
+        } else {
+          warnBox.style.display = 'none';
+        }
+
+        if (dup.matched_records && dup.matched_records.length > 0) {
+          const first = dup.matched_records[0];
+          matchBox.innerHTML = `<strong>✨ Existing School Record Found:</strong> ${this.escapeHtml(first.label)}<br><small>Reusing existing parent record and linking profile.</small>`;
+          matchBox.style.display = 'block';
+        } else {
+          matchBox.style.display = 'none';
+        }
+      } catch (err) {}
+    };
+
+    ['#inp-phone', '#inp-student-name', '#inp-class', '#inp-year'].forEach(sel => {
+      this.shadowRoot.querySelector(sel)?.addEventListener('input', () => {
+        clearTimeout(this.debounceTimer);
+        this.debounceTimer = setTimeout(triggerDupCheck, 400);
+      });
+    });
+
+    // Form Submission
+    this.shadowRoot.querySelector('#form-new-enquiry')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const subBtn = this.shadowRoot.querySelector('#btn-submit-enquiry');
+      if (subBtn) {
+        subBtn.disabled = true;
+        subBtn.textContent = 'Saving Enquiry...';
+      }
+
+      const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+      const payload = {
+        action: 'create',
+        parent_name: this.shadowRoot.querySelector('#inp-parent-name')?.value.trim(),
+        phone_number: this.shadowRoot.querySelector('#inp-phone')?.value.trim(),
+        student_name: this.shadowRoot.querySelector('#inp-student-name')?.value.trim(),
+        interested_class: this.shadowRoot.querySelector('#inp-class')?.value,
+        academic_year: this.shadowRoot.querySelector('#inp-year')?.value,
+        original_message: this.shadowRoot.querySelector('#inp-original-msg')?.value.trim(),
+        enquiry_source: this.shadowRoot.querySelector('#inp-source')?.value || 'whatsapp',
+        assigned_staff_id: this.shadowRoot.querySelector('#inp-staff')?.value,
+        notes: this.shadowRoot.querySelector('#inp-notes')?.value.trim(),
+        confirm_duplicate: this.shadowRoot.querySelector('#alert-dup-warn')?.style.display === 'block'
+      };
+
+      try {
+        const res = await fetch('/hcc/admin/api_admission_enquiry.php', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': csrf
+          },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.success) {
+          this.close();
+          // Reload chats in store
+          if (this.store) {
+            await this.store.loadChats();
+            if (data.chat_id) {
+              this.store.setActiveChat(data.chat_id);
+            }
+          }
+          alert('Admission Enquiry captured successfully! The conversation is now live in WhatsApp Hub.');
+        } else {
+          alert(data.error || 'Failed to save enquiry.');
+        }
+      } catch (err) {
+        alert('Network or server error while saving enquiry.');
+      } finally {
+        if (subBtn) {
+          subBtn.disabled = false;
+          subBtn.textContent = '✓ Save Enquiry & Open Chat';
+        }
+      }
+    });
+  }
+}
+customElements.define('wa-new-enquiry-modal', WaNewEnquiryModal);
+
+// ============ ADMISSION ENQUIRY DRAWER ============
+
+class WaEnquiryDrawer extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this.store = window.WhatsAppStore;
+    this.currentChat = null;
+    this.currentEnquiry = null;
+  }
+
+  connectedCallback() {
+    this.render();
+  }
+
+  async open(chat) {
+    this.currentChat = chat || this.store?.activeChat;
+    this.setAttribute('open', '');
+    this.renderLoading();
+    await this.loadEnquiryData();
+  }
+
+  close() {
+    this.removeAttribute('open');
+  }
+
+  escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  renderLoading() {
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host {
+          position: fixed; top: 0; right: 0; bottom: 0; width: 440px;
+          background: #ffffff; box-shadow: -4px 0 24px rgba(11,20,26,0.18);
+          z-index: 10000; display: flex; flex-direction: column;
+          transform: translateX(100%); transition: transform 0.25s ease;
+          box-sizing: border-box;
+          font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+        }
+        :host([open]) { transform: translateX(0); }
+        .head { height: 56px; padding: 0 16px; background: #005c4b; color: #fff; display: flex; align-items: center; justify-content: space-between; }
+        .body { flex: 1; display: flex; align-items: center; justify-content: center; color: #667781; }
+      </style>
+      <div class="head">
+        <strong>Admission Enquiry</strong>
+        <button style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;" id="btn-close">&times;</button>
+      </div>
+      <div class="body">Loading enquiry details...</div>
+    `;
+    this.shadowRoot.querySelector('#btn-close')?.addEventListener('click', () => this.close());
+  }
+
+  async loadEnquiryData() {
+    const chat = this.currentChat;
+    if (!chat) return;
+
+    let enquiryId = chat.metadata?.enquiry_id || chat.enquiry?.id;
+    const phone = chat.phone_e164 || chat.wa_chat_id || '';
+
+    // If enquiry ID is not directly on chat, search by phone
+    if (!enquiryId && phone) {
+      try {
+        const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+        const sRes = await fetch(`/hcc/admin/api_admission_enquiry.php?action=list&search=${encodeURIComponent(cleanPhone)}`);
+        const sData = await sRes.json();
+        if (sData.success && sData.data && sData.data.length > 0) {
+          enquiryId = sData.data[0].id;
+        }
+      } catch (e) {}
+    }
+
+    if (!enquiryId) {
+      this.renderNoEnquiry();
+      return;
+    }
+
+    try {
+      const res = await fetch(`/hcc/admin/api_admission_enquiry.php?action=get&id=${enquiryId}`);
+      const data = await res.json();
+      if (data.success && data.data) {
+        this.currentEnquiry = data.data;
+        this.currentTimeline = data.timeline || [];
+        this.renderEnquiry();
+      } else {
+        this.renderNoEnquiry();
+      }
+    } catch (e) {
+      this.renderNoEnquiry();
+    }
+  }
+
+  renderNoEnquiry() {
+    const chat = this.currentChat;
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host {
+          position: fixed; top: 0; right: 0; bottom: 0; width: 440px;
+          background: #ffffff; box-shadow: -4px 0 24px rgba(11,20,26,0.18);
+          z-index: 10000; display: flex; flex-direction: column;
+          transform: translateX(100%); transition: transform 0.25s ease;
+          box-sizing: border-box;
+          font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+        }
+        :host([open]) { transform: translateX(0); }
+        .head { height: 56px; padding: 0 16px; background: #005c4b; color: #fff; display: flex; align-items: center; justify-content: space-between; }
+        .body { flex: 1; padding: 32px 20px; text-align: center; color: #667781; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; }
+        .btn { padding: 9px 18px; border-radius: 6px; background: #00a884; color: #fff; border: none; font-weight: 600; cursor: pointer; }
+      </style>
+      <div class="head">
+        <strong>Admission Enquiry</strong>
+        <button style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;" id="btn-close">&times;</button>
+      </div>
+      <div class="body">
+        <div style="font-size:32px;">📋</div>
+        <div style="font-size:15px;font-weight:600;color:#111b21;">No Linked Admission Enquiry</div>
+        <p style="font-size:13px;line-height:1.4;margin:0;">This conversation with <strong>${this.escapeHtml(chat?.name || 'Contact')}</strong> is not yet registered as an admission enquiry.</p>
+        <button class="btn" id="btn-create-enquiry-here">+ Capture As Admission Enquiry</button>
+      </div>
+    `;
+    this.shadowRoot.querySelector('#btn-close')?.addEventListener('click', () => this.close());
+    this.shadowRoot.querySelector('#btn-create-enquiry-here')?.addEventListener('click', () => {
+      this.close();
+      const nem = document.querySelector('wa-new-enquiry-modal') || this.getRootNode()?.querySelector('wa-new-enquiry-modal');
+      if (nem) {
+        nem.open();
+        // Prefill name & phone
+        const pName = nem.shadowRoot?.querySelector('#inp-parent-name');
+        const pPhone = nem.shadowRoot?.querySelector('#inp-phone');
+        if (pName && chat?.name) pName.value = chat.name;
+        if (pPhone && (chat?.phone_e164 || chat?.wa_chat_id)) pPhone.value = chat.phone_e164 || chat.wa_chat_id;
+      }
+    });
+  }
+
+  renderEnquiry() {
+    const enq = this.currentEnquiry;
+    const timeline = this.currentTimeline || [];
+
+    const statusPillColors = {
+      'NEW': '#dbeafe;color:#1e40af',
+      'CONTACTED': '#fef3c7;color:#92400e',
+      'INFORMATION_SHARED': '#f3e8ff;color:#6b21a8',
+      'INTERESTED': '#ccfbf1;color:#115e59',
+      'VISIT_PLANNED': '#e0e7ff;color:#3730a3',
+      'DOCUMENTS_PENDING': '#ffedd5;color:#9a3412',
+      'APPLICATION_SUBMITTED': '#cffafe;color:#155e75',
+      'ENROLLED': '#dcfce7;color:#166534',
+      'CLOSED': '#f1f5f9;color:#475569'
+    };
+
+    this.shadowRoot.innerHTML = `
+      <style>
+        :host {
+          position: fixed; top: 0; right: 0; bottom: 0; width: 460px;
+          background: #f0f2f5; box-shadow: -4px 0 24px rgba(11,20,26,0.18);
+          z-index: 10000; display: flex; flex-direction: column;
+          transform: translateX(100%); transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+          box-sizing: border-box;
+          font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+        }
+        :host([open]) { transform: translateX(0); }
+        
+        .head {
+          height: 56px; padding: 0 16px; background: #005c4b; color: #fff;
+          display: flex; align-items: center; justify-content: space-between; flex-shrink: 0;
+        }
+        .head-title { font-size: 15px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+        .head-close { background: none; border: none; color: #fff; font-size: 22px; cursor: pointer; }
+        
+        .body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+        
+        .card { background: #ffffff; border-radius: 8px; padding: 14px; box-shadow: 0 1px 2px rgba(11,20,26,0.06); }
+        .card-title { font-size: 12.5px; font-weight: 700; color: #008069; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; }
+        
+        .meta-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 13px; border-bottom: 1px solid #f1f5f9; }
+        .meta-lbl { color: #667781; font-weight: 500; }
+        .meta-val { color: #111b21; font-weight: 600; text-align: right; }
+        
+        .status-badge {
+          display: inline-block; padding: 3px 8px; border-radius: 999px;
+          font-size: 11px; font-weight: 700; text-transform: uppercase;
+        }
+        
+        /* Original Message Bubble */
+        .msg-bubble {
+          background: #d9fdd3; padding: 10px 12px; border-radius: 8px;
+          font-size: 13px; color: #111b21; line-height: 1.45; white-space: pre-wrap;
+          border-left: 3px solid #00a884;
+        }
+        
+        /* AI Assistant Box */
+        .ai-box textarea {
+          width: 100%; min-height: 80px; padding: 8px 10px; border: 1px solid #cbd5e1;
+          border-radius: 6px; font-size: 12.5px; font-family: inherit; line-height: 1.4;
+          box-sizing: border-box;
+        }
+        .ai-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
+        .btn-sm { padding: 5px 10px; border-radius: 5px; font-size: 11.5px; font-weight: 600; cursor: pointer; border: none; }
+        
+        /* Timeline */
+        .tl-stream { display: flex; flex-direction: column; gap: 8px; max-height: 220px; overflow-y: auto; }
+        .tl-entry { padding: 8px 10px; border-radius: 6px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 12px; }
+        .tl-entry-head { display: flex; justify-content: space-between; color: #667781; font-size: 11px; margin-bottom: 3px; }
+        
+        .foot { padding: 10px 14px; background: #ffffff; border-top: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+      </style>
+      
+      <div class="head">
+        <div class="head-title">
+          <span>🎓</span>
+          <span>Enquiry #${enq.id} — ${this.escapeHtml(enq.parent_name)}</span>
+        </div>
+        <button class="head-close" id="btn-close">&times;</button>
+      </div>
+      
+      <div class="body">
+        <!-- 1. Prospect Overview -->
+        <div class="card">
+          <div class="card-title">
+            <span>Prospect Information</span>
+            <span class="status-badge" style="background:${statusPillColors[enq.status] || '#f1f5f9'}">${this.escapeHtml(enq.status)}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-lbl">Parent Name:</span>
+            <span class="meta-val">${this.escapeHtml(enq.parent_name)}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-lbl">WhatsApp Phone:</span>
+            <span class="meta-val">${this.escapeHtml(enq.phone_number)}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-lbl">Student Name:</span>
+            <span class="meta-val">${this.escapeHtml(enq.student_name || '—')}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-lbl">Interested Grade:</span>
+            <span class="meta-val"><strong>${this.escapeHtml(enq.interested_class)}</strong> (${this.escapeHtml(enq.academic_year)})</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-lbl">Enquiry Source:</span>
+            <span class="meta-val">${this.escapeHtml(enq.enquiry_source)}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-lbl">Assigned Staff:</span>
+            <span class="meta-val">${this.escapeHtml(enq.assigned_staff_name || 'Administrator')}</span>
+          </div>
+          ${enq.matched_student_roll ? `
+            <div style="margin-top:6px;background:#e0f2fe;color:#0369a1;padding:4px 8px;border-radius:4px;font-size:11px;font-weight:700;">
+              🔗 Reused Student Profile: Roll #${this.escapeHtml(enq.matched_student_roll)} (${this.escapeHtml(enq.matched_student_class || '')})
+            </div>
+          ` : ''}
+        </div>
+
+        <!-- 2. Admission Pipeline Fast Update -->
+        <div class="card">
+          <div class="card-title">
+            <span>Update Admission Status</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <select id="inp-update-status" style="padding:6px 10px;border-radius:6px;border:1px solid #cbd5e1;font-size:12.5px;font-weight:600;">
+              <option value="NEW" ${enq.status==='NEW'?'selected':''}>NEW</option>
+              <option value="CONTACTED" ${enq.status==='CONTACTED'?'selected':''}>CONTACTED</option>
+              <option value="INFORMATION_SHARED" ${enq.status==='INFORMATION_SHARED'?'selected':''}>INFORMATION_SHARED</option>
+              <option value="INTERESTED" ${enq.status==='INTERESTED'?'selected':''}>INTERESTED</option>
+              <option value="VISIT_PLANNED" ${enq.status==='VISIT_PLANNED'?'selected':''}>VISIT_PLANNED</option>
+              <option value="DOCUMENTS_PENDING" ${enq.status==='DOCUMENTS_PENDING'?'selected':''}>DOCUMENTS_PENDING</option>
+              <option value="APPLICATION_SUBMITTED" ${enq.status==='APPLICATION_SUBMITTED'?'selected':''}>APPLICATION_SUBMITTED</option>
+              <option value="ENROLLED" ${enq.status==='ENROLLED'?'selected':''}>ENROLLED</option>
+              <option value="CLOSED" ${enq.status==='CLOSED'?'selected':''}>CLOSED</option>
+            </select>
+            <input type="text" id="inp-status-notes" placeholder="Optional transition note…" style="padding:6px 10px;border-radius:6px;border:1px solid #cbd5e1;font-size:12px;">
+            <button class="btn-sm" style="background:#00a884;color:#fff;padding:6px;" id="btn-save-status">
+              ✓ Update Pipeline Status
+            </button>
+          </div>
+        </div>
+
+        <!-- 3. Original Incoming WhatsApp Message -->
+        <div class="card">
+          <div class="card-title">
+            <span>Original WhatsApp Message</span>
+            <button class="btn-sm" style="background:#f1f5f9;color:#334155;" id="btn-copy-orig">📋 Copy</button>
+          </div>
+          <div class="msg-bubble" id="orig-msg-text">${this.escapeHtml(enq.original_message)}</div>
+        </div>
+
+        <!-- 4. AI Response Assistant -->
+        <div class="card ai-box">
+          <div class="card-title">
+            <span>✨ AI Response Assistant</span>
+            <button class="btn-sm" style="background:#8b5cf6;color:#fff;" id="btn-gen-ai">Generate Draft</button>
+          </div>
+          <textarea id="ai-draft-text" placeholder="Generate or craft personalized admission response here..."></textarea>
+          <div id="ai-meta" style="display:none;margin-top:6px;font-size:11px;line-height:1.4;color:#334155;"></div>
+          <div class="ai-actions">
+            <button class="btn-sm" style="background:#e2e8f0;color:#334155;" id="btn-save-edit">Save Edit</button>
+            <button class="btn-sm" style="background:#059669;color:#fff;" id="btn-approve-copy">✓ Approve &amp; Copy to Chat</button>
+            <button class="btn-sm" style="background:#128C7E;color:#fff;" id="btn-open-wa">Open WhatsApp</button>
+            <button class="btn-sm" style="background:#f1f5f9;color:#334155;" id="btn-confirm-sent">Mark manually confirmed sent</button>
+          </div>
+          <p style="margin:6px 0 0;font-size:11px;color:#64748b;">Open WhatsApp prefills the chat. You press Send. Manual confirmation is not a delivery receipt.</p>
+        </div>
+
+        <!-- 5. Follow-Up History & Notes -->
+        <div class="card">
+          <div class="card-title">
+            <span>Log Follow-Up History</span>
+          </div>
+          <div style="display:flex;gap:6px;margin-bottom:8px;">
+            <input type="text" id="inp-drawer-followup" placeholder="e.g. Spoke on phone, campus visit on Friday" style="flex:1;padding:6px 8px;border:1px solid #cbd5e1;border-radius:5px;font-size:12px;">
+            <button class="btn-sm" style="background:#d97706;color:#fff;" id="btn-log-followup">Log</button>
+          </div>
+          
+          <div class="card-title" style="margin-top:10px;">
+            <span>Conversation Timeline (${timeline.length})</span>
+          </div>
+          <div class="tl-stream">
+            ${timeline.map(item => `
+              <div class="tl-entry">
+                <div class="tl-entry-head">
+                  <strong>${this.escapeHtml(item.admin_name || item.message_type)}</strong>
+                  <span>${new Date(item.created_at).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}</span>
+                </div>
+                <div style="white-space:pre-wrap;">${this.escapeHtml(item.body)}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+      
+      <div class="foot">
+        <a href="/hcc/admin/admission_enquiries.php" target="_blank" style="font-size:12px;color:#0284c7;text-decoration:none;font-weight:600;">
+          ↗ Open Centralized Dashboard
+        </a>
+        <button class="btn-sm" style="background:#e2e8f0;color:#334155;" id="btn-foot-close">Close</button>
+      </div>
+    `;
+
+    this.bindDrawerEvents();
+  }
+
+  bindDrawerEvents() {
+    this.shadowRoot.querySelector('#btn-close')?.addEventListener('click', () => this.close());
+    this.shadowRoot.querySelector('#btn-foot-close')?.addEventListener('click', () => this.close());
+
+    // Copy original message
+    this.shadowRoot.querySelector('#btn-copy-orig')?.addEventListener('click', () => {
+      const txt = this.shadowRoot.querySelector('#orig-msg-text')?.textContent || '';
+      navigator.clipboard?.writeText(txt).then(() => alert('Copied original message to clipboard!'));
+    });
+
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+    const enq = this.currentEnquiry;
+
+    // Fast status update
+    this.shadowRoot.querySelector('#btn-save-status')?.addEventListener('click', async () => {
+      if (!enq) return;
+      const status = this.shadowRoot.querySelector('#inp-update-status')?.value;
+      const notes = this.shadowRoot.querySelector('#inp-status-notes')?.value.trim();
+
+      try {
+        const res = await fetch('/hcc/admin/api_admission_enquiry.php?action=update_status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+          body: JSON.stringify({ id: enq.id, status, notes })
+        });
+        const data = await res.json();
+        if (data.success) {
+          if (this.currentChat) {
+            if (!this.currentChat.metadata) this.currentChat.metadata = {};
+            this.currentChat.metadata.status = status;
+          }
+          await this.loadEnquiryData();
+          if (this.store) await this.store.loadChats();
+        } else {
+          alert(data.error || 'Failed to update status.');
+        }
+      } catch (err) { alert('Network error updating status.'); }
+    });
+
+    // AI Generate Draft
+    this.shadowRoot.querySelector('#btn-gen-ai')?.addEventListener('click', async () => {
+      if (!enq) return;
+      const btn = this.shadowRoot.querySelector('#btn-gen-ai');
+      if (btn) btn.textContent = 'Generating...';
+
+      try {
+        const res = await fetch(`/hcc/admin/api_admission_enquiry.php?action=generate_ai_draft&id=${enq.id}`);
+        const data = await res.json();
+        if (data.success && data.draft_text) {
+          const area = this.shadowRoot.querySelector('#ai-draft-text');
+          if (area) area.value = data.draft_text;
+          const meta = this.shadowRoot.querySelector('#ai-meta');
+          if (meta) {
+            const missing = Array.isArray(data.missing_information) ? data.missing_information.join('; ') : '';
+            meta.style.display = 'block';
+            meta.textContent = `Intent: ${data.intent || 'General enquiry'}`
+              + (data.escalation_required ? ` · Escalation: ${data.escalation_reason || 'Staff review required'}` : '')
+              + (missing ? ` · Missing: ${missing}` : '')
+              + (data.service_warning ? ` · ${data.service_warning}` : '')
+              + ' · Draft only.';
+          }
+          if (data.service_warning) alert(data.service_warning);
+        } else {
+          alert(data.error || 'Failed to generate draft.');
+        }
+      } catch (err) { alert('Error generating AI draft.'); }
+      finally {
+        if (btn) btn.textContent = 'Generate Draft';
+      }
+    });
+
+    // Save Staff Edit
+    this.shadowRoot.querySelector('#btn-save-edit')?.addEventListener('click', async () => {
+      if (!enq) return;
+      const txt = this.shadowRoot.querySelector('#ai-draft-text')?.value.trim();
+      if (!txt) return;
+
+      try {
+        const res = await fetch('/hcc/admin/api_admission_enquiry.php?action=save_draft_edit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+          body: JSON.stringify({ enquiry_id: enq.id, edited_body: txt })
+        });
+        const data = await res.json();
+        if (data.success) {
+          await this.loadEnquiryData();
+        }
+      } catch (e) {}
+    });
+
+    // Approve Response & Copy to Composer
+    this.shadowRoot.querySelector('#btn-approve-copy')?.addEventListener('click', async () => {
+      if (!enq) return;
+      const txt = this.shadowRoot.querySelector('#ai-draft-text')?.value.trim();
+      if (!txt) { alert('Draft text is empty.'); return; }
+
+      try {
+        const res = await fetch('/hcc/admin/api_admission_enquiry.php?action=approve_response', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+          body: JSON.stringify({ enquiry_id: enq.id, approved_text: txt })
+        });
+        const data = await res.json();
+        if (data.success) {
+          // Copy text into composer input
+          const composer = document.querySelector('wa-composer') || document.querySelector('wa-app')?.shadowRoot?.querySelector('wa-composer');
+          if (composer) {
+            const inp = composer.shadowRoot?.querySelector('#composer-input');
+            if (inp) {
+              inp.value = txt;
+              inp.focus();
+            }
+          }
+          await this.loadEnquiryData();
+          if (this.store) await this.store.loadChats();
+          alert(data.message || 'Response approved as a draft. It has not been sent on WhatsApp.');
+        } else {
+          alert(data.error || 'Failed to approve response.');
+        }
+      } catch (err) { alert('Error approving response.'); }
+    });
+
+    this.shadowRoot.querySelector('#btn-open-wa')?.addEventListener('click', async () => {
+      if (!enq) return;
+      const txt = this.shadowRoot.querySelector('#ai-draft-text')?.value.trim();
+      if (!txt) { alert('Write or approve a message before opening WhatsApp.'); return; }
+      try {
+        const res = await fetch('/hcc/admin/api_admission_enquiry.php?action=open_whatsapp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+          body: JSON.stringify({ id: enq.id, message: txt })
+        });
+        const data = await res.json();
+        if (!data.success || !data.whatsapp_url) {
+          alert(data.error || 'Could not open WhatsApp.');
+          return;
+        }
+        window.open(data.whatsapp_url, '_blank', 'noopener,noreferrer');
+      } catch (err) {
+        alert('Could not open WhatsApp.');
+      }
+    });
+
+    this.shadowRoot.querySelector('#btn-confirm-sent')?.addEventListener('click', async () => {
+      if (!enq) return;
+      const ok = confirm('Did you press Send in WhatsApp yourself?\n\nThis records an unverified staff confirmation. It is not a delivery or read receipt.');
+      if (!ok) return;
+      try {
+        const res = await fetch('/hcc/admin/api_admission_enquiry.php?action=confirm_manual_send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+          body: JSON.stringify({ id: enq.id, manual_sent_confirmed: true })
+        });
+        const data = await res.json();
+        if (data.success) {
+          await this.loadEnquiryData();
+          alert(data.message || 'Manual send recorded. Delivery was not verified.');
+        } else {
+          alert(data.error || 'Could not record the confirmation.');
+        }
+      } catch (err) {
+        alert('Could not record the confirmation.');
+      }
+    });
+
+    // Log Follow-up
+    this.shadowRoot.querySelector('#btn-log-followup')?.addEventListener('click', async () => {
+      if (!enq) return;
+      const note = this.shadowRoot.querySelector('#inp-drawer-followup')?.value.trim();
+      if (!note) return;
+
+      try {
+        const res = await fetch('/hcc/admin/api_admission_enquiry.php?action=add_followup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+          body: JSON.stringify({ enquiry_id: enq.id, note })
+        });
+        const data = await res.json();
+        if (data.success) {
+          await this.loadEnquiryData();
+        }
+      } catch (e) {}
+    });
+  }
+}
+customElements.define('wa-enquiry-drawer', WaEnquiryDrawer);
 
 // ============ MAIN APP SHELL ============
 
@@ -4098,6 +5150,7 @@ class WaApp extends HTMLElement {
         
         <div class="wa-conversation-pane">
           <wa-conversation-header id="convo-header"></wa-conversation-header>
+          <wa-ai-admission-assistant id="ai-assistant"></wa-ai-admission-assistant>
           <wa-conversation-messages id="convo-messages"></wa-conversation-messages>
           <wa-composer id="composer"></wa-composer>
         </div>
@@ -4106,6 +5159,8 @@ class WaApp extends HTMLElement {
       <!-- INTERACTIVE MODALS & DRAWERS -->
       <wa-call-modal id="call-modal"></wa-call-modal>
       <wa-contact-drawer id="contact-drawer"></wa-contact-drawer>
+      <wa-new-enquiry-modal id="new-enquiry-modal"></wa-new-enquiry-modal>
+      <wa-enquiry-drawer id="enquiry-drawer"></wa-enquiry-drawer>
       <wa-pdf-preview-modal id="pdf-modal"></wa-pdf-preview-modal>
       <wa-contact-picker id="contact-picker"></wa-contact-picker>
       <wa-group-create id="group-create"></wa-group-create>
@@ -4118,11 +5173,26 @@ class WaApp extends HTMLElement {
     const composer = this.shadowRoot.querySelector('#composer');
     const callModal = this.shadowRoot.querySelector('#call-modal');
     const contactDrawer = this.shadowRoot.querySelector('#contact-drawer');
+    const newEnquiryModal = this.shadowRoot.querySelector('#new-enquiry-modal');
+    const enquiryDrawer = this.shadowRoot.querySelector('#enquiry-drawer');
     const pdfModal = this.shadowRoot.querySelector('#pdf-modal');
     const contactPicker = this.shadowRoot.querySelector('#contact-picker');
     const groupCreate = this.shadowRoot.querySelector('#group-create');
     const qrModal = this.shadowRoot.querySelector('#qr-modal');
     const settingsModal = this.shadowRoot.querySelector('#settings-modal');
+
+    // Open New Enquiry Modal
+    const onOpenNewEnquiry = () => newEnquiryModal?.open();
+    this.addEventListener('open-new-enquiry', onOpenNewEnquiry);
+    window.addEventListener('open-new-enquiry', onOpenNewEnquiry);
+
+    // Open Admission Enquiry Drawer
+    const onOpenEnquiryDrawer = (e) => {
+      const chat = e.detail?.chat || this.store?.activeChat;
+      enquiryDrawer?.open(chat);
+    };
+    this.addEventListener('open-enquiry-drawer', onOpenEnquiryDrawer);
+    window.addEventListener('open-enquiry-drawer', onOpenEnquiryDrawer);
 
     // Fullscreen toggle
     this.shadowRoot.querySelector('#btn-fullscreen-toggle')?.addEventListener('click', () => {

@@ -66,14 +66,33 @@ if (!empty($nameParts[0])) {
                 </button>
 
                 <div class="header-titles">
+                    <div class="header-breadcrumb-row">
+                        <nav class="tt-breadcrumb" aria-label="Breadcrumb">
+                            <a href="dashboard.php"><i class="fa-solid fa-house"></i> Dashboard</a>
+                            <span class="sep"><i class="fa-solid fa-chevron-right"></i></span>
+                            <span>Academic Schedule</span>
+                            <span class="sep"><i class="fa-solid fa-chevron-right"></i></span>
+                            <span class="current">Timetable Studio</span>
+                        </nav>
+                    </div>
                     <h1 class="page-title">
-                        <i class="fa-solid fa-calendar-days" style="color:var(--brand);margin-right:8px;font-size:1.15rem;"></i>
-                        Exam Timetable Builder
+                        <span class="page-title-icon"><i class="fa-solid fa-calendar-days"></i></span>
+                        Exam Timetable Builder Studio
                     </h1>
-                    <p class="page-sub">Design, manage and publish examination schedules and class time slots</p>
+                    <p class="page-sub">Design, configure and publish multi-standard examination schedules with instant mathematical rowspan precision</p>
                 </div>
 
                 <div class="header-actions">
+                    <a href="whatsapp_share.php" class="wa-quick-btn" id="waQuickBtn" title="Open WhatsApp Share Hub" aria-label="Open WhatsApp Share Hub">
+                        <i class="fa-brands fa-whatsapp"></i>
+                    </a>
+                    <button type="button" class="header-action-btn" id="headerPrintBtn" title="Print Official Timetable (opens preview)" aria-label="Print Preview" onclick="window.hccTimetableApp?.openPrintPreview()">
+                        <i class="fa-solid fa-print"></i>
+                        <span>Print</span>
+                    </button>
+                    <button type="button" class="header-action-btn" id="headerFullscreenBtn" title="Toggle Fullscreen Matrix Mode" aria-label="Fullscreen" onclick="window.hccTimetableApp?.toggleFullscreen()">
+                        <i class="fa-solid fa-expand"></i>
+                    </button>
                     <div class="admin-user" title="<?= sanitize($adminUser) ?> — <?= sanitize($adminRole) ?>">
                         <span class="user-avatar" aria-hidden="true"><?= sanitize($adminInitials) ?></span>
                         <span class="user-meta">
@@ -90,8 +109,9 @@ if (!empty($nameParts[0])) {
                 <div id="timetableMatrixApp">
                     <!-- Loading Skeleton Placeholder -->
                     <div class="timetable-app-card" style="padding: 48px 24px; text-align: center; color: var(--text-2);">
-                        <i class="fa-solid fa-spinner fa-spin" style="font-size: 2rem; color: var(--brand); margin-bottom: 14px;"></i>
-                        <p style="font-weight: 600;">Loading Exam Timetable Matrix Engine...</p>
+                        <i class="fa-solid fa-spinner fa-spin" style="font-size: 2.2rem; color: var(--brand); margin-bottom: 14px;"></i>
+                        <p style="font-weight: 700; font-size: 1rem; color: var(--tt-brand-deep);">Loading Exam Timetable Matrix Engine...</p>
+                        <p style="font-size: 0.85rem; color: var(--text-3); margin-top: 4px;">Preparing institutional layouts and subject presets</p>
                     </div>
                 </div>
             </div>

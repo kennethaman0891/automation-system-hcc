@@ -91,9 +91,22 @@ function csrfField() {
 }
 
 function verifyCSRFToken() {
-    if ($_SERVER['REQUEST_METHOD'] !== 'POST') return true;
-    $token = $_POST['csrf_token'] ?? '';
-    return hash_equals($_SESSION['csrf_token'] ?? '', $token);
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+        return true;
+    }
+    $expected = (string)($_SESSION['csrf_token'] ?? '');
+    if ($expected === '') {
+        return false;
+    }
+    $token = (string)($_POST['csrf_token'] ?? '');
+    if ($token === '') {
+        // JSON APIs send the token in a header because PHP does not parse JSON into $_POST.
+        $token = (string)($_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
+    }
+    if ($token === '') {
+        return false;
+    }
+    return hash_equals($expected, $token);
 }
 
 function calculateGrade($percentage, $std = null) {

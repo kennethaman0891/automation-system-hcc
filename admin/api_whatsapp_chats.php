@@ -277,6 +277,8 @@ if ($filter === 'unread') {
     $where[] = "chat_type IN ('group','broadcast')";
 } elseif ($filter === 'pinned') {
     $where[] = 'is_pinned = 1';
+} elseif ($filter === 'enquiries') {
+    $where[] = "(c.is_admission_enquiry = 1 OR JSON_UNQUOTE(JSON_EXTRACT(c.metadata, '$.is_enquiry')) = 'true' OR JSON_UNQUOTE(JSON_EXTRACT(c.metadata, '$.enquiry_id')) IS NOT NULL)";
 }
 
 if ($search !== '') {
@@ -335,6 +337,30 @@ foreach ($result['items'] as &$chat) {
         if ($contact) {
             $chat['contact'] = $contact;
         }
+    }
+
+    // Add admission enquiry info if linked
+    if (!empty($chat['metadata']) && !empty($chat['metadata']['enquiry_id'])) {
+        $enqStmt = $db->prepare("SELECT id, status, interested_class, academic_year, student_name, parent_name, assigned_staff_name FROM admission_enquiries WHERE id = ?");
+        $enqStmt->execute([(int)$chat['metadata']['enquiry_id']]);
+        $enqData = $enqStmt->fetch(PDO::FETCH_ASSOC);
+        if ($enqData) {
+            $chat['enquiry'] = $enqData;
+        }
+    }
+
+    // Attach latest admission AI draft if present
+    $aiStmt = $db->prepare("
+        SELECT id, intent, confidence, admin_status, escalation_required, created_at 
+        FROM admission_ai_drafts 
+        WHERE chat_id = ? 
+        ORDER BY id DESC 
+        LIMIT 1
+    ");
+    $aiStmt->execute([$chat['id']]);
+    $aiDraft = $aiStmt->fetch(PDO::FETCH_ASSOC);
+    if ($aiDraft) {
+        $chat['ai_draft'] = $aiDraft;
     }
 }
 

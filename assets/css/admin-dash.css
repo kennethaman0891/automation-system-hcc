@@ -545,58 +545,63 @@ section#dashWaLauncher::before {
   z-index: 3;
 }
 
-/* ── Clean & Professional WhatsApp Hub Header ── */
+/* ── Clean & Professional WhatsApp Hub Header (Bootstrap Clean) ── */
 .dash-wa-promo-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  flex-wrap: wrap;
+  gap: 16px 24px;
   padding: 16px 24px;
   background: #ffffff;
   border-bottom: 1px solid #edf2f7;
+  position: relative;
 }
 
 .dash-wa-promo-branding {
   display: flex;
   align-items: center;
   gap: 14px;
-  min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 360px;
+  min-width: 280px;
 }
 
 .dash-wa-promo-orb {
   width: 44px;
   height: 44px;
   flex: 0 0 44px;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 12px;
   font-size: 1.45rem;
   color: #ffffff;
   background: linear-gradient(135deg, #25d366 0%, #00a884 100%);
   box-shadow: 0 4px 12px rgba(0, 168, 132, 0.22);
+  align-self: center;
 }
 
 .dash-wa-promo-meta {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  gap: 2px;
 }
 
 .dash-wa-title-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 2px;
   flex-wrap: wrap;
 }
 
 .dash-wa-promo-title {
   margin: 0;
-  font-size: 1.12rem;
+  font-size: 1.15rem;
   font-weight: 800;
   letter-spacing: -0.015em;
   color: #0f172a;
+  line-height: 1.3;
 }
 
 .dash-wa-live-badge {
@@ -604,13 +609,14 @@ section#dashWaLauncher::before {
   align-items: center;
   gap: 5px;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: 9999px;
   background: #f0fdf4;
   border: 1px solid #bbf7d0;
   color: #166534;
   font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.02em;
+  line-height: 1;
 }
 
 .dash-wa-dot {
@@ -624,32 +630,39 @@ section#dashWaLauncher::before {
 .dash-wa-promo-subtitle {
   margin: 0;
   font-size: 0.82rem;
-  line-height: 1.4;
+  line-height: 1.45;
   color: #64748b;
 }
 
 .dash-wa-promo-header-actions {
   display: flex;
   align-items: center;
-  gap: 14px;
+  flex-wrap: wrap;
+  gap: 12px;
   margin-left: auto;
-  flex-shrink: 0;
+  flex: 0 1 auto;
 }
 
 .dash-wa-stats-bar {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
-  padding: 4px 14px;
-  gap: 12px;
+  padding: 4px 12px;
+  gap: 10px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
 }
 
 .dash-wa-stat-item {
-  display: flex;
+  display: inline-flex;
   align-items: baseline;
   gap: 6px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  text-decoration: none;
+  color: inherit;
+  transition: all 0.15s ease;
 }
 
 .dash-wa-stat-item .stat-label {
@@ -661,10 +674,11 @@ section#dashWaLauncher::before {
 }
 
 .dash-wa-stat-item .stat-num {
-  font-size: 0.96rem;
+  font-size: 0.95rem;
   font-weight: 800;
   color: #0f172a;
   font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .dash-wa-stat-item.is-sent .stat-num {
@@ -675,10 +689,79 @@ section#dashWaLauncher::before {
   color: #d97706;
 }
 
+.dash-wa-stat-item.is-enquiry .stat-label {
+  color: #0284c7;
+}
+
+.dash-wa-stat-item.is-enquiry .stat-num {
+  color: #0284c7;
+}
+
+.dash-wa-stat-item.is-enquiry:hover {
+  background: #e0f2fe;
+}
+
 .dash-wa-stat-sep {
   width: 1px;
   height: 16px;
-  background: #cbd5e1;
+  background: #e2e8f0;
+  flex-shrink: 0;
+}
+
+.dash-wa-btn-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-wa-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 15px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+  cursor: pointer;
+  border: 1px solid transparent;
+  line-height: 1.25;
+}
+
+.btn-wa-header i {
+  font-size: 0.78rem;
+}
+
+.btn-wa-admissions {
+  background: #0284c7;
+  border-color: #0284c7;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(2, 132, 199, 0.25);
+}
+
+.btn-wa-admissions:hover {
+  background: #0369a1;
+  border-color: #0369a1;
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(2, 132, 199, 0.35);
+}
+
+.btn-wa-launch {
+  background: #00a884;
+  border-color: #00a884;
+  color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 168, 132, 0.25);
+}
+
+.btn-wa-launch:hover {
+  background: #008f70;
+  border-color: #008f70;
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(0, 168, 132, 0.35);
 }
 
 .btn-wa-launch-hub {
@@ -704,30 +787,65 @@ section#dashWaLauncher::before {
   box-shadow: 0 4px 14px rgba(0, 168, 132, 0.36);
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1200px) {
   .dash-wa-promo-header {
-    flex-direction: column;
-    align-items: flex-start;
     gap: 14px;
-    padding: 14px 18px;
+    padding: 16px 20px;
+  }
+  .dash-wa-promo-branding {
+    flex: 1 1 100%;
+    min-width: 0;
   }
   .dash-wa-promo-header-actions {
     width: 100%;
-    justify-content: space-between;
     margin-left: 0;
+    justify-content: space-between;
   }
 }
-@media (max-width: 600px) {
+
+@media (max-width: 768px) {
+  .dash-wa-promo-header {
+    padding: 14px 16px;
+    gap: 12px;
+  }
   .dash-wa-promo-header-actions {
     flex-direction: column;
     align-items: stretch;
     gap: 10px;
   }
   .dash-wa-stats-bar {
-    justify-content: space-around;
+    width: 100%;
+    justify-content: space-between;
+    padding: 6px 10px;
+    gap: 6px;
+    overflow-x: auto;
   }
-  .btn-wa-launch-hub {
+  .dash-wa-btn-group {
+    width: 100%;
+    display: flex;
+  }
+  .dash-wa-btn-group .btn-wa-header {
+    flex: 1;
     justify-content: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .dash-wa-promo-orb {
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+    font-size: 1.25rem;
+    border-radius: 10px;
+  }
+  .dash-wa-promo-title {
+    font-size: 1.02rem;
+  }
+  .dash-wa-stat-item .stat-label {
+    font-size: 0.65rem;
+  }
+  .dash-wa-stat-item .stat-num {
+    font-size: 0.88rem;
   }
 }
 

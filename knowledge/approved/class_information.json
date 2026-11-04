@@ -1,0 +1,37 @@
+{
+  "academic_year": "2026-2027",
+  "board": "Maharashtra State Board of Secondary and Higher Secondary Education (SSC Board)",
+  "medium": "English Medium",
+  "second_languages": ["Marathi (Compulsory as per State GR)", "Hindi"],
+  "classes_offered": [
+    {
+      "stage": "Pre-Primary",
+      "grades": ["Nursery", "LKG", "UKG"],
+      "focus": "Play-way and activity-based early childhood education, phonics, motor skills development, numeracy, social interaction."
+    },
+    {
+      "stage": "Primary",
+      "grades": ["Grade 1", "Grade 2", "Grade 3", "Grade 4", "Grade 5"],
+      "focus": "Foundational literacy and numeracy, Environmental Studies, Mathematics, Languages, Arts, Physical Education, Moral Science."
+    },
+    {
+      "stage": "Middle School",
+      "grades": ["Grade 6", "Grade 7", "Grade 8"],
+      "focus": "Integrated General Science, Mathematics, Social Sciences (History, Civics, Geography), English, Marathi, Hindi, Coding & Computer Science."
+    },
+    {
+      "stage": "High School",
+      "grades": ["Grade 9", "Grade 10"],
+      "focus": "Rigorous SSC Board preparation, Physics, Chemistry, Biology, Advanced Mathematics, Social Sciences, Languages, ICT, career guidance."
+    }
+  ],
+  "class_size_and_ratio": {
+    "student_teacher_ratio": "30:1",
+    "section_capacity": "40 students per section",
+    "sections_per_grade": 2
+  },
+  "current_seats_status": {
+    "status_summary": "Seats are strictly filled on a first-come, first-served basis subject to document verification and interaction.",
+    "policy_on_seat_inquiries": "Staff must verify real-time vacant seat registers in the admission office before confirming specific vacancy numbers to parents."
+  }
+}

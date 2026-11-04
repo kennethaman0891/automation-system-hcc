@@ -1,0 +1,90 @@
+{
+  "academic_year": "2026-2027",
+  "document_title": "HCC High School Admission Document Checklist",
+  "checklist_by_grade_level": {
+    "pre_primary_and_grade_1": [
+      {
+        "document": "Original Birth Certificate",
+        "issuing_authority": "Municipal Corporation / Gram Panchayat",
+        "copies_required": "Original for verification + 2 self-attested photocopies",
+        "mandatory": true
+      },
+      {
+        "document": "Student Aadhaar Card",
+        "issuing_authority": "UIDAI",
+        "copies_required": "1 photocopy",
+        "mandatory": true
+      },
+      {
+        "document": "Parents' Aadhaar Cards",
+        "issuing_authority": "UIDAI",
+        "copies_required": "1 photocopy each of Father and Mother",
+        "mandatory": true
+      },
+      {
+        "document": "Recent Passport Size Photographs",
+        "copies_required": "4 photographs of the student, 1 photograph of each parent",
+        "mandatory": true
+      },
+      {
+        "document": "Residential Address Proof",
+        "valid_documents": ["Electricity Bill", "Ration Card", "Registered Rent Agreement", "Voter ID", "Aadhaar Card"],
+        "copies_required": "1 photocopy",
+        "mandatory": true
+      },
+      {
+        "document": "Caste Certificate",
+        "valid_for": "SC / ST / OBC / VJNT categories if applicable",
+        "copies_required": "1 photocopy",
+        "mandatory": false
+      },
+      {
+        "document": "Blood Group Report",
+        "issuing_authority": "Certified Pathology Lab or Registered Medical Practitioner",
+        "copies_required": "1 copy",
+        "mandatory": true
+      }
+    ],
+    "grade_2_to_grade_10": [
+      {
+        "document": "Original School Leaving Certificate / Transfer Certificate (LC/TC)",
+        "condition": "Must be countersigned by Education Inspector if coming from outside Solapur district / outside Maharashtra State Board",
+        "mandatory": true
+      },
+      {
+        "document": "Previous Academic Year Progress Report / Marksheet",
+        "condition": "Showing successful completion / promotion to the applied grade",
+        "copies_required": "Original + 1 self-attested photocopy",
+        "mandatory": true
+      },
+      {
+        "document": "Student Aadhaar Card",
+        "copies_required": "1 photocopy",
+        "mandatory": true
+      },
+      {
+        "document": "Parents' Aadhaar Cards",
+        "copies_required": "1 photocopy each",
+        "mandatory": true
+      },
+      {
+        "document": "Recent Passport Size Photographs",
+        "copies_required": "4 student photographs, 1 each parent photograph",
+        "mandatory": true
+      },
+      {
+        "document": "Residential Address Proof",
+        "copies_required": "1 photocopy",
+        "mandatory": true
+      },
+      {
+        "document": "Caste Certificate (if applicable)",
+        "mandatory": false
+      },
+      {
+        "document": "Blood Group Report",
+        "mandatory": true
+      }
+    ]
+  }
+}

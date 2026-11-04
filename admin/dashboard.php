@@ -20,6 +20,7 @@ $notifData = rcGetRecentNotifications(8);
 $waContacts = 0;
 $waSent = 0;
 $waPending = 0;
+$waEnquiries = 0;
 try {
     $waDb = getDB();
     $waContacts = (int)$waDb->query("SELECT COUNT(DISTINCT linked_student_roll) FROM whatsapp_contacts WHERE linked_student_roll IS NOT NULL AND linked_student_roll <> ''")->fetchColumn();
@@ -34,6 +35,10 @@ try {
 try {
     $waDb = $waDb ?? getDB();
     $waPending = (int)$waDb->query("SELECT COUNT(*) FROM whatsapp_dispatch_log WHERE status IN ('pending','ready')")->fetchColumn();
+} catch (Throwable $e) {}
+try {
+    $waDb = $waDb ?? getDB();
+    $waEnquiries = (int)$waDb->query("SELECT COUNT(*) FROM admission_enquiries WHERE status NOT IN ('CLOSED', 'ENROLLED')")->fetchColumn();
 } catch (Throwable $e) {}
 
 /* Mark-as-read endpoint for the header bell (same contract as results.php). */
@@ -171,7 +176,7 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
                         </div>
 
                         <div class="dash-wa-promo-header-actions">
-                            <div class="dash-wa-stats-bar">
+                            <div class="dash-wa-stats-bar" role="group" aria-label="WhatsApp dispatch statistics">
                                 <div class="dash-wa-stat-item" title="Verified parent phone numbers">
                                     <span class="stat-label">Parents</span>
                                     <span class="stat-num"><?= (int)$waContacts ?></span>
@@ -186,11 +191,22 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
                                     <span class="stat-label">In Queue</span>
                                     <span class="stat-num"><?= (int)$waPending ?></span>
                                 </div>
+                                <span class="dash-wa-stat-sep" aria-hidden="true"></span>
+                                <a href="admission_enquiries.php" class="dash-wa-stat-item is-enquiry" title="Active admission enquiries">
+                                    <span class="stat-label">Enquiries</span>
+                                    <span class="stat-num"><?= (int)$waEnquiries ?></span>
+                                </a>
                             </div>
-                            <a href="whatsapp_share.php" class="btn-wa-launch-hub" title="Open Complete WhatsApp Share Hub">
-                                <span>Open Hub</span>
-                                <i class="fas fa-arrow-up-right-from-square"></i>
-                            </a>
+                            <div class="dash-wa-btn-group">
+                                <a href="admission_enquiries.php" class="btn-wa-header btn-wa-admissions" title="Open Admission Enquiry Management">
+                                    <i class="fa-solid fa-user-plus"></i>
+                                    <span>Admissions</span>
+                                </a>
+                                <a href="whatsapp_share.php" class="btn-wa-header btn-wa-launch" title="Open Complete WhatsApp Share Hub">
+                                    <span>Open Hub</span>
+                                    <i class="fas fa-arrow-up-right-from-square"></i>
+                                </a>
+                            </div>
                         </div>
                     </div>
 

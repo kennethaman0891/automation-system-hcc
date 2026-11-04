@@ -489,6 +489,7 @@ if ($selectedRollsParam !== '') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?= htmlspecialchars(generateCSRFToken(), ENT_QUOTES) ?>">
     <title>WhatsApp Share Hub — <?= sanitize($schoolName) ?></title>
     <link rel="icon" href="../assets/images/hcclogo.jpg">
     <link rel="stylesheet" href="../assets/vendor/font-awesome@6.5.0/css/all.min.css">
@@ -694,11 +695,14 @@ if ($selectedRollsParam !== '') {
                     </form>
 
                     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                        <!-- View Mode Switcher: Hub vs Web Replica -->
+                        <!-- View Mode Switcher: Hub vs Follow-ups vs Web Replica -->
                         <div class="wa-view-switcher" style="display:inline-flex;background:#f1f5f9;padding:3px;border-radius:8px;border:1px solid #cbd5e1;">
                             <button type="button" class="btn-view-toggle <?= $viewMode !== 'replica' ? 'active' : '' ?>" id="btnViewHub" data-view="hub" title="Switch to Academic Share & Dispatch Hub" style="padding:6px 13px;border-radius:6px;font-size:0.82rem;font-weight:700;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all 0.15s;<?= $viewMode !== 'replica' ? 'background:#00a884;color:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.12);' : 'background:transparent;color:#475569;' ?>">
                                 <i class="fas fa-paper-plane"></i> <span>Share Hub</span>
                             </button>
+                            <a href="admission_followups.php" class="btn-view-toggle" id="btnViewFollowups" title="Switch to Admission Follow-up Management CRM" style="padding:6px 13px;border-radius:6px;font-size:0.82rem;font-weight:700;text-decoration:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all 0.15s;background:transparent;color:#475569;">
+                                <i class="fa-solid fa-headset" style="color:#10b981;"></i> <span>Admission Follow-ups</span>
+                            </a>
                             <button type="button" class="btn-view-toggle <?= $viewMode === 'replica' ? 'active' : '' ?>" id="btnViewReplica" data-view="replica" title="Switch to WhatsApp Web Replica Client" style="padding:6px 13px;border-radius:6px;font-size:0.82rem;font-weight:700;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all 0.15s;<?= $viewMode === 'replica' ? 'background:#00a884;color:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.12);' : 'background:transparent;color:#475569;' ?>">
                                 <i class="fa-brands fa-whatsapp"></i> <span>Web Replica</span>
                             </button>
@@ -952,6 +956,164 @@ if ($selectedRollsParam !== '') {
                 <div class="wa-app-replica-container" id="waAppContainer" style="<?= $viewMode === 'replica' ? '' : 'display:none;' ?>;margin-bottom:16px;">
                     <wa-app id="waAppReplica"></wa-app>
                 </div>
+
+                <!-- ══════════════ WHATSAPP LINK (QR) OVERLAY ══════════════ -->
+                <button type="button" id="waLinkFab" style="display:none;position:fixed;right:24px;bottom:24px;z-index:12001;background:#00a884;color:#fff;border:none;border-radius:999px;padding:12px 18px;font-weight:700;font-size:0.85rem;cursor:pointer;box-shadow:0 8px 24px rgba(0,168,132,0.35);">
+                    <i class="fa-brands fa-whatsapp"></i> Link WhatsApp
+                </button>
+
+                <div id="waLinkOverlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.72);z-index:12002;align-items:center;justify-content:center;padding:16px;">
+                    <div style="background:#fff;border-radius:16px;padding:24px;max-width:400px;width:100%;text-align:center;box-shadow:0 24px 60px rgba(0,0,0,0.35);position:relative;">
+                        <button type="button" id="waLinkClose" aria-label="Close" style="position:absolute;top:10px;right:12px;background:none;border:none;font-size:1.5rem;line-height:1;color:#94a3b8;cursor:pointer;">&times;</button>
+                        <h3 style="margin:0 0 6px;font-size:1.1rem;color:#0f172a;">Link your WhatsApp</h3>
+                        <p style="margin:0 0 14px;font-size:0.82rem;color:#64748b;">
+                            Phone &rarr; WhatsApp &rarr; <strong>Linked Devices</strong> &rarr; <strong>Link a Device</strong>
+                        </p>
+                        <div style="width:260px;height:260px;margin:0 auto;display:flex;align-items:center;justify-content:center;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
+                            <img id="waLinkQr" alt="WhatsApp QR code" style="width:248px;height:248px;display:none;">
+                            <span id="waLinkSpin" style="color:#94a3b8;font-size:0.8rem;">Waiting for bridge QR&hellip;</span>
+                        </div>
+                        <p id="waLinkStatus" style="margin:12px 0 0;font-size:0.78rem;color:#94a3b8;">Waiting for scan&hellip;</p>
+
+                        <div style="margin-top:14px;border-top:1px solid #e2e8f0;padding-top:12px;">
+                            <button type="button" id="waPairToggle" style="background:none;border:none;color:#0ea5e9;font-size:0.8rem;cursor:pointer;text-decoration:underline;">
+                                No camera? Use phone number instead
+                            </button>
+                            <div id="waPairBox" style="display:none;margin-top:10px;text-align:left;">
+                                <input id="waPairPhone" type="tel" inputmode="numeric" placeholder="WhatsApp number, e.g. XXXXXXXXXX or XXXXXXXXXXXX" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:0.85rem;">
+                                <p style="margin:6px 0 0;font-size:0.72rem;color:#94a3b8;">Use the number registered on WhatsApp. Country code (+91) is detected automatically.</p>
+                                <button type="button" id="waPairBtn" style="margin-top:8px;width:100%;background:#0b141a;color:#fff;border:none;border-radius:8px;padding:10px;font-weight:700;cursor:pointer;font-size:0.85rem;">
+                                    Get 8-digit pairing code
+                                </button>
+                                <div id="waPairCode" style="display:none;margin-top:10px;font-size:1.7rem;font-weight:800;letter-spacing:5px;color:#00a884;background:#f0fdf4;border:1px solid #86efac;border-radius:10px;padding:10px;text-align:center;"></div>
+                                <div id="waPairMsg" style="margin-top:6px;font-size:0.75rem;color:#64748b;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <script>
+                (function () {
+                    var overlay  = document.getElementById('waLinkOverlay');
+                    var fab      = document.getElementById('waLinkFab');
+                    var img      = document.getElementById('waLinkQr');
+                    var spin     = document.getElementById('waLinkSpin');
+                    var statusEl = document.getElementById('waLinkStatus');
+                    var closeBtn = document.getElementById('waLinkClose');
+                    var dismissed = false;
+
+                    function showQR() { dismissed = false; overlay.style.display = 'flex'; fab.style.display = 'none'; }
+                    function hideQR() { dismissed = true; overlay.style.display = 'none'; fab.style.display = 'inline-flex'; }
+
+                    closeBtn.addEventListener('click', hideQR);
+                    fab.addEventListener('click', showQR);
+
+                    overlay.addEventListener('click', function (e) {
+                        if (e.target === overlay) hideQR();
+                    });
+
+                    var lastQr = '';
+
+                    async function tick() {
+                        try {
+                            var s = await fetch('api_whatsapp_session.php?action=status', { cache: 'no-store' }).then(function (r) { return r.json(); });
+                            var sess = s && s.session ? s.session : null;
+                            if (sess && sess.is_connected) {
+                                overlay.style.display = 'none';
+                                fab.style.display = 'none';
+                                return;
+                            }
+                            if (!dismissed) overlay.style.display = 'flex';
+
+                            var q = await fetch('api_whatsapp_session.php?action=qr', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return null; });
+                            if (q && q.success && q.qr_code) {
+                                if (q.qr_code !== lastQr) {
+                                    lastQr = q.qr_code;
+                                    img.src = q.qr_code;
+                                    img.style.display = 'block';
+                                    spin.style.display = 'none';
+                                }
+                                statusEl.textContent = 'QR ready — scan it now (expires soon)';
+                            } else {
+                                img.style.display = 'none';
+                                spin.style.display = 'inline';
+                                statusEl.textContent = 'Waiting for bridge to generate a QR…';
+                            }
+                        } catch (e) { /* silent */ }
+                    }
+
+                    tick();
+                    setInterval(tick, 5000);
+
+                    // ── Phone-number pairing code (no QR / no camera) ──
+                    var pairToggle = document.getElementById('waPairToggle');
+                    var pairBox    = document.getElementById('waPairBox');
+                    var pairPhone  = document.getElementById('waPairPhone');
+                    var pairBtn    = document.getElementById('waPairBtn');
+                    var pairCode   = document.getElementById('waPairCode');
+                    var pairMsg    = document.getElementById('waPairMsg');
+
+                    pairToggle.addEventListener('click', function () {
+                        var open = pairBox.style.display === 'block';
+                        pairBox.style.display = open ? 'none' : 'block';
+                    });
+
+                    pairBtn.addEventListener('click', async function () {
+                        var phone = (pairPhone.value || '').replace(/\D/g, '');
+                        if (phone.length < 8) {
+                            pairMsg.textContent = 'Enter your WhatsApp number (10 digits for +91, or with country code).';
+                            return;
+                        }
+                        pairMsg.textContent = 'Requesting code…';
+                        pairCode.style.display = 'none';
+                        pairBtn.disabled = true;
+
+                        try {
+                            var r = await fetch('api_whatsapp_pair.php?action=request', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ phone: phone })
+                            }).then(function (x) { return x.json(); });
+
+                            if (!r.success) {
+                                pairMsg.textContent = r.error || 'Could not request a code. Is the bridge running?';
+                                pairBtn.disabled = false;
+                                return;
+                            }
+
+                            pairMsg.textContent = 'Generating code in the bridge… (up to 30s)';
+
+                            var tries = 0;
+                            var timer = setInterval(async function () {
+                                tries++;
+                                try {
+                                    var c = await fetch('api_whatsapp_pair.php?action=get', { cache: 'no-store' }).then(function (x) { return x.json(); });
+                                    if (c.success && c.code) {
+                                        clearInterval(timer);
+                                        pairCode.textContent = c.code;
+                                        pairCode.style.display = 'block';
+                                        pairMsg.innerHTML = 'On your phone: <strong>WhatsApp → Linked Devices → Link with phone number</strong>, then type this code.';
+                                        pairBtn.disabled = false;
+                                    } else if (!c.pending) {
+                                        clearInterval(timer);
+                                        pairMsg.textContent = c.error || 'Bridge could not generate a code.';
+                                        pairBtn.disabled = false;
+                                    } else if (tries > 20) {
+                                        clearInterval(timer);
+                                        pairMsg.textContent = 'Timed out. Check that the bridge is running, then try again.';
+                                        pairBtn.disabled = false;
+                                    }
+                                } catch (e) {
+                                    if (tries > 20) { clearInterval(timer); pairBtn.disabled = false; }
+                                }
+                            }, 2000);
+                        } catch (e) {
+                            pairMsg.textContent = 'Network error while requesting the code.';
+                            pairBtn.disabled = false;
+                        }
+                    });
+                })();
+                </script>
 
             </div>
         </main>

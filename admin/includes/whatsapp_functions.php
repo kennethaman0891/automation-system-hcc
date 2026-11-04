@@ -70,6 +70,10 @@ if (!function_exists('waPhoneToWAID')) {
 
 if (!function_exists('waPhoneToE164')) {
     function waPhoneToE164(string $phone): string {
+        $checked = waValidateWhatsAppPhone($phone);
+        if ($checked['ok']) {
+            return $checked['e164'];
+        }
         $clean = preg_replace('/\D/', '', $phone);
         if (str_starts_with($clean, '0')) $clean = substr($clean, 1);
         if (str_starts_with($clean, '91') && strlen($clean) === 12) {
@@ -78,6 +82,48 @@ if (!function_exists('waPhoneToE164')) {
             return '+91' . $clean;
         }
         return '+' . $clean;
+    }
+}
+
+if (!function_exists('waValidateWhatsAppPhone')) {
+    /**
+     * Validate a WhatsApp number and return digits for wa.me (no plus sign).
+     * Accepts international numbers (8–15 digits) and 10-digit Indian mobiles.
+     *
+     * @return array{ok:bool,error:string,digits:string,e164:string}
+     */
+    function waValidateWhatsAppPhone(string $phone): array {
+        $fail = [
+            'ok' => false,
+            'error' => 'Enter a valid WhatsApp number in international format, for example +91 98016 60000.',
+            'digits' => '',
+            'e164' => '',
+        ];
+        $digits = preg_replace('/\D+/', '', $phone) ?? '';
+        if (str_starts_with($digits, '00')) {
+            $digits = substr($digits, 2);
+        }
+        if ($digits !== '' && $digits[0] === '0') {
+            $digits = ltrim($digits, '0');
+        }
+        if (strlen($digits) === 10) {
+            $digits = '91' . $digits;
+        }
+        if ($digits === '' || strlen($digits) < 8 || strlen($digits) > 15 || $digits[0] === '0') {
+            return $fail;
+        }
+        if (preg_match('/^(\d)\1+$/', $digits)) {
+            return $fail;
+        }
+        if (str_starts_with($digits, '91') && strlen($digits) === 12 && !preg_match('/^91[6-9]\d{9}$/', $digits)) {
+            return $fail;
+        }
+        return [
+            'ok' => true,
+            'error' => '',
+            'digits' => $digits,
+            'e164' => '+' . $digits,
+        ];
     }
 }
 

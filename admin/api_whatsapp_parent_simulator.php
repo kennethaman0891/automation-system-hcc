@@ -52,7 +52,12 @@ $parentReplies = [
     "Thank you teacher. We are proud of {$studentName} and thankful to the entire HCC staff for their support! ✨"
 ];
 
-$chosenBody = $parentReplies[array_rand($parentReplies)];
+$customMessage = trim($input['custom_message'] ?? $input['message'] ?? '');
+if ($customMessage !== '') {
+    $chosenBody = $customMessage;
+} else {
+    $chosenBody = $parentReplies[array_rand($parentReplies)];
+}
 $waMsgId = 'sim_' . time() . '_' . bin2hex(random_bytes(4));
 $timestamp = time();
 
@@ -74,16 +79,20 @@ $msgData = [
 
 $msgId = waInsertMessage($db, $msgData);
 
+// Detect if enquiry
+$isEnquiry = !empty($input['is_admission']) || preg_match('/\b(admission|fee|fees|grade|class|nursery|lkg|ukg|timings|transport)\b/i', $chosenBody);
+
 // Increment unread count & update activity timestamp
 $upStmt = $db->prepare("
     UPDATE whatsapp_chats 
     SET unread_count = unread_count + 1,
         last_message_id = ?,
+        is_admission_enquiry = CASE WHEN ? = 1 THEN 1 ELSE is_admission_enquiry END,
         last_activity_at = NOW(),
         updated_at = NOW()
     WHERE id = ?
 ");
-$upStmt->execute([$msgId, $chatId]);
+$upStmt->execute([$msgId, $isEnquiry ? 1 : 0, $chatId]);
 
 waJsonResponse([
     'success' => true,

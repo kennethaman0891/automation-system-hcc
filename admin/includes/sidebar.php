@@ -100,12 +100,22 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High Schoo
             <span class="sidebar-badge archive">Vault</span>
         </a>
 
-        <!-- 5. COMMUNICATION & DISPATCH -->
-        <p class="sidebar-label">Communication</p>
+        <!-- 5. COMMUNICATION & ADMISSIONS -->
+        <p class="sidebar-label">Communication & Admissions</p>
         <a href="whatsapp_share.php" <?= $adminPage === 'whatsapp_share' ? 'class="active" aria-current="page"' : '' ?>>
             <i class="fa-brands fa-whatsapp" style="color:#25D366;"></i>
             <span>WhatsApp Hub</span>
             <span class="sidebar-badge wa">Live</span>
+        </a>
+        <a href="admission_followups.php" <?= $adminPage === 'admission_followups' ? 'class="active" aria-current="page"' : '' ?>>
+            <i class="fa-solid fa-headset" style="color:#10b981;"></i>
+            <span>Admission Follow-ups</span>
+            <span class="sidebar-badge" style="background:#10b981;color:#fff;">CRM</span>
+        </a>
+        <a href="admission_enquiries.php" <?= $adminPage === 'admission_enquiries' ? 'class="active" aria-current="page"' : '' ?>>
+            <i class="fa-solid fa-user-plus" style="color:#0ea5e9;"></i>
+            <span>Admission Enquiries</span>
+            <span class="sidebar-badge" style="background:#e0f2fe;color:#0284c7;font-weight:700;">Pipeline</span>
         </a>
 
         <!-- 6. CLOUD WORKSPACE & SHARING -->

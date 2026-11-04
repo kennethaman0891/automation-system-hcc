@@ -1,0 +1,54 @@
+{
+  "academic_year": "2026-2027",
+  "facility_overview": "HCC High School operates a fleet of dedicated school buses and vans managed with stringent child safety protocols covering all major residential corridors in Solapur.",
+  "safety_features": [
+    "GPS tracking on all vehicles with real-time location alerts",
+    "Female bus attendants on all routes for pre-primary and primary children",
+    "Experienced drivers with mandatory police verification and annual health screening",
+    "Speed governors installed (max speed 40 km/h in city limits)",
+    "First-aid emergency kits and operational fire extinguishers in every vehicle",
+    "CCTV surveillance cameras inside all buses"
+  ],
+  "routes_and_coverage": [
+    {
+      "route_number": "Route 1",
+      "name": "Jule Solapur - Saiful Corridor",
+      "stops": ["Jule Solapur", "D-Mart", "Saiful", "Majrewadi", "Vasant Vihar", "School"]
+    },
+    {
+      "route_number": "Route 2",
+      "name": "Railway Lines & Camp",
+      "stops": ["Saat Rasta", "Railway Lines", "Modi", "Ashok Chowk", "Collector Office", "School"]
+    },
+    {
+      "route_number": "Route 3",
+      "name": "Central Solapur",
+      "stops": ["Navi Peth", "Budhwar Peth", "Samarth Nagar", "Siddheshwar Temple area", "School"]
+    },
+    {
+      "route_number": "Route 4",
+      "name": "Hotgi Road & Bhavani Peth",
+      "stops": ["Hotgi Road", "Old Pune Naka", "Bhavani Peth", "Kumbhar Ves", "School"]
+    },
+    {
+      "route_number": "Route 5",
+      "name": "Vijapur Road & Kegaon",
+      "stops": ["Vijapur Road", "Nehru Nagar", "Kegaon", "Civil Lines", "School"]
+    }
+  ],
+  "transport_fee_structure": {
+    "zone_a_upto_3km": {
+      "annual_fee": 8000,
+      "term_installment": 4000
+    },
+    "zone_b_3km_to_6km": {
+      "annual_fee": 11000,
+      "term_installment": 5500
+    },
+    "zone_c_above_6km": {
+      "annual_fee": 14000,
+      "term_installment": 7000
+    }
+  },
+  "registration_notes": "Transport seats are allocated on a first-come, first-served basis at the time of admission form finalization."
+}

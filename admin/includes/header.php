@@ -57,6 +57,7 @@ $adminNav = [
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="<?= htmlspecialchars(generateCSRFToken(), ENT_QUOTES) ?>">
     <meta name="description" content="Hindustani Covenant Church High School — Admin Panel">
     <meta name="robots" content="noindex, nofollow">
     <title><?= htmlspecialchars($adminPageTitle, ENT_QUOTES, 'UTF-8') ?> | Hindustani Covenant Church High School Admin</title>

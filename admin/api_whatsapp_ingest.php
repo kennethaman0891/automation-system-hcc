@@ -92,6 +92,18 @@ try {
                 'metadata' => $msg['metadata'] ?? null
             ]);
             $inserted++;
+
+            // If inbound message appears to be an admission enquiry, flag chat
+            if (empty($msg['from_me']) && !empty($msg['body'])) {
+                $bodyLower = strtolower($msg['body']);
+                $admissionKeywords = ['admission', 'admissions', 'fee', 'fees', 'nursery', 'lkg', 'ukg', 'standard', 'grade', 'eligibility', 'timings', 'transport', 'campus visit'];
+                foreach ($admissionKeywords as $kw) {
+                    if (str_contains($bodyLower, $kw)) {
+                        $db->prepare("UPDATE whatsapp_chats SET is_admission_enquiry = 1 WHERE id = ?")->execute([$chatId]);
+                        break;
+                    }
+                }
+            }
             
         } catch (Exception $e) {
             $errors[] = "Message $index: " . $e->getMessage();

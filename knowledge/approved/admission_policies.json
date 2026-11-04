@@ -1,0 +1,16 @@
+{
+  "academic_year": "2026-2027",
+  "policy_title": "HCC High School Admission & Enrollment Regulations",
+  "key_policies": {
+    "merit_and_interaction": "For Pre-Primary and Primary (Grades 1-5), admission is granted after friendly informal interaction with parents and child. For Grades 6 to 10, a diagnostic competency assessment in English and Mathematics is conducted to ascertain foundational readiness.",
+    "sibling_priority": "Real brothers and sisters of currently enrolled HCC High School students are given priority consideration during seat allocation.",
+    "rte_reservation": "25% of seats at the entry level (Nursery / Grade 1) are strictly reserved under the Right to Education (RTE) Act as governed by the Maharashtra State Education Department online portal.",
+    "non_discrimination": "HCC High School adheres to an equal opportunity policy. Admissions are granted without discrimination based on caste, religion, community, or economic background.",
+    "fee_refund_policy": [
+      "The admission fee of ₹5,000 is one-time and non-refundable under any circumstances after admission confirmation.",
+      "If a written cancellation request is submitted before the start of the academic session (prior to June 1, 2026), tuition fee paid will be refunded after deducting a ₹1,000 administrative processing charge.",
+      "No tuition fee refunds will be processed after the commencement of the academic term."
+    ],
+    "verification_mandate": "Admission offers are provisional until all mandatory original documents (Birth Certificate, LC/TC, Marksheet, and Aadhaar) are submitted and verified by the school registrar."
+  }
+}

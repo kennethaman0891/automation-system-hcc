@@ -70,14 +70,17 @@ function getDB() {
         ];
         $candidates = [];
         if (defined('DB_SOCKET') && DB_SOCKET) {
+            $candidates[] = "mysql:dbname=" . DB_NAME . ";charset=" . DB_CHARSET . ";unix_socket=" . DB_SOCKET;
             $candidates[] = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET . ";unix_socket=" . DB_SOCKET;
         }
         foreach (['/Applications/XAMPP/xamppfiles/var/mysql/mysql.sock', '/tmp/mysql.sock'] as $sock) {
             if (!defined('DB_SOCKET') || $sock !== DB_SOCKET) {
+                $candidates[] = "mysql:dbname=" . DB_NAME . ";charset=" . DB_CHARSET . ";unix_socket=" . $sock;
                 $candidates[] = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET . ";unix_socket=" . $sock;
             }
         }
         $candidates[] = "mysql:host=127.0.0.1;port=3306;dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
+        $candidates[] = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
 
         $lastError = '';
         foreach ($candidates as $dsn) {

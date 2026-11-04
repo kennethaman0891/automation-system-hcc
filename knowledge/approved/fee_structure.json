@@ -1,0 +1,133 @@
+{
+  "academic_year": "2026-2027",
+  "currency": "INR",
+  "last_updated": "2026-01-10",
+  "approved_by": "School Management Committee & Principal",
+  "general_notes": [
+    "Admission Fee of ₹5,000 is a one-time non-refundable fee payable only at the time of new admission.",
+    "Fees can be paid in full at the time of admission or in two equal term installments.",
+    "Term 1 installment is due at admission / by June 15, 2026.",
+    "Term 2 installment is due by November 15, 2026.",
+    "Payment modes accepted: Online Net Banking, UPI, Demand Draft in favor of 'Hindustani Covenant Church High School', or POS Card Swipe at School Accounts Office.",
+    "Transport fee is separate and optional based on bus route distance."
+  ],
+  "grades": {
+    "Nursery": {
+      "admission_fee_one_time": 5000,
+      "annual_tuition_fee": 24000,
+      "term_1_tuition": 12000,
+      "term_2_tuition": 12000,
+      "annual_activity_fee": 3000,
+      "total_annual_fee_new_admission": 32000,
+      "total_annual_fee_existing_student": 27000
+    },
+    "LKG": {
+      "admission_fee_one_time": 5000,
+      "annual_tuition_fee": 24000,
+      "term_1_tuition": 12000,
+      "term_2_tuition": 12000,
+      "annual_activity_fee": 3000,
+      "total_annual_fee_new_admission": 32000,
+      "total_annual_fee_existing_student": 27000
+    },
+    "UKG": {
+      "admission_fee_one_time": 5000,
+      "annual_tuition_fee": 24000,
+      "term_1_tuition": 12000,
+      "term_2_tuition": 12000,
+      "annual_activity_fee": 3000,
+      "total_annual_fee_new_admission": 32000,
+      "total_annual_fee_existing_student": 27000
+    },
+    "Grade 1": {
+      "admission_fee_one_time": 5000,
+      "annual_tuition_fee": 28000,
+      "term_1_tuition": 14000,
+      "term_2_tuition": 14000,
+      "computer_lab_fee": 4000,
+      "total_annual_fee_new_admission": 37000,
+      "total_annual_fee_existing_student": 32000
+    },
+    "Grade 2": {
+      "admission_fee_one_time": 5000,
+      "annual_tuition_fee": 28000,
+      "term_1_tuition": 14000,
+      "term_2_tuition": 14000,
+      "computer_lab_fee": 4000,
+      "total_annual_fee_new_admission": 37000,
+      "total_annual_fee_existing_student": 32000
+    },
+    "Grade 3": {
+      "admission_fee_one_time": 5000,
+      "annual_tuition_fee": 28000,
+      "term_1_tuition": 14000,
+      "term_2_tuition": 14000,
+      "computer_lab_fee": 4000,
+      "total_annual_fee_new_admission": 37000,
+      "total_annual_fee_existing_student": 32000
+    },
+    "Grade 4": {
+      "admission_fee_one_time": 5000,
+      "annual_tuition_fee": 28000,
+      "term_1_tuition": 14000,
+      "term_2_tuition": 14000,
+      "computer_lab_fee": 4000,
+      "total_annual_fee_new_admission": 37000,
+      "total_annual_fee_existing_student": 32000
+    },
+    "Grade 5": {
+      "admission_fee_one_time": 5000,
+      "annual_tuition_fee": 28000,
+      "term_1_tuition": 14000,
+      "term_2_tuition": 14000,
+      "computer_lab_fee": 4000,
+      "total_annual_fee_new_admission": 37000,
+      "total_annual_fee_existing_student": 32000
+    },
+    "Grade 6": {
+      "admission_fee_one_time": 5000,
+      "annual_tuition_fee": 32000,
+      "term_1_tuition": 16000,
+      "term_2_tuition": 16000,
+      "science_computer_lab_fee": 5000,
+      "total_annual_fee_new_admission": 42000,
+      "total_annual_fee_existing_student": 37000
+    },
+    "Grade 7": {
+      "admission_fee_one_time": 5000,
+      "annual_tuition_fee": 32000,
+      "term_1_tuition": 16000,
+      "term_2_tuition": 16000,
+      "science_computer_lab_fee": 5000,
+      "total_annual_fee_new_admission": 42000,
+      "total_annual_fee_existing_student": 37000
+    },
+    "Grade 8": {
+      "admission_fee_one_time": 5000,
+      "annual_tuition_fee": 32000,
+      "term_1_tuition": 16000,
+      "term_2_tuition": 16000,
+      "science_computer_lab_fee": 5000,
+      "total_annual_fee_new_admission": 42000,
+      "total_annual_fee_existing_student": 37000
+    },
+    "Grade 9": {
+      "admission_fee_one_time": 5000,
+      "annual_tuition_fee": 36000,
+      "term_1_tuition": 18000,
+      "term_2_tuition": 18000,
+      "science_computer_exam_fee": 6000,
+      "total_annual_fee_new_admission": 47000,
+      "total_annual_fee_existing_student": 42000
+    },
+    "Grade 10": {
+      "admission_fee_one_time": 5000,
+      "annual_tuition_fee": 36000,
+      "term_1_tuition": 18000,
+      "term_2_tuition": 18000,
+      "science_computer_exam_fee": 6000,
+      "total_annual_fee_new_admission": 47000,
+      "total_annual_fee_existing_student": 42000
+    }
+  }
+}

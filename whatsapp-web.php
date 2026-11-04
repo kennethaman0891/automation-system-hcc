@@ -1,9 +1,15 @@
+<?php
+require_once __DIR__ . '/includes/functions.php';
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+?>
 <!DOCTYPE html>
 <html lang="en" class="wa-standalone-page">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="csrf-token" content="<?php echo htmlspecialchars($_SESSION['csrf_token'] ?? '', ENT_QUOTES); ?>">
+  <meta name="csrf-token" content="<?php echo htmlspecialchars(generateCSRFToken(), ENT_QUOTES); ?>">
   <title>HCC — WhatsApp Hub</title>
   <meta name="description" content="HCC WhatsApp Web Replica — Real-time messaging, chat history, media support">
 
@@ -32,6 +38,7 @@
   <!-- Components (load after store) -->
   <script src="/assets/js/whatsapp-components.js"></script>
   <script src="/assets/js/whatsapp-components2.js"></script>
+  <script src="/assets/js/whatsapp-ai-assistant.js"></script>
 
   <script>
     (function() {

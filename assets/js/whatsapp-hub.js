@@ -1089,24 +1089,13 @@
         }
 
         // Activity Alerts Dropdown (Header Bell)
+        // The bell toggle is owned by admin.js (loaded on this page) — whatsapp-hub.js must NOT
+        // attach its own click handler here, or the dropdown would be toggled twice per click and
+        // immediately close, making the bell appear dead.
         const notifTrigger = document.getElementById('notifTrigger');
         const notifDropdown = document.getElementById('notifDropdown');
         const notifBadge = document.getElementById('notifBadge');
         if (notifTrigger && notifDropdown) {
-            notifTrigger.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const isOpen = notifDropdown.classList.toggle('show');
-                if (isOpen && notifBadge) {
-                    const fd = new FormData();
-                    fd.append('action', 'mark_notifs_read');
-                    fd.append('csrf_token', csrfToken);
-                    fetch('whatsapp_share.php', { method: 'POST', body: fd })
-                        .then(r => r.json())
-                        .then(res => {
-                            if (res.ok) notifBadge.style.display = 'none';
-                        }).catch(() => {});
-                }
-            });
             document.addEventListener('click', (e) => {
                 if (!e.target.closest('#notifContainer')) {
                     notifDropdown.classList.remove('show');

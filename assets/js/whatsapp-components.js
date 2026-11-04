@@ -285,6 +285,11 @@ class WaChatItem extends WaElement {
     const isTyping = !!(chat.is_typing || chat.typing);
     
     // Extract last message information
+    const isEnquiry = !!(chat.metadata?.is_enquiry || chat.metadata?.enquiry_id || chat.enquiry || chat.is_admission_enquiry || chat.ai_draft);
+    const enquiryStatus = chat.metadata?.status || chat.enquiry?.status || (isEnquiry ? 'NEW' : '');
+    const enquiryChild = chat.metadata?.student_name || chat.enquiry?.student_name || '';
+    const enquiryClass = chat.metadata?.interested_class || chat.enquiry?.interested_class || '';
+
     let lastMsg = chat.last_message;
     if (!lastMsg && (chat.last_msg_body || chat.last_msg_id)) {
       lastMsg = {
@@ -322,6 +327,8 @@ class WaChatItem extends WaElement {
       } else {
         previewText = body || 'Message';
       }
+    } else if (isEnquiry && enquiryClass) {
+      previewText = `🎓 ${enquiryChild ? enquiryChild + ' · ' : ''}${enquiryClass}`;
     } else if (chat.student_data) {
       previewText = `Roll ${chat.student_data.roll_no || ''} · ${chat.student_data.class_name || ''}`;
     }
@@ -388,7 +395,29 @@ class WaChatItem extends WaElement {
           overflow: hidden;
           text-overflow: ellipsis;
           line-height: 21px;
+          display: flex;
+          align-items: center;
+          gap: 6px;
         }
+        .wa-enquiry-pill {
+          font-size: 10px;
+          font-weight: 700;
+          padding: 1px 6px;
+          border-radius: 4px;
+          text-transform: uppercase;
+          letter-spacing: 0.3px;
+          display: inline-block;
+          flex-shrink: 0;
+        }
+        .status-NEW { background: #dbeafe; color: #1e40af; }
+        .status-CONTACTED { background: #fef3c7; color: #92400e; }
+        .status-INFORMATION_SHARED { background: #f3e8ff; color: #6b21a8; }
+        .status-INTERESTED { background: #ccfbf1; color: #115e59; }
+        .status-VISIT_PLANNED { background: #e0e7ff; color: #3730a3; }
+        .status-DOCUMENTS_PENDING { background: #ffedd5; color: #9a3412; }
+        .status-APPLICATION_SUBMITTED { background: #cffafe; color: #155e75; }
+        .status-ENROLLED { background: #dcfce7; color: #166534; }
+        .status-CLOSED { background: #f1f5f9; color: #475569; }
         .wa-chat-item.unread .wa-chat-name {
           font-weight: 600;
         }
@@ -531,7 +560,10 @@ class WaChatItem extends WaElement {
         </div>
         <div class="wa-chat-info">
           <div class="wa-chat-top">
-            <span class="wa-chat-name" title="${this.escapeHtml(chat.name || 'Unknown')}">${this.escapeHtml(chat.name || 'Unknown')}</span>
+            <span class="wa-chat-name" title="${this.escapeHtml(chat.name || 'Unknown')}">
+              <span>${this.escapeHtml(chat.name || 'Unknown')}</span>
+              ${(chat.ai_draft && chat.ai_draft.admin_status === 'pending') ? `<span class="wa-enquiry-pill" style="background:#00a884;color:#fff;" title="AI Admission Draft Ready">🤖 AI DRAFT</span>` : (enquiryStatus ? `<span class="wa-enquiry-pill status-${enquiryStatus}">${enquiryStatus}</span>` : '')}
+            </span>
             <span class="wa-chat-time">${formattedTime}</span>
           </div>
           <div class="wa-chat-bottom">
@@ -1309,6 +1341,8 @@ class WaChatList extends WaElement {
           <wa-icon-button id="btn-status" icon="status" tooltip="Status updates"></wa-icon-button>
           <!-- Channels Icon -->
           <wa-icon-button id="btn-channels" icon="channels" tooltip="School Channels"></wa-icon-button>
+          <!-- New Admission Enquiry Icon -->
+          <wa-icon-button id="btn-new-enquiry" icon="add" tooltip="New Admission Enquiry"></wa-icon-button>
           <!-- New Chat Icon -->
           <wa-icon-button id="btn-new-chat" icon="new_chat" tooltip="New chat"></wa-icon-button>
           <!-- 3-Dots Menu -->
@@ -1318,6 +1352,15 @@ class WaChatList extends WaElement {
       
       <!-- MENU DROPDOWN -->
       <div class="wa-header-dropdown" id="header-menu">
+        <button class="wa-menu-item" data-action="new-enquiry" style="color:#00a884;font-weight:600;">
+          <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+          <span>New Admission Enquiry</span>
+        </button>
+        <button class="wa-menu-item" data-action="admission-dashboard">
+          <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg>
+          <span>Admission Dashboard</span>
+        </button>
+        <div class="wa-menu-divider"></div>
         <button class="wa-menu-item" data-action="new-group">
           <svg viewBox="0 0 24 24"><path fill="currentColor" d="M16.5 12c1.38 0 2.49-1.12 2.49-2.5S17.88 7 16.5 7C15.12 7 14 8.12 14 9.5s1.12 2.5 2.5 2.5zM9 11c1.66 0 2.99-1.34 2.99-3S10.66 5 9 5C7.34 5 6 6.34 6 8s1.34 3 3 3zm7.5 3c-1.83 0-5.5.92-5.5 2.75V19h11v-2.25c0-1.83-3.67-2.75-5.5-2.75zM9 13c-2.33 0-7 1.17-7 3.5V19h7v-2.25c0-.85.34-1.65.9-2.28C9.6 13.08 9.27 13 9 13z"/></svg>
           <span>New group</span>
@@ -1413,6 +1456,7 @@ class WaChatList extends WaElement {
       <div class="wa-filter-tabs" role="tablist">
         <button class="wa-tab-pill active" data-filter="all" role="tab">All</button>
         <button class="wa-tab-pill" data-filter="unread" role="tab">Unread</button>
+        <button class="wa-tab-pill" data-filter="enquiries" role="tab" style="display:inline-flex;align-items:center;gap:4px;"><span>🎯 Enquiries</span></button>
         <button class="wa-tab-pill" data-filter="groups" role="tab">Groups</button>
         <button class="wa-tab-pill" data-filter="pinned" role="tab">Pinned</button>
       </div>
@@ -1553,6 +1597,11 @@ class WaChatList extends WaElement {
     this.$('#btn-channels')?.addEventListener('click', () => {
       this.showToast('Official Channels', 'HCC Official Broadcast & Events Channel is connected.');
     });
+    this.$('#btn-new-enquiry')?.addEventListener('click', () => {
+      this.dispatch('open-new-enquiry');
+      const nem = document.querySelector('wa-new-enquiry-modal') || this.getRootNode()?.querySelector('wa-new-enquiry-modal');
+      if (nem && typeof nem.open === 'function') nem.open();
+    });
     this.$('#btn-new-chat')?.addEventListener('click', () => {
       this.dispatch('open-contact-picker');
       const cp = document.querySelector('wa-contact-picker') || this.getRootNode()?.querySelector('wa-contact-picker');
@@ -1585,7 +1634,13 @@ class WaChatList extends WaElement {
         const action = item.dataset.action;
         headerMenu?.classList.remove('open');
         
-        if (action === 'new-group') {
+        if (action === 'new-enquiry') {
+          this.dispatch('open-new-enquiry');
+          const nem = document.querySelector('wa-new-enquiry-modal') || this.getRootNode()?.querySelector('wa-new-enquiry-modal');
+          if (nem && typeof nem.open === 'function') nem.open();
+        } else if (action === 'admission-dashboard') {
+          window.location.href = '/hcc/admin/admission_enquiries.php';
+        } else if (action === 'new-group') {
           const gc = document.querySelector('wa-group-create') || this.getRootNode()?.querySelector('wa-group-create');
           if (gc && typeof gc.open === 'function') gc.open();
           else this.dispatch('open-group-create');

@@ -520,6 +520,8 @@ class WhatsAppStore extends EventTarget {
       chats = chats.filter(c => c.chat_type === 'group' || c.chat_type === 'broadcast');
     } else if (this.filter === 'pinned') {
       chats = chats.filter(c => c.is_pinned);
+    } else if (this.filter === 'enquiries') {
+      chats = chats.filter(c => c.metadata?.is_enquiry || c.metadata?.enquiry_id || c.enquiry);
     }
     
     if (this.searchQuery) {
@@ -660,43 +662,40 @@ class WhatsAppStore extends EventTarget {
         caption,
         priority
       });
-      
-      if (sendResult && sendResult.success) {
-        await this.updateMessage(tempMsgId, { 
-          metadata: { ...optimisticMsg.metadata, queue_id: sendResult.queue_id, temp: true }
-        });
-      }
     } catch (error) {
       console.warn('apiPost /api_whatsapp_send.php error:', error);
-      // Keep optimistic message and simulate delivery for test/offline demo
+      await this.updateMessage(tempMsgId, {
+        status: 'failed',
+        metadata: { ...optimisticMsg.metadata, error: String((error && error.message) || error) }
+      });
+      return { success: false, error: String((error && error.message) || error), temp_msg_id: tempMsgId };
     }
 
-    // 4. Simulate life-cycle progression:
-    // Transition status to 'sent' (✓) after 800ms
-    setTimeout(async () => {
-      try {
-        await this.updateMessage(tempMsgId, { status: 'sent' });
-      } catch (e) {}
-    }, 800);
+    if (!sendResult || !sendResult.success) {
+      const errMsg = (sendResult && sendResult.error) || 'Failed to queue message';
+      await this.updateMessage(tempMsgId, {
+        status: 'failed',
+        metadata: { ...optimisticMsg.metadata, error: errMsg }
+      });
+      return { success: false, error: errMsg, temp_msg_id: tempMsgId };
+    }
 
-    // Transition status to 'delivered' (✓✓) after 1600ms
-    setTimeout(async () => {
-      try {
-        await this.updateMessage(tempMsgId, { status: 'delivered' });
-      } catch (e) {}
-    }, 1600);
+    await this.updateMessage(tempMsgId, {
+      metadata: { ...optimisticMsg.metadata, queue_id: sendResult.queue_id, temp: true }
+    });
 
-    // Transition status to 'read' (✓✓ blue) after 2400ms
-    setTimeout(async () => {
-      try {
-        await this.updateMessage(tempMsgId, { status: 'read' });
-      } catch (e) {}
-    }, 2400);
+    // 4. No fake delivery ticks. Refresh from the server a few times so the
+    //    real status set by the bridge (sent / failed) is reflected.
+    [4, 10, 20, 40].forEach((delay) => {
+      setTimeout(async () => {
+        try { await this.loadMessages(chatId, true); } catch (e) {}
+      }, delay * 1000);
+    });
 
-    // 5. Trigger simulated parent reply after 3000ms:
-    // - Emit typing:update with { chatId, isTyping: true }
-    // - After 2000ms of typing, call apiPost(api_whatsapp_parent_simulator.php)
-    // - Add incoming message to store, emit message:received, play incoming chime, trigger desktop notification
+    // 5. Simulated parent auto-reply — DISABLED by default so the replica shows
+    //    only real WhatsApp activity. Re-enable explicitly for demos with:
+    //      window.HCC_ALLOW_SIMULATION = true
+    if (typeof window !== 'undefined' && window.HCC_ALLOW_SIMULATION === true) {
     setTimeout(() => {
       this.dispatchEvent(new CustomEvent('typing:update', {
         detail: { chatId, isTyping: true }
@@ -770,8 +769,9 @@ class WhatsAppStore extends EventTarget {
         }
       }, 2000);
     }, 3000);
+    } // end simulation gate
 
-    return sendResult || { success: true, temp_msg_id: tempMsgId };
+    return sendResult;
   }
   
   guessMime(path) {
@@ -1396,6 +1396,110 @@ class WhatsAppStore extends EventTarget {
     }
   }
   
+  // ============ ADMISSION AI ASSISTANT ============
+
+  async getAIDraft(chatId) {
+    try {
+      const resp = await this.apiGet(`${this.getBaseUrl()}/api_whatsapp_ai.php`, {
+        action: 'get_draft',
+        chat_id: chatId
+      });
+      return resp;
+    } catch (e) {
+      console.warn('getAIDraft error:', e);
+      return { success: false, error: e.message };
+    }
+  }
+
+  async generateAIDraft(chatId, messageId = null, model = null) {
+    try {
+      const resp = await this.apiPost(`${this.getBaseUrl()}/api_whatsapp_ai.php?action=process_message`, {
+        chat_id: chatId,
+        message_id: messageId,
+        model: model
+      });
+      this.dispatchEvent(new CustomEvent('ai:draft-ready', { detail: { chatId, draft: resp } }));
+      return resp;
+    } catch (e) {
+      console.warn('generateAIDraft error:', e);
+      return { success: false, error: e.message };
+    }
+  }
+
+  async approveAIDraft(draftId, chatId, editedText = '', sendImmediately = true) {
+    try {
+      const resp = await this.apiPost(`${this.getBaseUrl()}/api_whatsapp_ai.php?action=approve_draft`, {
+        draft_id: draftId,
+        chat_id: chatId,
+        edited_text: editedText,
+        send_immediately: sendImmediately ? 1 : 0
+      });
+      if (sendImmediately) {
+        await this.loadMessages(chatId, false);
+      }
+      this.dispatchEvent(new CustomEvent('ai:draft-approved', { detail: { draftId, chatId } }));
+      return resp;
+    } catch (e) {
+      console.warn('approveAIDraft error:', e);
+      return { success: false, error: e.message };
+    }
+  }
+
+  async rejectAIDraft(draftId, chatId) {
+    try {
+      const resp = await this.apiPost(`${this.getBaseUrl()}/api_whatsapp_ai.php?action=reject_draft`, {
+        draft_id: draftId,
+        chat_id: chatId
+      });
+      this.dispatchEvent(new CustomEvent('ai:draft-rejected', { detail: { draftId, chatId } }));
+      return resp;
+    } catch (e) {
+      console.warn('rejectAIDraft error:', e);
+      return { success: false, error: e.message };
+    }
+  }
+
+  async escalateEnquiry(chatId, enquiryId = null, reason = '') {
+    try {
+      const resp = await this.apiPost(`${this.getBaseUrl()}/api_whatsapp_ai.php?action=escalate_enquiry`, {
+        chat_id: chatId,
+        enquiry_id: enquiryId,
+        reason: reason
+      });
+      this.dispatchEvent(new CustomEvent('ai:enquiry-escalated', { detail: { chatId, reason } }));
+      return resp;
+    } catch (e) {
+      console.warn('escalateEnquiry error:', e);
+      return { success: false, error: e.message };
+    }
+  }
+
+  async simulateAdmissionEnquiry(chatId, intent = 'Admission enquiry') {
+    try {
+      const resp = await this.apiPost(`${this.getBaseUrl()}/api_whatsapp_ai.php?action=simulate_enquiry`, {
+        chat_id: chatId,
+        intent: intent
+      });
+      await this.loadMessages(chatId, false);
+      this.dispatchEvent(new CustomEvent('ai:enquiry-simulated', { detail: { chatId, draft: resp } }));
+      return resp;
+    } catch (e) {
+      console.warn('simulateAdmissionEnquiry error:', e);
+      return { success: false, error: e.message };
+    }
+  }
+
+  async checkAIServiceStatus() {
+    try {
+      const resp = await this.apiGet(`${this.getBaseUrl()}/api_whatsapp_ai.php`, {
+        action: 'service_status'
+      });
+      return resp;
+    } catch (e) {
+      return { success: false, rust_service_online: false, error: e.message };
+    }
+  }
+
   // ============ CLEANUP ============
   
   destroy() {

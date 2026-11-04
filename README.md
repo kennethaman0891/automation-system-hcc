@@ -36,6 +36,25 @@ Google Drive sharing, certificates and parent-sign workflows.
    ```
 6. Open `http://localhost/hcc/admin/` and log in.
 
+## Admission enquiry workflow
+
+Staff capture parent enquiries in the existing WhatsApp hub and on
+`admin/admission_enquiries.php`. Draft replies come from the local Rust
+service (`automation/admission-ai-service`) and Ollama. Follow-up reminders
+are queued in MySQL by `automation/rust_engine`. Nothing is sent to WhatsApp
+until a person opens the `wa.me` link and presses Send.
+
+Windows install, service startup, configuration, and backup steps are in
+`docs/WINDOWS_DEPLOYMENT.md`, `docs/CONFIGURATION.md`, and
+`docs/BACKUP_AND_RECOVERY.md`. The audit, test report, and limits are in
+`docs/ADMISSION_AUDIT.md`, `docs/TEST_REPORT.md`, and `docs/KNOWN_LIMITATIONS.md`.
+
+Run the workflow check with:
+
+```
+php tests/admission_workflow_e2e.php
+```
+
 ## Layout
 
 | Path | Purpose |
