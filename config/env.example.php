@@ -27,7 +27,8 @@ return [
     'DB_USER'     => 'hcc_app',
     'DB_PASS'     => '',                       // set a strong password
     'DB_CHARSET'  => 'utf8mb4',
-    'DB_SOCKET'   => '',                       // e.g. /Applications/XAMPP/xamppfiles/var/mysql/mysql.sock (leave '' if using TCP)
+    'DB_SOCKET'   => '',                       // macOS XAMPP: /Applications/XAMPP/xamppfiles/var/mysql/mysql.sock (leave '' on Windows or if using TCP)
     'JWT_SECRET'  => 'CHANGE_ME_php_-r_echo_bin2hex_random_bytes_32_EOL', // fail-closed until replaced
+    'WHATSAPP_BRIDGE_SECRET' => '', // bridge .env must use the same value
     'CORS_ORIGIN' => 'http://localhost',
 ];

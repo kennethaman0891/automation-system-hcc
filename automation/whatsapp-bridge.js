@@ -4,14 +4,81 @@
  * contact/chat sync, typing indicators, presence, real-time event emission
  */
 
-require('dotenv').config({ path: __dirname + '/.env' });
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const fs = require('fs');
 const puppeteer = require('puppeteer');
 const axios = require('axios');
-const path = require('path');
+const os = require('os');
 const EventEmitter = require('events');
 const FormData = require('form-data');
 const mime = require('mime-types');
+
+/**
+ * Cross-platform detection of Chrome or Chromium executable.
+ * Checks: explicit path -> CHROME_PATH env -> platform standard paths -> Puppeteer cache.
+ */
+function findChrome(explicitPath) {
+  if (explicitPath && fs.existsSync(explicitPath)) return explicitPath;
+  if (process.env.CHROME_PATH && fs.existsSync(process.env.CHROME_PATH)) return process.env.CHROME_PATH;
+
+  let candidates = [];
+  if (process.platform === 'win32') {
+    const progFiles = process.env.PROGRAMFILES || 'C:\\Program Files';
+    const progFilesX86 = process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
+    const localAppData = process.env.LOCALAPPDATA || (process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData', 'Local') : '');
+
+    candidates = [
+      path.join(progFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      path.join(progFilesX86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+      localAppData ? path.join(localAppData, 'Google', 'Chrome', 'Application', 'chrome.exe') : '',
+      // Edge fallback on Windows
+      path.join(progFilesX86, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+      path.join(progFiles, 'Microsoft', 'Edge', 'Application', 'msedge.exe')
+    ].filter(Boolean);
+  } else if (process.platform === 'darwin') {
+    candidates = [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      path.join(os.homedir(), 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome'),
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'
+    ];
+  } else {
+    candidates = [
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser',
+      '/snap/bin/chromium'
+    ];
+  }
+
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+
+  try {
+    const pPath = puppeteer.executablePath ? puppeteer.executablePath() : null;
+    if (pPath && fs.existsSync(pPath)) return pPath;
+  } catch (e) {}
+
+  return null;
+}
+
+/**
+ * Cross-platform resolution of IPC temporary directory.
+ * On POSIX systems, /tmp is standard and shared across webserver and CLI users.
+ * On Windows, /tmp does NOT exist, so os.tmpdir() is used.
+ */
+function getBridgeTempDir() {
+  if (process.env.WHATSAPP_IPC_DIR && fs.existsSync(process.env.WHATSAPP_IPC_DIR)) {
+    return process.env.WHATSAPP_IPC_DIR;
+  }
+  if (process.platform !== 'win32' && fs.existsSync('/tmp')) {
+    return '/tmp';
+  }
+  return os.tmpdir();
+}
 
 class WhatsAppBridge extends EventEmitter {
   constructor(config = {}) {
@@ -19,12 +86,13 @@ class WhatsAppBridge extends EventEmitter {
     this.config = {
       // HCC API
       apiBaseUrl: config.apiBaseUrl || process.env.API_BASE_URL || 'http://localhost/hcc/admin',
-      bridgeSecret: config.bridgeSecret || process.env.WHATSAPP_BRIDGE_SECRET || 'change-this-secret',
+      bridgeSecret: process.env.WHATSAPP_BRIDGE_SECRET || '',
       
       // Browser
       userDataDir: config.userDataDir || process.env.USER_DATA_DIR || path.join(__dirname, '.whatsapp-session'),
       headless: config.headless !== undefined ? config.headless : (process.env.HEADLESS === 'true'),
-      executablePath: config.executablePath || process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      executablePath: findChrome(config.executablePath || process.env.CHROME_PATH),
+      ipcDir: config.ipcDir || process.env.WHATSAPP_IPC_DIR || getBridgeTempDir(),
       
       // Behavior
       pollInterval: config.pollInterval || parseInt(process.env.POLL_INTERVAL) || 3000,
@@ -39,7 +107,7 @@ class WhatsAppBridge extends EventEmitter {
       // Privacy Filter
       enablePrivacyFilter: config.enablePrivacyFilter !== undefined ? config.enablePrivacyFilter : (process.env.ENABLE_PRIVACY_FILTER !== 'false'),
       privacyFilterApi: config.privacyFilterApi || process.env.PRIVACY_FILTER_API || 'api_whatsapp_bridge_filter.php',
-      filterRefreshInterval: config.filterRefreshInterval || parseInt(process.env.FILTER_REFRESH_INTERVAL) || 300000, // 5 minutes
+      filterRefreshInterval: config.filterRefreshInterval || parseInt(process.env.FILTER_REFRESH_INTERVAL) || 15000, // 15s so a New chat is on the allowlist quickly
       
       // Logging
       logLevel: config.logLevel || process.env.LOG_LEVEL || 'info'
@@ -73,12 +141,28 @@ class WhatsAppBridge extends EventEmitter {
       enabled: this.config.enablePrivacyFilter,
       rosterNumbers: new Set(),      // Set of allowed wa_id (e.g., 919876543210@c.us)
       rosterPhones: new Set(),       // Set of allowed phone_e164 (e.g., +919876543210)
+      rosterNames: new Set(),        // Saved chat titles, so an unread row can be opened without a visible number
+      nameToJidMap: new Map(),       // Lowercase name -> wa_chat_id map
       admissionKeywords: [],         // Array of admission-related keywords
       classGroupIds: new Set(),      // Set of allowed group wa_chat_id
       lastRefreshed: 0,
       refreshInterval: this.config.filterRefreshInterval
     };
     this.filterRefreshTimer = null;
+    this.consecutiveQrDetections = 0;
+    this.sending = false;
+    this.pollingNow = false;
+    this.recentOutboundChatIds = new Set();
+    this.recentOutboundBodies = new Map();
+    this.outboundEchoSeen = new Set();
+    this.outboundWatch = [];
+    this.outboundWatchCursor = 0;
+    this.lastRevisitAt = 0;
+    this.ingestNotices = new Map();
+    this.ingestedMsgIds = new Set();
+    if (!this.config.bridgeSecret || String(this.config.bridgeSecret).length < 16) {
+      this.log('error', 'WHATSAPP_BRIDGE_SECRET is missing or shorter than 16 characters; ingest posts will be refused');
+    }
     
     // Ensure directories exist
     this.ensureDirs();
@@ -110,20 +194,58 @@ class WhatsAppBridge extends EventEmitter {
         // Clear and rebuild roster numbers
         this.privacyFilter.rosterNumbers.clear();
         this.privacyFilter.rosterPhones.clear();
+        this.privacyFilter.rosterNames.clear();
+        this.privacyFilter.nameToJidMap.clear();
         
         // Add roster numbers (students + teachers)
         if (data.roster_numbers && Array.isArray(data.roster_numbers)) {
           for (const entry of data.roster_numbers) {
             if (entry.wa_id) this.privacyFilter.rosterNumbers.add(entry.wa_id.toLowerCase());
             if (entry.phone_e164) this.privacyFilter.rosterPhones.add(entry.phone_e164.toLowerCase());
+            if (entry.name && entry.wa_id) {
+              const cleaned = String(entry.name || '').trim().toLowerCase();
+              if (cleaned.length >= 2) {
+                this.privacyFilter.rosterNames.add(cleaned);
+                this.privacyFilter.nameToJidMap.set(cleaned, entry.wa_id.toLowerCase());
+              }
+            }
           }
         }
         
         // Add linked contacts
+        const rememberName = (name, jid = '') => {
+          const cleaned = String(name || '').trim().toLowerCase();
+          if (cleaned.length >= 2) {
+            this.privacyFilter.rosterNames.add(cleaned);
+            if (jid) this.privacyFilter.nameToJidMap.set(cleaned, jid.toLowerCase());
+          }
+        };
+
         if (data.linked_contacts && Array.isArray(data.linked_contacts)) {
           for (const entry of data.linked_contacts) {
             if (entry.wa_id) this.privacyFilter.rosterNumbers.add(entry.wa_id.toLowerCase());
             if (entry.phone_e164) this.privacyFilter.rosterPhones.add(entry.phone_e164.toLowerCase());
+            rememberName(entry.name, entry.wa_id);
+          }
+        }
+
+        // Individual whatsapp_chats the PHP filter already knows
+        if (data.known_chats && Array.isArray(data.known_chats)) {
+          for (const entry of data.known_chats) {
+            const jid = entry && entry.wa_chat_id ? String(entry.wa_chat_id).toLowerCase() : '';
+            if (jid) {
+              this.privacyFilter.rosterNumbers.add(jid);
+            }
+            rememberName(entry && entry.name, jid);
+          }
+        }
+
+        // Admin/Self phone number is always in the roster
+        if (this.phoneNumber) {
+          const adminDigits = this.normalizePhoneDigits(String(this.phoneNumber));
+          if (adminDigits) {
+            this.privacyFilter.rosterNumbers.add(adminDigits + '@c.us');
+            this.privacyFilter.rosterPhones.add('+' + adminDigits);
           }
         }
         
@@ -181,6 +303,10 @@ class WhatsAppBridge extends EventEmitter {
       return { allowed: true, reason: 'class_group' };
     }
 
+    if (waChatId && this.recentOutboundChatIds.has(waChatId)) {
+      return { allowed: true, reason: 'recent_outbound' };
+    }
+
     // 2. For group chats, check if it's a known class group by name pattern
     if (chatType === 'group' || chatType === 'broadcast') {
       const classGroupPatterns = [
@@ -204,19 +330,38 @@ class WhatsAppBridge extends EventEmitter {
 
     // 3. For individual chats, check roster allowlist
     if (chatType === 'individual') {
+      // Admin / self chat is always allowed
+      if (chat.is_self || (this.phoneNumber && waChatId.startsWith(this.normalizePhoneDigits(this.phoneNumber)))) {
+        return { allowed: true, reason: 'admin_or_self' };
+      }
+
       // Check wa_chat_id (format: 919876543210@c.us)
-      if (this.privacyFilter.rosterNumbers.has(waChatId)) {
+      if (waChatId && this.privacyFilter.rosterNumbers.has(waChatId)) {
         return { allowed: true, reason: 'roster_number' };
       }
       
+      const digits = waChatId.split('@')[0].replace(/\D/g, '');
+      if (digits && (this.privacyFilter.rosterPhones.has('+' + digits) || this.privacyFilter.rosterNumbers.has(digits + '@c.us'))) {
+        return { allowed: true, reason: 'roster_phone' };
+      }
+
       // Also check if sender wa_id is in roster (from chat metadata)
       const senderWaId = (chat.sender_wa_id || '').toLowerCase();
       if (senderWaId && this.privacyFilter.rosterNumbers.has(senderWaId)) {
         return { allowed: true, reason: 'roster_sender' };
       }
+
+      // Chat the bridge itself just sent to (reply may arrive before the next filter refresh)
+      if (waChatId && this.recentOutboundChatIds.has(waChatId)) {
+        return { allowed: true, reason: 'recent_outbound' };
+      }
       
-      // Check if chat name matches a known student/parent
-      // This is a fallback - not very reliable but helps
+      // Check if chat name matches a known contact/student/parent in roster
+      const cleanTitle = (chatName || '').trim().toLowerCase();
+      if (cleanTitle && this.privacyFilter.rosterNames && this.privacyFilter.rosterNames.has(cleanTitle)) {
+        return { allowed: true, reason: 'roster_name' };
+      }
+
       return { allowed: false, reason: 'unknown_individual' };
     }
 
@@ -234,6 +379,11 @@ class WhatsAppBridge extends EventEmitter {
       return { allowed: true, reason: 'outbound' };
     }
 
+    // Admin / self-test incoming replies are always allowed
+    if (chatContext.is_self || (this.phoneNumber && waChatId.startsWith(this.normalizePhoneDigits(this.phoneNumber)))) {
+      return { allowed: true, reason: 'admin_or_self' };
+    }
+
     const body = (message.body || '').toLowerCase();
     const senderWaId = (message.sender_wa_id || '').toLowerCase();
     const waChatId = (chatContext.wa_chat_id || message.wa_chat_id || '').toLowerCase();
@@ -242,6 +392,19 @@ class WhatsAppBridge extends EventEmitter {
     // 1. Check if sender is in roster
     if (senderWaId && this.privacyFilter.rosterNumbers.has(senderWaId)) {
       return { allowed: true, reason: 'roster_sender' };
+    }
+
+    if (waChatId && this.privacyFilter.rosterNumbers.has(waChatId)) {
+      return { allowed: true, reason: 'roster_number' };
+    }
+
+    const digits = waChatId.split('@')[0].replace(/\D/g, '');
+    if (digits && (this.privacyFilter.rosterPhones.has('+' + digits) || this.privacyFilter.rosterNumbers.has(digits + '@c.us'))) {
+      return { allowed: true, reason: 'roster_phone' };
+    }
+
+    if (waChatId && this.recentOutboundChatIds.has(waChatId)) {
+      return { allowed: true, reason: 'recent_outbound' };
     }
 
     // 2. Check if chat is allowed
@@ -291,10 +454,18 @@ class WhatsAppBridge extends EventEmitter {
         this.log('info', 'Linked-device marker found — starting headless (no window)');
       }
 
+      if (!this.config.executablePath) {
+        this.config.executablePath = findChrome();
+      }
+      if (this.config.executablePath) {
+        this.log('info', `Using Chrome executable: ${this.config.executablePath}`);
+      } else {
+        this.log('warn', 'No Chrome or Edge executable found; attempting Puppeteer default launch');
+      }
+
       // Launch browser with persistent profile
-      this.browser = await puppeteer.launch({
+      const launchOpts = {
         headless: autoHeadless,
-        executablePath: this.config.executablePath,
         userDataDir: this.config.userDataDir,
         args: [
           '--no-sandbox',
@@ -312,7 +483,11 @@ class WhatsAppBridge extends EventEmitter {
           '--disable-ipc-flooding-protection'
         ],
         defaultViewport: { width: 1280, height: 800 }
-      });
+      };
+      if (this.config.executablePath) {
+        launchOpts.executablePath = this.config.executablePath;
+      }
+      this.browser = await puppeteer.launch(launchOpts);
       
       this.browser.on('disconnected', () => this.handleDisconnect());
       
@@ -396,56 +571,204 @@ class WhatsAppBridge extends EventEmitter {
           return chats;
         },
         
-        // Extract messages from current open chat
-        getMessages: (sinceTimestamp = 0) => {
+        // Extract messages from the open chat.
+        // Older builds used true_JID_MSG / false_JID_MSG. The current build puts
+        // only the message id on the row (data-testid="conv-msg-…") and marks
+        // outgoing with a "You:" / Read label or a tail-out icon.
+        getMessages: () => {
           const messages = [];
-          const msgElements = document.querySelectorAll('[data-testid="msg-container"], .message-in, .message-out');
-          msgElements.forEach(el => {
+          const seen = new Set();
+          const msgElements = document.querySelectorAll(
+            '#main [data-testid^="conv-msg-"], #main [data-id], [data-testid="msg-container"], .message-in, .message-out'
+          );
+          msgElements.forEach(node => {
             try {
+              const el = node.closest('[data-id]') || node;
               const msgId = el.getAttribute('data-id') || el.getAttribute('id') || '';
-              const isOut = el.classList.contains('message-out') || el.closest('.message-out');
-              const textEl = el.querySelector('[data-testid="msg-text"], .selectable-text');
-              const mediaEl = el.querySelector('img, video, audio');
-              const timeEl = el.querySelector('[data-testid="msg-time"], .copyable-text');
+              if (!msgId || seen.has(msgId)) return;
+              const virtual = el.querySelector('[data-virtualized="true"]');
+              const hasText = !!el.querySelector('.selectable-text, [data-testid="msg-text"]');
+              const hasMedia = !!el.querySelector('img[src*="blob:"], video, audio');
+              if (virtual && !hasText && !hasMedia) return;
+              const idMatch = String(msgId).match(/^(true|false)_(.+?@(?:c\.us|g\.us|s\.whatsapp\.net|lid|broadcast|newsletter))_(.+)$/i);
+              seen.add(msgId);
+
+              const iconNames = Array.from(el.querySelectorAll('[data-icon]')).map(n => n.getAttribute('data-icon') || '').join(' ');
+              const statusLabels = Array.from(el.querySelectorAll('[aria-label]')).map(n => (n.getAttribute('aria-label') || '').trim());
+              const outgoingLabel = statusLabels.some(label => /^(you:|read|delivered|sent)$/i.test(label));
+              let fromMe;
+              if (idMatch) fromMe = idMatch[1].toLowerCase() === 'true';
+              else if (/tail-in/.test(iconNames)) fromMe = false;
+              else if (/tail-out|msg-check|msg-dblcheck/.test(iconNames) || outgoingLabel || el.classList.contains('message-out') || !!el.closest('.message-out')) fromMe = true;
+              else fromMe = false;
+              const textNodes = el.querySelectorAll('.selectable-text, [data-testid="msg-text"]');
+              const textEl = textNodes.length ? textNodes[textNodes.length - 1] : null;
+              const body = textEl?.textContent?.trim() || '';
+              const mediaEl = el.querySelector('img[src*="blob:"], video, audio');
+              if (!body && !mediaEl) return;
+
+              const timeEl = el.querySelector('[data-pre-plain-text]')
+                || el.querySelector('[data-testid="msg-time"], .copyable-text');
               const quotedEl = el.querySelector('[data-testid="quoted-msg"], .quoted-msg');
-              const statusEl = el.querySelector('[data-testid="msg-status"], .msg-status');
-              
-              const timestamp = timeEl?.getAttribute('data-pre-plain-text')?.match(/\[(\d+:\d+)\].*?(\d+)/) 
-                ? parseInt(timeEl.getAttribute('data-pre-plain-text').match(/\d+/g).pop())
-                : Math.floor(Date.now() / 1000);
-              
-              if (msgId && timestamp > sinceTimestamp) {
-                messages.push({
-                  wa_msg_id: msgId,
-                  from_me: !!isOut,
-                  msg_type: mediaEl ? (mediaEl.tagName.toLowerCase() === 'img' ? 'image' : 
-                           mediaEl.tagName.toLowerCase() === 'video' ? 'video' : 'audio') : 'text',
-                  body: textEl?.textContent?.trim() || '',
-                  media_url: mediaEl?.src || '',
-                  timestamp: timestamp,
-                  quoted_wa_msg_id: quotedEl?.getAttribute('data-id') || '',
-                  status: statusEl?.getAttribute('aria-label')?.includes('Read') ? 'read' : 
-                          statusEl?.getAttribute('aria-label')?.includes('Delivered') ? 'delivered' : 'sent'
-                });
+              let timestamp = Math.floor(Date.now() / 1000);
+              let timestampParsed = false;
+              const pre = timeEl?.getAttribute('data-pre-plain-text') || '';
+              const clock = pre.match(/\[(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp][Mm])?,\s*(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/);
+              if (clock) {
+                let hour = parseInt(clock[1], 10);
+                const minute = parseInt(clock[2], 10);
+                const second = clock[3] ? parseInt(clock[3], 10) : 0;
+                const ampm = (clock[4] || '').toLowerCase();
+                let day = parseInt(clock[5], 10);
+                let month = parseInt(clock[6], 10);
+                let year = parseInt(clock[7], 10);
+                if (ampm === 'pm' && hour < 12) hour += 12;
+                if (ampm === 'am' && hour === 12) hour = 0;
+                if (year < 100) year += 2000;
+                if (month > 12 && day <= 12) {
+                  const swap = day;
+                  day = month;
+                  month = swap;
+                }
+                const parsed = new Date(year, month - 1, day, hour, minute, second).getTime();
+                if (!Number.isNaN(parsed)) {
+                  const unix = Math.floor(parsed / 1000);
+                  if (unix > 1000000000 && unix < 20000000000) {
+                    timestamp = unix;
+                    timestampParsed = true;
+                  }
+                }
               }
+
+              const iconText = Array.from(el.querySelectorAll('[data-icon], [aria-label]'))
+                .map(node => (node.getAttribute('data-icon') || '') + ' ' + (node.getAttribute('aria-label') || ''))
+                .join(' ');
+              let status = 'sent';
+              if (/msg-dblcheck-ack|Read/i.test(iconText)) status = 'read';
+              else if (/msg-dblcheck|Delivered/i.test(iconText)) status = 'delivered';
+
+              messages.push({
+                wa_msg_id: msgId,
+                wa_chat_id: idMatch ? idMatch[2] : '',
+                from_me: fromMe,
+                msg_type: !body && mediaEl
+                  ? (mediaEl.tagName.toLowerCase() === 'img' ? 'image' :
+                     mediaEl.tagName.toLowerCase() === 'video' ? 'video' : 'audio')
+                  : 'text',
+                body: body,
+                media_url: mediaEl?.src || '',
+                timestamp: timestamp,
+                timestamp_parsed: timestampParsed,
+                quoted_wa_msg_id: quotedEl?.getAttribute('data-id') || '',
+                status: status
+              });
             } catch (e) {}
           });
           return messages;
         },
+
+        // Unread chat-list rows. A row often has a name and no phone; index lets
+        // the bridge click that row and read the number from the open thread.
+        getUnreadChatPhones: () => {
+          const root = document.querySelector('#pane-side') || document.querySelector('[data-testid="chat-list"]');
+          if (!root) return [];
+          const phoneLike = (value) => {
+            const raw = String(value || '').trim();
+            if (!raw) return '';
+            const jid = raw.match(/(\d{8,15})@c\.us/i);
+            if (jid) return jid[1];
+            if (/[a-z]/i.test(raw)) return '';
+            const digits = raw.replace(/\D/g, '');
+            if (digits.length >= 8 && digits.length <= 15) return digits;
+            return '';
+          };
+          const rows = root.querySelectorAll('[role="listitem"], [role="row"], [data-testid="cell-frame-container"]');
+          const out = [];
+          const seen = new Set();
+          rows.forEach((el, index) => {
+            const badge = el.querySelector('[data-testid="icon-unread-count"], [data-testid="cell-frame-unread"], span[aria-label*="unread" i]');
+            const rowLabel = el.getAttribute('aria-label') || '';
+            const gridLabel = el.querySelector('[role="gridcell"]')?.getAttribute('aria-label') || '';
+            if (!badge && !/unread/i.test(rowLabel) && !/unread/i.test(gridLabel)) return;
+
+            const titleEl = el.querySelector('[data-testid="cell-frame-title"], span[title], span[dir="auto"]');
+            const title = titleEl?.getAttribute('title') || titleEl?.textContent || '';
+            if (/^(archived|unread|all|favourites|favorites|groups|communities|locked chats|status|updates)$/i.test(String(title).trim())) return;
+            const subtitleEl = el.querySelector('[data-testid="cell-frame-secondary"], [data-testid="cell-frame-subtitle"]');
+            const subtitle = subtitleEl?.getAttribute('title') || subtitleEl?.textContent || '';
+            const dataId = [
+              el.getAttribute('data-id'),
+              el.getAttribute('data-chat-id'),
+              el.querySelector('[data-id]')?.getAttribute('data-id') || '',
+              el.querySelector('[data-chat-id]')?.getAttribute('data-chat-id') || ''
+            ].join(' ');
+            const phone = phoneLike(dataId) || phoneLike(title) || phoneLike(subtitle);
+            const key = phone || ('row:' + index);
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push({ index, phone: phone || '', title: String(title).trim().slice(0, 80) });
+          });
+          return out;
+        },
         
         // Get contact info for current chat
         getContactInfo: () => {
-          const header = document.querySelector('[data-testid="conversation-header"], header');
-          if (!header) return null;
+          const header = document.querySelector('[data-testid="conversation-header"]')
+            || document.querySelector('#main header');
+          const urlPhone = (location.href.match(/[?&]phone=(\d{6,15})/) || [])[1] || '';
+          const phoneLike = (value) => {
+            const raw = String(value || '').trim();
+            if (!raw) return '';
+            const jid = raw.match(/(\d{8,15})@c\.us/i);
+            if (jid) return jid[1];
+            if (/[a-z]/i.test(raw)) return '';
+            const digits = raw.replace(/\D/g, '');
+            if (digits.length >= 8 && digits.length <= 15) return digits;
+            return '';
+          };
+          if (!header) {
+            if (!urlPhone) return null;
+            return { name: '', avatar: '', status: '', wa_chat_id: urlPhone + '@c.us' };
+          }
           
-          const nameEl = header.querySelector('[data-testid="conversation-header-name"], ._amie');
+          const nameEl = header.querySelector('[data-testid="conversation-info-header-chat-title"], [data-testid="conversation-header-name"], span[title]');
           const avatarEl = header.querySelector('img[src*="blob:"], img[src*="https://pps.whatsapp.net"]');
-          const statusEl = header.querySelector('[data-testid="conversation-header-status"], ._amig');
+          const statusEl = header.querySelector('[data-testid="conversation-header-subtitle"], [data-testid="conversation-header-status"], ._amig');
+          const headerText = header.innerText || '';
+          const name = nameEl?.textContent?.trim() || '';
+          const status = statusEl?.textContent?.trim() || '';
+          const isSelf = /message yourself|\(you\)/i.test(headerText);
+          let waChatId = '';
+          if (urlPhone) waChatId = urlPhone + '@c.us';
+          const headerId = header.getAttribute('data-id') || header.querySelector('[data-id]')?.getAttribute('data-id') || '';
+          const headerJid = headerId.match(/(\d{8,15})@c\.us/i);
+          if (!waChatId && headerJid) waChatId = headerJid[1] + '@c.us';
+          if (!waChatId) {
+            const fromStatus = phoneLike(status);
+            const fromName = phoneLike(name);
+            if (fromStatus) waChatId = fromStatus + '@c.us';
+            else if (fromName) waChatId = fromName + '@c.us';
+          }
+          if (!waChatId) {
+            // Check active sidebar row
+            const activeRow = document.querySelector('#pane-side [aria-selected="true"], #pane-side .active');
+            if (activeRow) {
+              const rId = activeRow.getAttribute('data-id') || activeRow.getAttribute('data-chat-id') || '';
+              const rJid = rId.match(/(\d{8,15})@c\.us/i);
+              if (rJid) waChatId = rJid[1] + '@c.us';
+              if (!waChatId) {
+                const rPhone = phoneLike(activeRow.innerText);
+                if (rPhone) waChatId = rPhone + '@c.us';
+              }
+            }
+          }
           
           return {
-            name: nameEl?.textContent?.trim() || '',
+            name,
             avatar: avatarEl?.src || '',
-            status: statusEl?.textContent?.trim() || ''
+            status,
+            wa_chat_id: waChatId,
+            is_self: isSelf
           };
         },
         
@@ -498,7 +821,10 @@ class WhatsAppBridge extends EventEmitter {
         
         // Check if logged in
         isLoggedIn: () => {
-          return !!document.querySelector('[data-testid="chat-list"], #pane-side');
+          const hasChatList = !!document.querySelector('[data-testid="chat-list"], #pane-side');
+          const hasMain = !!document.querySelector('#main');
+          const hasComposer = !!document.querySelector('footer [contenteditable="true"]');
+          return hasChatList || hasMain || hasComposer;
         }
       };
     };
@@ -550,7 +876,7 @@ class WhatsAppBridge extends EventEmitter {
           const logged = !!(window.WABridge && window.WABridge.isLoggedIn && window.WABridge.isLoggedIn());
           const qr = (window.WABridge && window.WABridge.getQR) ? window.WABridge.getQR() : null;
           const body = document.body ? (document.body.innerText || '') : '';
-          const expired = /click to reload|qr code expired|refresh qr code|tap.{0,20}menu/i.test(body);
+          const expired = /click to reload|select to reload|qr code expired|refresh qr code|tap.{0,20}menu/i.test(body);
           let linkError = '';
           const errMatch = body.match(/(couldn['’]t link[^\n]*|unable to link[^\n]*|something went wrong[^\n]*|try again later[^\n]*)/i);
           if (errMatch) linkError = errMatch[0].trim().slice(0, 160);
@@ -563,6 +889,22 @@ class WhatsAppBridge extends EventEmitter {
           this.sessionWatchTimer = null;
           this.log('info', 'WhatsApp login detected');
           await this.onLoggedIn();
+          return;
+        }
+
+        // If QR expired, click to refresh it
+        if (state.expired) {
+          this.log('info', 'QR expired on screen — clicking to refresh...');
+          await this.page.evaluate(() => {
+            const btn = Array.from(document.querySelectorAll('button, [role="button"], span, div'))
+              .find(el => el.innerText && /reload/i.test(el.innerText));
+            if (btn) btn.click();
+            else {
+              const c = document.querySelector('canvas');
+              if (c) c.click();
+            }
+          });
+          await new Promise(r => setTimeout(r, 2000));
           return;
         }
 
@@ -682,6 +1024,9 @@ class WhatsAppBridge extends EventEmitter {
     this.startPolling();
     this.startSessionSyncTimer();
 
+    // Remember recent sends so a reply in that chat is scraped even with no unread badge.
+    await this.seedOutboundWatch();
+
     // Immediately flush anything that was queued while we were offline
     this.processOutboundQueue().catch(() => {});
     
@@ -727,8 +1072,28 @@ class WhatsAppBridge extends EventEmitter {
     }
   }
   
+  async seedOutboundWatch() {
+    for (const status of ['processing', 'sent']) {
+      try {
+        const response = await this.apiGet('api_whatsapp_outbound_queue.php', { status, limit: 10 });
+        const rows = (response && response.data) || [];
+        for (const row of rows) {
+          if (!row || !row.wa_chat_id) continue;
+          this.rememberOutboundChat(row.wa_chat_id);
+          if (row.body) this.rememberOutboundBody(row.wa_chat_id, row.body);
+        }
+      } catch (e) {
+        this.log('debug', 'Could not seed recent chats', e.message);
+      }
+    }
+    if (this.outboundWatch.length) {
+      this.log('info', `Watching ${this.outboundWatch.length} recent chat(s) for replies`);
+    }
+  }
+
   async syncChats() {
     this.log('info', 'Syncing chats...');
+    if (!this.hasBridgeSecret()) return;
     const chats = await this.page.evaluate(() => window.WABridge.getChats());
     
     let synced = 0;
@@ -745,6 +1110,10 @@ class WhatsAppBridge extends EventEmitter {
       const allowed = this.isChatAllowed(chatWithType);
       
       if (allowed.allowed) {
+        if (!chat.wa_chat_id) {
+          filtered++;
+          continue;
+        }
         await this.apiPost('api_whatsapp_ingest.php', [{
           wa_msg_id: 'chat_sync_' + chat.wa_chat_id,
           wa_chat_id: chat.wa_chat_id,
@@ -800,77 +1169,525 @@ class WhatsAppBridge extends EventEmitter {
     this.isPolling = false;
   }
   
-  async pollMessages() {
-    if (!this.isConnected) return;
-    
-    // Get current open chat messages (if any)
-    const messages = await this.page.evaluate((since) => window.WABridge.getMessages(since), this.lastMsgTimestamp);
-    
-    if (messages.length > 0) {
-      this.log('debug', `Polled ${messages.length} new messages`);
-      
-      // Enrich messages with chat info
-      const chatInfo = await this.page.evaluate(() => window.WABridge.getContactInfo());
-      
-      const enriched = messages.map(msg => ({
-        ...msg,
-        wa_chat_id: chatInfo?.wa_chat_id || '',
-        chat_name: chatInfo?.name,
-        chat_avatar: chatInfo?.avatar,
-        sender_wa_id: msg.from_me ? 'me' : (chatInfo?.wa_id || ''),
-        sender_name: msg.from_me ? 'You' : (chatInfo?.name || ''),
-        sender_avatar: chatInfo?.avatar
-      }));
-      
-      // Filter messages based on privacy rules
-      let allowedMessages = [];
-      let filteredMessages = 0;
-      
-      for (const msg of enriched) {
-        const chatContext = {
-          wa_chat_id: msg.wa_chat_id,
-          chat_name: msg.chat_name,
-          chat_type: msg.wa_chat_id?.includes('@g.us') ? 'group' : 
-                    msg.wa_chat_id?.includes('broadcast') || msg.wa_chat_id?.includes('channel') ? 'broadcast' : 'individual'
-        };
-        
-        const allowed = this.isMessageAllowed(msg, chatContext);
-        
-        if (allowed.allowed) {
-          allowedMessages.push({ ...msg, metadata: { ...msg.metadata, filter_reason: allowed.reason } });
-        } else {
-          filteredMessages++;
-          this.log('debug', `Filtered out message from ${msg.sender_name} (${msg.sender_wa_id}) in chat ${msg.wa_chat_id} - reason: ${allowed.reason}`);
-        }
-      }
-      
-      if (allowedMessages.length > 0) {
-        // Send to API
-        await this.apiPost('api_whatsapp_ingest.php', allowedMessages);
-        
-        // Update last timestamp
-        this.lastMsgTimestamp = Math.max(this.lastMsgTimestamp, ...messages.map(m => m.timestamp));
-        this.lastMsgId = Math.max(this.lastMsgId, ...messages.map(m => parseInt(m.wa_msg_id) || 0));
-      } else {
-        this.log('debug', `All ${filteredMessages} messages filtered out`);
+  hasBridgeSecret() {
+    const secret = this.config.bridgeSecret;
+    return typeof secret === 'string' && secret.length >= 16;
+  }
+
+  rememberCapped(set, value, cap) {
+    if (!value) return;
+    set.add(value);
+    while (set.size > cap) {
+      const oldest = set.values().next().value;
+      set.delete(oldest);
+    }
+  }
+
+  rememberIngested(waMsgId) {
+    if (!waMsgId) return;
+    this.rememberCapped(this.ingestedMsgIds, String(waMsgId), 2000);
+  }
+
+  rememberOutboundChat(waChatId) {
+    const id = String(waChatId || '').trim().toLowerCase();
+    if (!id) return;
+    this.rememberCapped(this.recentOutboundChatIds, id, 2000);
+    const normalized = this.jidToWaChatId(id) || id;
+    this.rememberCapped(this.recentOutboundChatIds, normalized, 2000);
+    const digits = normalized.split('@')[0].replace(/\D/g, '');
+    if (digits.length >= 6 && digits.length <= 15) {
+      this.rememberCapped(this.recentOutboundChatIds, digits + '@c.us', 2000);
+    }
+    if (!normalized) return;
+    this.outboundWatch = this.outboundWatch.filter(item => item !== normalized);
+    this.outboundWatch.push(normalized);
+    if (this.outboundWatch.length > 20) this.outboundWatch.shift();
+  }
+
+  rememberOutboundBody(waChatId, body) {
+    const id = this.jidToWaChatId(waChatId) || String(waChatId || '').trim().toLowerCase();
+    const text = String(body || '').trim();
+    if (!id || !text) return;
+    const key = id + '\n' + text;
+    this.recentOutboundBodies.set(key, Date.now());
+    this.outboundEchoSeen.delete(key);
+    for (const [savedKey, at] of this.recentOutboundBodies) {
+      if (Date.now() - at > 30 * 60 * 1000) {
+        this.recentOutboundBodies.delete(savedKey);
+        this.outboundEchoSeen.delete(savedKey);
       }
     }
-    
-    // Update last poll time
-    await this.apiPost('api_whatsapp_session.php?action=poll', { last_poll_at: new Date().toISOString() });
+  }
+
+  // The first on-screen copy of a text we just sent is the bridge's own bubble.
+  takeOutboundEcho(waChatId, body) {
+    const id = this.jidToWaChatId(waChatId) || String(waChatId || '').trim().toLowerCase();
+    const text = String(body || '').trim();
+    const key = id + '\n' + text;
+    const at = this.recentOutboundBodies.get(key);
+    if (!at || Date.now() - at > 30 * 60 * 1000) return false;
+    if (this.outboundEchoSeen.has(key)) return false;
+    this.outboundEchoSeen.add(key);
+    return true;
+  }
+
+  noticeOnce(key, level, message, intervalMs = 60000) {
+    const now = Date.now();
+    const prev = this.ingestNotices.get(key) || 0;
+    if (now - prev < intervalMs) return;
+    this.ingestNotices.set(key, now);
+    this.log(level, message);
+  }
+
+  mysqlDateTime(date = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23'
+    }).formatToParts(date);
+    const part = (type) => {
+      const found = parts.find(item => item.type === type);
+      return found ? found.value : '00';
+    };
+    return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}:${part('second')}`;
+  }
+
+  // @c.us / @s.whatsapp.net become 91xxxxxxxxxx@c.us. @lid is not a phone.
+  jidToWaChatId(jid) {
+    const raw = String(jid || '').trim().toLowerCase();
+    if (!raw) return '';
+    if (raw.includes('@g.us')) {
+      const group = raw.match(/(\d+(?:-\d+)?@g\.us)/);
+      return group ? group[1] : raw;
+    }
+    if (raw.includes('broadcast') || raw.includes('newsletter')) return raw;
+    if (raw.endsWith('@lid')) return '';
+    const digits = this.normalizePhoneDigits(raw.split('@')[0]);
+    return digits ? digits + '@c.us' : '';
+  }
+
+  phoneDigitsFromLabel(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const jid = raw.match(/(\d{8,15})@c\.us/i);
+    if (jid) return this.normalizePhoneDigits(jid[1]);
+    if (/[a-z]/i.test(raw)) return '';
+    return this.normalizePhoneDigits(raw.replace(/\D/g, ''));
+  }
+
+  // Match waValidateWhatsAppPhone: 10-digit Indian mobiles are stored as 91 + digits.
+  normalizePhoneDigits(digits) {
+    let d = String(digits || '').replace(/\D/g, '');
+    if (d.startsWith('00')) d = d.slice(2);
+    d = d.replace(/^0+/, '');
+    if (d.length === 10 && /^[6-9]/.test(d)) d = '91' + d;
+    if (d.length < 8 || d.length > 15 || d[0] === '0') return '';
+    if (/^(\d)\1+$/.test(d)) return '';
+    if (d.startsWith('91') && d.length === 12 && !/^91[6-9]\d{9}$/.test(d)) return '';
+    return d;
+  }
+
+  saneTimestamp(value) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 1000000000 && n < 20000000000) return Math.floor(n);
+    return Math.floor(Date.now() / 1000);
+  }
+
+  // URL phone= wins, then the jid parsed from a message data-id, then the header.
+  resolveWaChatId(contactInfo, messageJid = '') {
+    let url = '';
+    try { url = this.page && this.page.url ? this.page.url() : ''; } catch (e) { url = ''; }
+    const fromUrl = String(url).match(/[?&]phone=(\d{6,15})/);
+    if (fromUrl) {
+      const digits = this.normalizePhoneDigits(fromUrl[1]);
+      if (digits) return digits + '@c.us';
+    }
+
+    const fromMessage = this.jidToWaChatId(messageJid);
+    if (fromMessage) return fromMessage;
+
+    const direct = contactInfo && contactInfo.wa_chat_id ? String(contactInfo.wa_chat_id).trim().toLowerCase() : '';
+    const fromHeader = this.jidToWaChatId(direct);
+    if (fromHeader) return fromHeader;
+
+    const fromStatus = this.phoneDigitsFromLabel(contactInfo && contactInfo.status);
+    if (fromStatus) return fromStatus + '@c.us';
+    const fromName = this.phoneDigitsFromLabel(contactInfo && contactInfo.name);
+    if (fromName) return fromName + '@c.us';
+
+    // Name match against known chats / roster
+    if (contactInfo && contactInfo.name) {
+      const cleanName = String(contactInfo.name).trim().toLowerCase();
+      if (this.privacyFilter.nameToJidMap && this.privacyFilter.nameToJidMap.has(cleanName)) {
+        return this.privacyFilter.nameToJidMap.get(cleanName);
+      }
+    }
+
+    // "Message yourself" has no phone in the header. It is the linked account.
+    if (contactInfo && contactInfo.is_self && this.phoneNumber) {
+      const selfDigits = this.normalizePhoneDigits(String(this.phoneNumber));
+      if (selfDigits) return selfDigits + '@c.us';
+    }
+    return '';
+  }
+
+  async scrollOpenChatToEnd() {
+    if (!this.page) return;
+    try {
+      await this.page.evaluate(() => {
+        const nodes = Array.from(document.querySelectorAll('#main div'));
+        let best = null;
+        let bestHeight = 0;
+        for (const node of nodes) {
+          if (node.scrollHeight > node.clientHeight + 40 && node.clientHeight > 200 && node.scrollHeight > bestHeight) {
+            best = node;
+            bestHeight = node.scrollHeight;
+          }
+        }
+        if (best) best.scrollTop = best.scrollHeight;
+      });
+      await new Promise(r => setTimeout(r, 700));
+    } catch (e) {}
+  }
+
+  async ingestOpenChat(knownWaChatId = '') {
+    if (!this.page || !this.hasBridgeSecret()) return;
+    await this.scrollOpenChatToEnd();
+    let messages = [];
+    let chatInfo = null;
+    try {
+      const scraped = await this.page.evaluate(() => {
+        if (!window.WABridge) return { messages: [], chatInfo: null };
+        return {
+          messages: window.WABridge.getMessages(),
+          chatInfo: window.WABridge.getContactInfo()
+        };
+      });
+      messages = (scraped && scraped.messages) || [];
+      chatInfo = scraped && scraped.chatInfo;
+    } catch (e) {
+      this.log('debug', 'Open-chat scrape failed', e.message);
+      return;
+    }
+
+    const jidCounts = new Map();
+    for (const msg of messages) {
+      const jid = msg && msg.wa_chat_id ? String(msg.wa_chat_id).toLowerCase() : '';
+      if (!jid) continue;
+      jidCounts.set(jid, (jidCounts.get(jid) || 0) + 1);
+    }
+    let messageJid = '';
+    let messageJidCount = 0;
+    for (const [jid, count] of jidCounts) {
+      if (count > messageJidCount) {
+        messageJid = jid;
+        messageJidCount = count;
+      }
+    }
+
+    const waChatId = String(
+      this.jidToWaChatId(knownWaChatId) || this.resolveWaChatId(chatInfo, messageJid) || ''
+    ).trim().toLowerCase();
+    if (!waChatId) {
+      const incomingOnScreen = messages.filter(msg => msg && msg.wa_msg_id && !msg.from_me).length;
+      if (incomingOnScreen) {
+        this.noticeOnce('no-jid', 'info', `Open chat has ${incomingOnScreen} incoming message(s) but no WhatsApp number — not stored`);
+      } else {
+        this.log('debug', 'Skipping ingest: empty wa_chat_id');
+      }
+      return;
+    }
+
+    const fresh = [];
+    const seenBatch = new Set();
+    for (const msg of messages) {
+      if (!msg || !msg.wa_msg_id) continue;
+      const id = String(msg.wa_msg_id);
+      if (this.ingestedMsgIds.has(id) || seenBatch.has(id)) continue;
+      seenBatch.add(id);
+      if (chatInfo && chatInfo.is_self) {
+        // In "Message yourself", all messages show as from_me in WhatsApp Web.
+        // If it matches an echo we sent from this bridge, keep it from_me/ingested.
+        // If it does NOT match our echo, it is a reply typed on the phone — mark it incoming!
+        if (this.takeOutboundEcho(waChatId, msg.body)) {
+          this.rememberIngested(id);
+          continue;
+        }
+        msg.from_me = false;
+      } else if (msg.from_me) {
+        // Our own send is already stored. A second copy, or a message typed on
+        // the phone in the last 20 minutes, is still worth keeping.
+        if (this.takeOutboundEcho(waChatId, msg.body)) {
+          this.rememberIngested(id);
+          continue;
+        }
+        const age = Math.floor(Date.now() / 1000) - this.saneTimestamp(msg.timestamp);
+        if (age > 6 * 60 * 60) {
+          this.rememberIngested(id);
+          continue;
+        }
+      }
+      fresh.push(msg);
+    }
+    if (!fresh.length) return;
+
+    const allowedMessages = [];
+    let filteredMessages = 0;
+    for (const msg of fresh) {
+      const enriched = {
+        ...msg,
+        wa_chat_id: waChatId,
+        chat_name: (chatInfo && chatInfo.name) || '',
+        chat_avatar: (chatInfo && chatInfo.avatar) || '',
+        sender_wa_id: msg.from_me ? 'me' : waChatId,
+        sender_name: msg.from_me ? 'You' : ((chatInfo && chatInfo.name) || ''),
+        sender_avatar: (chatInfo && chatInfo.avatar) || '',
+        timestamp: this.saneTimestamp(msg.timestamp)
+      };
+      if (!enriched.wa_chat_id) continue;
+      const chatContext = {
+        wa_chat_id: enriched.wa_chat_id,
+        chat_name: enriched.chat_name,
+        chat_type: enriched.wa_chat_id.includes('@g.us') ? 'group' :
+          (enriched.wa_chat_id.includes('broadcast') || enriched.wa_chat_id.includes('channel') ? 'broadcast' : 'individual')
+      };
+      const allowed = this.isMessageAllowed(enriched, chatContext);
+      if (allowed.allowed) {
+        allowedMessages.push({
+          ...enriched,
+          chat_type: chatContext.chat_type,
+          metadata: { ...(enriched.metadata || {}), filter_reason: allowed.reason }
+        });
+      } else {
+        filteredMessages++;
+        this.log('debug', `Filtered out message from ${enriched.sender_name} in chat ${enriched.wa_chat_id} - reason: ${allowed.reason}`);
+      }
+    }
+
+    if (!allowedMessages.length) {
+      if (filteredMessages) {
+        this.noticeOnce('filtered:' + waChatId, 'info', `Dropped ${filteredMessages} incoming message(s) for ${waChatId} (not on the school roster)`);
+      }
+      return;
+    }
+
+    const result = await this.apiPost('api_whatsapp_ingest.php', allowedMessages);
+    for (const msg of allowedMessages) this.rememberIngested(msg.wa_msg_id);
+    this.lastMsgTimestamp = Math.max(this.lastMsgTimestamp, ...allowedMessages.map(m => m.timestamp));
+    const incomingCount = allowedMessages.filter(msg => !msg.from_me).length;
+    const phoneSentCount = allowedMessages.length - incomingCount;
+    const inserted = result && result.inserted != null ? ` (stored ${result.inserted})` : '';
+    if (incomingCount) this.log('info', `Ingested ${incomingCount} incoming message(s) for ${waChatId}${inserted}`);
+    if (phoneSentCount) this.log('info', `Stored ${phoneSentCount} message(s) typed on the phone for ${waChatId}${inserted}`);
+  }
+
+  async ingestVisibleUnread(limit = 5) {
+    if (this.sending || !this.page || !this.hasBridgeSecret()) return;
+    const seen = new Set();
+    for (let opened = 0; opened < limit; opened++) {
+      if (this.sending) return;
+      let rows = [];
+      try {
+        rows = await this.page.evaluate(() => {
+          if (!window.WABridge || !window.WABridge.getUnreadChatPhones) return [];
+          return window.WABridge.getUnreadChatPhones();
+        });
+      } catch (e) {
+        this.log('debug', 'Unread list scrape failed', e.message);
+        return;
+      }
+
+      const row = (rows || []).find(item => {
+        const key = String((item && (item.phone || item.title)) || '') + ':' + (item && item.index);
+        return item && !seen.has(key);
+      });
+      if (!row) return;
+      seen.add(String((row.phone || row.title) || '') + ':' + row.index);
+
+      const phone = this.phoneDigitsFromLabel(row.phone || row.title);
+      const title = String(row.title || '').trim().toLowerCase();
+      const knownByName = !phone && title && this.privacyFilter.rosterNames && this.privacyFilter.rosterNames.has(title);
+      if (!phone && !knownByName) {
+        if (title) this.noticeOnce('unread-skip:' + title, 'info', `Left unread chat "${String(row.title).slice(0, 40)}" closed — it is not a school contact`);
+        continue;
+      }
+
+      let openedOk = false;
+      if (phone) {
+        const waChatId = phone + '@c.us';
+        let currentUrl = '';
+        try { currentUrl = this.page.url(); } catch (e) { currentUrl = ''; }
+        if (!currentUrl.includes('phone=' + phone)) {
+          openedOk = await this.openChat(waChatId);
+        } else {
+          openedOk = true;
+        }
+        if (!openedOk || this.sending) continue;
+        try {
+          await this.ingestOpenChat(waChatId);
+        } catch (e) {
+          this.log('debug', 'Unread chat ingest failed', e.message);
+        }
+      } else if (Number.isInteger(row.index)) {
+        openedOk = await this.openUnreadRow(row.index);
+        if (!openedOk || this.sending) continue;
+        try {
+          await this.ingestOpenChat('');
+        } catch (e) {
+          this.log('debug', 'Unread chat ingest failed', e.message);
+        }
+      }
+    }
+  }
+
+  async openUnreadRow(index) {
+    if (!this.page) return false;
+    const clicked = await this.page.evaluate((idx) => {
+      const root = document.querySelector('#pane-side') || document.querySelector('[data-testid="chat-list"]');
+      if (!root) return false;
+      const rows = root.querySelectorAll('[role="listitem"], [role="row"], [data-testid="cell-frame-container"]');
+      const el = rows[idx];
+      if (!el) return false;
+      const target = el.querySelector('[role="gridcell"]') || el;
+      target.click();
+      return true;
+    }, index);
+    if (!clicked) return false;
+    return await this.waitForComposer(12000);
+  }
+
+  async revisitRecentOutbound() {
+    if (this.sending || !this.page || !this.outboundWatch.length) return;
+    if (Date.now() - (this.lastRevisitAt || 0) < 15000) return;
+    this.lastRevisitAt = Date.now();
+    const waChatId = this.outboundWatch[this.outboundWatchCursor % this.outboundWatch.length];
+    this.outboundWatchCursor++;
+    const digits = String(waChatId || '').split('@')[0].replace(/\D/g, '');
+    let url = '';
+    try { url = this.page.url(); } catch (e) { url = ''; }
+    if (digits && url.includes('phone=' + digits)) {
+      await this.ingestOpenChat(waChatId);
+      return;
+    }
+    // Never allow full page reload on background revisit
+    const opened = await this.openChat(waChatId, false);
+    if (!opened || this.sending) return;
+    await this.ingestOpenChat(waChatId);
+  }
+
+  async pageSessionState() {
+    if (!this.page) return { logged: false, qr: false };
+    try {
+      return await this.page.evaluate(() => {
+        const hasChatList = !!document.querySelector('[data-testid="chat-list"], #pane-side');
+        const hasMain = !!document.querySelector('#main');
+        const hasComposer = !!document.querySelector('footer [contenteditable="true"]');
+        const logged = hasChatList || hasMain || hasComposer || (window.WABridge && typeof window.WABridge.isLoggedIn === 'function' && window.WABridge.isLoggedIn());
+
+        // A real QR requires an actual visible QR canvas or qrcode container
+        const qrCanvas = document.querySelector('canvas[aria-label*="QR" i], canvas[aria-label*="Scan" i], div[data-ref] canvas');
+        const qrBox = document.querySelector('[data-testid="qrcode"]');
+        const qr = !logged && !!(qrBox || (qrCanvas && qrCanvas.width > 50));
+        return { logged: !!logged, qr: !!qr };
+      });
+    } catch (e) {
+      return { logged: false, qr: false };
+    }
+  }
+
+  async handleSessionLost() {
+    if (!this.isConnected) return;
+    this.isConnected = false;
+    this.log('warn', 'WhatsApp session lost — waiting for a new QR scan');
+    this.stopPolling();
+    try { await this.captureQR(); } catch (e) {
+      this.log('debug', 'QR recapture failed', e.message);
+    }
+    try { await this.saveSessionToAPI(); } catch (e) {}
+    this.startSessionWatcher();
+  }
+
+  async pollMessages() {
+    if (!this.isConnected || !this.page || this.pollingNow) return;
+    this.pollingNow = true;
+    try {
+      const state = await this.pageSessionState();
+      if (!state.logged) {
+        // A send navigates the page. Only treat the real QR screen as a logout.
+        if (this.sending || !state.qr) {
+          this.consecutiveQrDetections = 0;
+          return;
+        }
+        this.consecutiveQrDetections = (this.consecutiveQrDetections || 0) + 1;
+        // Require 5 consecutive detections (~15s) before declaring session lost
+        if (this.consecutiveQrDetections < 5) {
+          return;
+        }
+        this.consecutiveQrDetections = 0;
+        await this.handleSessionLost();
+        return;
+      }
+      this.consecutiveQrDetections = 0;
+
+      // Do not navigate away while a send owns the open chat.
+      if (!this.sending) {
+        try {
+          await this.ingestOpenChat();
+        } catch (e) {
+          this.log('debug', 'Open-chat ingest failed', e.message);
+        }
+        try {
+          await this.ingestVisibleUnread(5);
+        } catch (e) {
+          this.log('debug', 'Unread ingest failed', e.message);
+        }
+        try {
+          await this.revisitRecentOutbound();
+        } catch (e) {
+          this.log('debug', 'Recent-chat ingest failed', e.message);
+        }
+      }
+
+      await this.apiPost('api_whatsapp_session.php?action=poll', { last_poll_at: new Date().toISOString() });
+    } finally {
+      this.pollingNow = false;
+    }
   }
   
   async checkCommandFlags() {
-    const qrFlag = `/tmp/whatsapp_qr_refresh_${this.config.sessionName}`;
-    if (fs.existsSync(qrFlag)) {
-      fs.unlinkSync(qrFlag);
+    const qrFlags = [
+      path.join(this.config.ipcDir, `whatsapp_qr_refresh_${this.config.sessionName}`),
+      path.join(this.config.ipcDir, 'whatsapp_qr_refresh_default')
+    ];
+    let refreshTriggered = false;
+    for (const f of qrFlags) {
+      if (fs.existsSync(f)) {
+        try { fs.unlinkSync(f); } catch (e) {}
+        refreshTriggered = true;
+      }
+    }
+    if (refreshTriggered) {
       await this.refreshQR();
     }
     
     // Check for logout request
-    const logoutFlag = `/tmp/whatsapp_logout_${this.config.sessionName}`;
-    if (fs.existsSync(logoutFlag)) {
-      fs.unlinkSync(logoutFlag);
+    const logoutFlags = [
+      path.join(this.config.ipcDir, `whatsapp_logout_${this.config.sessionName}`),
+      path.join(this.config.ipcDir, 'whatsapp_logout_default')
+    ];
+    let logoutTriggered = false;
+    for (const f of logoutFlags) {
+      if (fs.existsSync(f)) {
+        try { fs.unlinkSync(f); } catch (e) {}
+        logoutTriggered = true;
+      }
+    }
+    if (logoutTriggered) {
       await this.logout();
     }
   }
@@ -908,7 +1725,7 @@ class WhatsAppBridge extends EventEmitter {
     const digits = String(phoneRaw || '').replace(/\D/g, '');
     if (digits.length < 10) throw new Error('Invalid phone number');
 
-    const dbgFile = '/tmp/whatsapp_pair_debug.txt';
+    const dbgFile = path.join(this.config.ipcDir, 'whatsapp_pair_debug.txt');
     try { fs.writeFileSync(dbgFile, ''); } catch (e) {}
     const dbg = (m) => { try { fs.appendFileSync(dbgFile, new Date().toISOString() + ' ' + m + '\n'); } catch (e) {} };
 
@@ -1081,7 +1898,8 @@ class WhatsAppBridge extends EventEmitter {
   startPairingWatcher() {
     if (this.pairingTimer) return;
     this.pairingTimer = setInterval(async () => {
-      const reqFile = '/tmp/whatsapp_pair_request';
+      const reqFile = path.join(this.config.ipcDir, 'whatsapp_pair_request');
+      const codeFile = path.join(this.config.ipcDir, 'whatsapp_pair_code.txt');
       if (!fs.existsSync(reqFile)) return;
       let phone = '';
       try { phone = fs.readFileSync(reqFile, 'utf8').trim(); } catch (e) {}
@@ -1089,10 +1907,10 @@ class WhatsAppBridge extends EventEmitter {
       try {
         this.pairingActive = true;
         const code = await this.requestPairingCode(phone);
-        fs.writeFileSync('/tmp/whatsapp_pair_code.txt', code);
+        fs.writeFileSync(codeFile, code);
         this.log('info', 'Pairing code generated: ' + code);
       } catch (e) {
-        fs.writeFileSync('/tmp/whatsapp_pair_code.txt', 'ERROR: ' + e.message);
+        fs.writeFileSync(codeFile, 'ERROR: ' + e.message);
         this.log('error', 'Pairing code failed', e.message);
       } finally {
         this.pairingActive = false;
@@ -1131,15 +1949,24 @@ class WhatsAppBridge extends EventEmitter {
     const dir = this.config.userDataDir;
     const lock = path.join(dir, 'SingletonLock');
     const socket = path.join(dir, 'SingletonSocket');
+    const lockfile = path.join(dir, 'lockfile');
 
-    if (!fs.existsSync(lock) && !fs.existsSync(socket)) return;
+    if (!fs.existsSync(lock) && !fs.existsSync(socket) && !fs.existsSync(lockfile)) return;
 
-    // Chrome writes SingletonLock as "<hostname>-<pid>"
+    // Chrome writes SingletonLock as "<hostname>-<pid>" (symlink on POSIX, regular file/handle on Windows)
     let holderPid = 0;
     try {
-      const target = String(fs.readlinkSync(lock));
-      const m = target.match(/-(\d+)$/);
-      if (m) holderPid = parseInt(m[1], 10);
+      if (fs.existsSync(lock)) {
+        const stat = fs.lstatSync(lock);
+        let target = '';
+        if (stat.isSymbolicLink()) {
+          target = String(fs.readlinkSync(lock));
+        } else {
+          target = fs.readFileSync(lock, 'utf8');
+        }
+        const m = target.match(/-(\d+)$/) || target.match(/(\d+)/);
+        if (m) holderPid = parseInt(m[1], 10);
+      }
     } catch (e) {}
 
     let holderAlive = false;
@@ -1149,17 +1976,36 @@ class WhatsAppBridge extends EventEmitter {
 
     // A live holder at this point can only be an orphan from a previous run.
     if (holderAlive) {
-      this.log('warn', `Killing orphaned Chrome (pid ${holderPid}) holding the profile`);
-      try { process.kill(holderPid, 'SIGKILL'); } catch (e) {}
+      this.log('warn', `Terminating orphaned Chrome (pid ${holderPid}) holding the profile`);
+      if (process.platform === 'win32') {
+        try {
+          require('child_process').execSync(`taskkill /F /PID ${holderPid}`, { stdio: 'ignore' });
+        } catch (e) {
+          try { process.kill(holderPid); } catch (e2) {}
+        }
+      } else {
+        try { process.kill(holderPid, 'SIGKILL'); } catch (e) {
+          try { process.kill(holderPid, 'SIGTERM'); } catch (e2) {}
+        }
+      }
+
       const start = Date.now();
-      while (Date.now() - start < 5000) {
+      while (Date.now() - start < 3000) {
         try { process.kill(holderPid, 0); } catch (e) { break; }
-        try { require('child_process').execSync('sleep 0.2'); } catch (e) {}
+        try {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+        } catch (e) {}
       }
     }
 
-    for (const f of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
-      try { fs.unlinkSync(path.join(dir, f)); } catch (e) {}
+    const lockCandidates = ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile'];
+    for (const f of lockCandidates) {
+      const p = path.join(dir, f);
+      try {
+        if (fs.existsSync(p)) fs.unlinkSync(p);
+      } catch (e) {
+        this.log('debug', `Could not unlink profile lock ${f}: ${e.message}`);
+      }
     }
     this.log('info', 'Cleared Chrome profile lock');
   }
@@ -1212,20 +2058,23 @@ class WhatsAppBridge extends EventEmitter {
   // ============ OUTBOUND MESSAGING ============
   
   async processOutboundQueue() {
-    if (!this.isConnected) return;
+    if (!this.isConnected || this.sending || this.pollingNow) return;
+    this.sending = true;
     try {
       const response = await this.apiGet('api_whatsapp_outbound_queue.php', {
         status: 'queued',
         limit: 10
       });
       
-      if (response.success && response.data.length > 0) {
+      if (response.success && response.data && response.data.length > 0) {
         for (const item of response.data) {
           await this.sendQueuedMessage(item);
         }
       }
     } catch (e) {
       this.log('error', 'Failed to process outbound queue', e.message);
+    } finally {
+      this.sending = false;
     }
   }
   
@@ -1241,12 +2090,15 @@ class WhatsAppBridge extends EventEmitter {
         attempts: item.attempts + 1
       });
       
-      // Get chat WA ID
-      const chatResponse = await this.apiGet('api_whatsapp_chat_by_id.php', { id: item.chat_id });
-      if (!chatResponse.success || !chatResponse.data.wa_chat_id) {
-        throw new Error('Chat not found');
+      // Queue rows include wa_chat_id; look it up only when the payload omitted it.
+      let waChatId = item.wa_chat_id || '';
+      if (!waChatId) {
+        const chatResponse = await this.apiGet('api_whatsapp_chat_by_id.php', { id: item.chat_id });
+        if (!chatResponse.success || !chatResponse.data || !chatResponse.data.wa_chat_id) {
+          throw new Error('Chat not found');
+        }
+        waChatId = chatResponse.data.wa_chat_id;
       }
-      const waChatId = chatResponse.data.wa_chat_id;
       
       let result;
       switch (item.msg_type) {
@@ -1269,24 +2121,39 @@ class WhatsAppBridge extends EventEmitter {
           throw new Error(`Unknown message type: ${item.msg_type}`);
       }
       
-      if (result.success) {
-        // Update queue status
+      if (result && result.success) {
+        // Remember the text before the status write. A failed clock update must
+        // not make the next scrape store this same bubble a second time.
+        this.rememberOutboundBody(waChatId, item.body);
+        // Update queue status only after the bridge actually sent
         await this.apiPost('api_whatsapp_outbound_update.php', {
           id: queueId,
           status: 'sent',
-          sent_at: new Date().toISOString()
+          sent_at: this.mysqlDateTime()
         });
         
-        // Update the temporary message with real WA message ID
-        await this.apiPost('api_whatsapp_update_temp_msg.php', {
-          temp_msg_id: item.temp_msg_id,
-          wa_msg_id: result.wa_msg_id,
-          status: 'sent'
-        });
+        // Missing temp id must not fail the send or skip it
+        if (item.temp_msg_id) {
+          try {
+            await this.apiPost('api_whatsapp_update_temp_msg.php', {
+              temp_msg_id: item.temp_msg_id,
+              wa_msg_id: result.wa_msg_id,
+              status: 'sent'
+            });
+          } catch (e) {
+            this.log('warn', `temp msg update failed for queue ${queueId}`, e.message);
+          }
+        }
         
+        this.rememberOutboundChat(waChatId);
+        try {
+          await this.ingestOpenChat(waChatId);
+        } catch (e) {
+          this.log('warn', `Post-send ingest failed for queue ${queueId}`, e.message);
+        }
         this.log('info', `Message ${queueId} sent successfully`);
       } else {
-        throw new Error(result.error || 'Send failed');
+        throw new Error((result && result.error) || 'Send failed');
       }
       
     } catch (error) {
@@ -1306,13 +2173,15 @@ class WhatsAppBridge extends EventEmitter {
         } catch (e) {
           this.log('error', `Could not mark queue ${queueId} failed`, e.message);
         }
-        try {
-          await this.apiPost('api_whatsapp_update_temp_msg.php', {
-            temp_msg_id: item.temp_msg_id,
-            status: 'failed'
-          });
-        } catch (e) {
-          this.log('debug', `temp msg update skipped for queue ${queueId}`, e.message);
+        if (item.temp_msg_id) {
+          try {
+            await this.apiPost('api_whatsapp_update_temp_msg.php', {
+              temp_msg_id: item.temp_msg_id,
+              status: 'failed'
+            });
+          } catch (e) {
+            this.log('debug', `temp msg update skipped for queue ${queueId}`, e.message);
+          }
         }
       } else {
         try {
@@ -1342,16 +2211,42 @@ class WhatsAppBridge extends EventEmitter {
     }
   }
 
-  async openChat(waChatId) {
+  async openChat(waChatId, allowDeepLink = true) {
     const raw = String(waChatId || '');
     const digits = raw.split('@')[0].replace(/\D/g, '');
     const isGroup = raw.includes('@g.us');
 
-    // Individuals: deep-link straight to the conversation (far more reliable
-    // than the in-app search, whose selectors change often).
-    if (!isGroup && digits.length >= 6) {
+    // 1. Try finding and clicking in sidebar without navigating!
+    try {
+      const clicked = await this.page.evaluate((targetDigits, targetRaw) => {
+        const root = document.querySelector('#pane-side') || document.querySelector('[data-testid="chat-list"]');
+        if (!root) return false;
+        const rows = root.querySelectorAll('[role="listitem"], [role="row"], [data-testid="cell-frame-container"]');
+        for (const row of rows) {
+          const rowText = (row.innerText || '').replace(/\D/g, '');
+          const rowData = [
+            row.getAttribute('data-id'),
+            row.getAttribute('data-chat-id'),
+            row.querySelector('[data-id]')?.getAttribute('data-id') || '',
+            row.querySelector('[data-chat-id]')?.getAttribute('data-chat-id') || ''
+          ].join(' ');
+          if ((targetDigits && targetDigits.length >= 6 && (rowText.includes(targetDigits) || rowData.includes(targetDigits))) || (targetRaw && rowData.includes(targetRaw))) {
+            const cell = row.querySelector('[role="gridcell"]') || row;
+            cell.click();
+            return true;
+          }
+        }
+        return false;
+      }, digits, raw);
+      if (clicked && await this.waitForComposer(5000)) return true;
+    } catch (e) {}
+
+    // 2. Individuals: deep-link straight to the conversation ONLY if allowed
+    if (allowDeepLink && !isGroup && digits.length >= 6) {
       const target = `https://web.whatsapp.com/send?phone=${digits}`;
-      if (!this.page.url().includes(`phone=${digits}`)) {
+      let currentUrl = '';
+      try { currentUrl = this.page.url(); } catch (e) {}
+      if (!currentUrl.includes(`phone=${digits}`)) {
         this.log('debug', 'Opening chat via send link: ' + digits);
         await this.page.goto(target, { waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {});
       }
@@ -1359,7 +2254,7 @@ class WhatsAppBridge extends EventEmitter {
       this.log('warn', 'Composer not ready after deep link, falling back to search');
     }
 
-    // Fallback: in-app search
+    // 3. Fallback: in-app search
     try {
       if (!this.page.url().startsWith('https://web.whatsapp.com')) {
         await this.page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded' }).catch(() => {});
@@ -1368,11 +2263,11 @@ class WhatsAppBridge extends EventEmitter {
         const s = document.querySelector('[aria-label="Search"], [data-testid="chat-list-search"], div[contenteditable="true"][data-tab="3"]');
         if (s) { s.click(); if (s.focus) s.focus(); }
       });
-      await new Promise(r => setTimeout(r, 800));
-      await this.page.keyboard.type(digits || raw, { delay: 60 });
-      await new Promise(r => setTimeout(r, 1800));
+      await new Promise(r => setTimeout(r, 600));
+      await this.page.keyboard.type(digits || raw, { delay: 50 });
+      await new Promise(r => setTimeout(r, 1500));
       await this.page.keyboard.press('Enter');
-      return await this.waitForComposer(15000);
+      return await this.waitForComposer(10000);
     } catch (e) {
       this.log('warn', 'openChat fallback failed', e.message);
       return false;
@@ -1548,47 +2443,16 @@ class WhatsAppBridge extends EventEmitter {
     return { success: false, error: 'Contact sending not yet implemented' };
   }
   
-  async openChat(waChatId) {
-    // Search for chat and click
-    await this.page.evaluate(async (chatId) => {
-      // Try direct click
-      let chatEl = document.querySelector(`[data-chat-id="${chatId}"]`);
-      if (chatEl) {
-        chatEl.click();
-        return true;
-      }
-      
-      // Try search
-      const searchBtn = document.querySelector('[data-testid="chat-list-search"], [aria-label="Search"]');
-      if (searchBtn) {
-        searchBtn.click();
-        await new Promise(r => setTimeout(r, 300));
-        
-        const searchInput = document.querySelector('[data-testid="chat-list-search-input"], input[placeholder*="Search"]');
-        if (searchInput) {
-          searchInput.focus();
-          searchInput.value = chatId.split('@')[0]; // Search by phone
-          searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-          await new Promise(r => setTimeout(r, 1000));
-          
-          const result = document.querySelector('[data-testid="chat-list-item"], [role="listitem"]');
-          if (result) result.click();
-          return true;
-        }
-      }
-      return false;
-    }, waChatId);
-  }
-  
   async getLastSentMessageId(waChatId) {
-    // Get the most recent outgoing message ID
+    // Real WhatsApp id only. An invented id would detach the pending bubble
+    // from the row the replica already stored.
     return await this.page.evaluate(() => {
-      const msgs = document.querySelectorAll('[data-testid="msg-container"].message-out, .message-out');
-      if (msgs.length > 0) {
-        const last = msgs[msgs.length - 1];
-        return last.getAttribute('data-id') || last.getAttribute('id') || 'unknown_' + Date.now();
+      const msgs = document.querySelectorAll('#main [data-id^="true_"], [data-testid="msg-container"].message-out, .message-out');
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const id = msgs[i].getAttribute('data-id') || '';
+        if (id.startsWith('true_')) return id;
       }
-      return 'unknown_' + Date.now();
+      return '';
     });
   }
   
@@ -1655,18 +2519,26 @@ class WhatsAppBridge extends EventEmitter {
   // ============ API COMMUNICATION ============
   
   async apiPost(endpoint, data) {
+    const isIngest = String(endpoint).split('?')[0].endsWith('api_whatsapp_ingest.php');
+    if (isIngest && !this.hasBridgeSecret()) {
+      throw new Error('Refusing ingest: WHATSAPP_BRIDGE_SECRET missing or shorter than 16 characters');
+    }
+
+    // Sign and send the same bytes. Axios would re-serialize an object and
+    // PHP's hash of php://input would not match.
     const payload = JSON.stringify(data);
     const signature = require('crypto')
       .createHmac('sha256', this.config.bridgeSecret)
       .update(payload)
       .digest('hex');
     
-    return axios.post(`${this.config.apiBaseUrl}/${endpoint}`, data, {
+    return axios.post(`${this.config.apiBaseUrl}/${endpoint}`, payload, {
       headers: {
         'Content-Type': 'application/json',
         'X-WA-Signature': signature,
         'X-Admin-Test': '1'
       },
+      transformRequest: [(body) => body],
       timeout: 30000
     }).then(r => r.data).catch(e => {
       this.log('error', `API POST ${endpoint} failed`, e.message);
@@ -1724,6 +2596,18 @@ class WhatsAppBridge extends EventEmitter {
 async function main() {
   const bridge = new WhatsAppBridge();
   
+  // Windows console signal compatibility
+  if (process.platform === 'win32') {
+    const readline = require('readline');
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+    rl.on('SIGINT', () => {
+      process.emit('SIGINT');
+    });
+  }
+
   // Handle signals
   process.on('SIGINT', async () => {
     console.log('\nReceived SIGINT, shutting down...');
@@ -1733,6 +2617,12 @@ async function main() {
   
   process.on('SIGTERM', async () => {
     console.log('\nReceived SIGTERM, shutting down...');
+    await bridge.shutdown();
+    process.exit(0);
+  });
+
+  process.on('SIGBREAK', async () => {
+    console.log('\nReceived SIGBREAK, shutting down...');
     await bridge.shutdown();
     process.exit(0);
   });
@@ -1768,5 +2658,8 @@ async function main() {
 if (require.main === module) {
   main();
 }
+
+WhatsAppBridge.findChrome = findChrome;
+WhatsAppBridge.getBridgeTempDir = getBridgeTempDir;
 
 module.exports = WhatsAppBridge;

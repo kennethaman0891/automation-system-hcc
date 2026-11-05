@@ -64,6 +64,7 @@ class WhatsAppStore extends EventTarget {
     this.setupEventListeners();
     this.connectSSE();
     this.startOutboundPolling();
+    this.startInboundRefresh();
     
     // Load initial chats
     await this.loadChats();
@@ -357,7 +358,12 @@ class WhatsAppStore extends EventTarget {
     });
     
     if (!response.ok) {
-      throw new Error(`API ${response.status}: ${response.statusText}`);
+      let message = `API ${response.status}: ${response.statusText}`;
+      try {
+        const body = await response.json();
+        if (body && body.error) message = String(body.error);
+      } catch (parseErr) {}
+      throw new Error(message);
     }
     
     return response.json();
@@ -403,7 +409,7 @@ class WhatsAppStore extends EventTarget {
           // Clear old chats not in new batch (for filter changes)
           const newIds = new Set(response.data.map(c => c.id));
           for (const [id, chat] of this.chats) {
-            if (!newIds.has(id) && !chat.is_pinned) {
+            if (!newIds.has(id) && !chat.is_pinned && String(id) !== String(this.activeChatId)) {
               this.chats.delete(id);
               await this.delete('chats', id);
             }
@@ -443,49 +449,21 @@ class WhatsAppStore extends EventTarget {
    * Create or retrieve a chat session (individual student, custom phone, group, or broadcast)
    */
   async getOrCreateChat(chatData = {}) {
-    try {
-      const response = await this.apiPost(`${this.getBaseUrl()}/api_whatsapp_chats.php`, chatData);
-      if (response && response.success && (response.chat || response.data)) {
-        const chat = response.chat || response.data;
-        this.chats.set(chat.id, chat);
-        await this.saveChat(chat);
-        
-        // Dispatch store events
-        this.dispatchEvent(new CustomEvent('chat:created', { detail: { chat } }));
-        this.dispatchEvent(new CustomEvent('chats:updated', { detail: { chats: Array.from(this.chats.values()) } }));
-        
-        // Immediately activate this chat
-        this.setActiveChat(chat.id);
-        return chat;
-      } else {
-        throw new Error(response?.error || 'Failed to start chat');
-      }
-    } catch (error) {
-      console.warn('Backend getOrCreateChat notice, falling back to local chat session:', error);
-      const tempId = Date.now();
-      const phoneDigits = String(chatData.phone || chatData.wa_chat_id || '9876543210').replace(/\D/g, '');
-      const cleanWaId = phoneDigits.includes('@') ? phoneDigits : (phoneDigits + '@c.us');
-      const fallbackChat = {
-        id: tempId,
-        wa_chat_id: cleanWaId,
-        chat_type: chatData.chat_type || 'individual',
-        name: chatData.name || ('Contact ' + (phoneDigits.length >= 4 ? phoneDigits.slice(-4) : phoneDigits)),
-        avatar_url: chatData.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(chatData.name || 'Chat')}`,
-        unread_count: 0,
-        is_pinned: 0,
-        is_archived: 0,
-        last_activity_at: new Date().toISOString(),
-        linked_student_roll: chatData.student_roll || null,
-        linked_class_key: chatData.class_key || null,
-        metadata: chatData.metadata || {}
-      };
-      this.chats.set(tempId, fallbackChat);
-      await this.saveChat(fallbackChat);
-      this.dispatchEvent(new CustomEvent('chat:created', { detail: { chat: fallbackChat } }));
-      this.dispatchEvent(new CustomEvent('chats:updated', { detail: { chats: Array.from(this.chats.values()) } }));
-      this.setActiveChat(tempId);
-      return fallbackChat;
+    const response = await this.apiPost(`${this.getBaseUrl()}/api_whatsapp_chats.php`, chatData);
+    const chat = response && (response.chat || response.data);
+    const numericId = Number(chat && chat.id);
+    if (!response || response.success !== true || !chat || !Number.isInteger(numericId) || numericId <= 0) {
+      throw new Error((response && response.error) || 'Failed to start chat');
     }
+    chat.id = numericId;
+    this.chats.set(numericId, chat);
+    await this.saveChat(chat);
+
+    this.dispatchEvent(new CustomEvent('chat:created', { detail: { chat } }));
+    this.dispatchEvent(new CustomEvent('chats:updated', { detail: { chats: Array.from(this.chats.values()) } }));
+
+    this.setActiveChat(numericId);
+    return chat;
   }
   
   async setFilter(filter) {
@@ -617,14 +595,20 @@ class WhatsAppStore extends EventTarget {
    */
   async sendMessage(chatId, data) {
     const { msg_type = 'text', body = '', media_path = null, caption = null, priority = 5 } = (data || {});
+    const numericChatId = Number(chatId);
+    const serverChatId = (Number.isInteger(numericChatId) && numericChatId > 0) ? numericChatId : null;
+    const boundChatId = serverChatId || chatId;
     
     // 1. Immediately create optimistic message in store/IndexedDB with status 'pending' (🕐)
     const tempMsgId = 'temp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-    const chat = this.chats.get(chatId) || { id: chatId, name: 'Student' };
+    const chat = this.chats.get(boundChatId)
+      || this.chats.get(chatId)
+      || this.chats.get(String(chatId))
+      || { id: boundChatId, name: 'Student' };
     const optimisticMsg = {
       id: tempMsgId,
       wa_msg_id: tempMsgId,
-      chat_id: chatId,
+      chat_id: boundChatId,
       from_me: true,
       sender_id: 'me',
       sender_name: 'You',
@@ -651,11 +635,20 @@ class WhatsAppStore extends EventTarget {
       console.warn('WhatsAppAudio.playSentSound error:', soundErr);
     }
     
-    // 3. Call server send endpoint
+    // 3. Call server send endpoint. A local temp id is not a MySQL chat.
+    if (!serverChatId) {
+      const errMsg = 'This chat is not saved on the server. Start the chat again.';
+      await this.updateMessage(tempMsgId, {
+        status: 'failed',
+        metadata: { ...optimisticMsg.metadata, error: errMsg }
+      });
+      return { success: false, error: errMsg, temp_msg_id: tempMsgId };
+    }
+
     let sendResult = null;
     try {
       sendResult = await this.apiPost(`${this.getBaseUrl()}/api_whatsapp_send.php`, {
-        chat_id: chatId,
+        chat_id: serverChatId,
         msg_type,
         body,
         media_path,
@@ -688,7 +681,7 @@ class WhatsAppStore extends EventTarget {
     //    real status set by the bridge (sent / failed) is reflected.
     [4, 10, 20, 40].forEach((delay) => {
       setTimeout(async () => {
-        try { await this.loadMessages(chatId, true); } catch (e) {}
+        try { await this.loadMessages(serverChatId, true); } catch (e) {}
       }, delay * 1000);
     });
 
@@ -1262,6 +1255,13 @@ class WhatsAppStore extends EventTarget {
     
     // New message
     await this.saveMessage(msg);
+
+    const chatKnown = this.chats.has(msg.chat_id)
+      || this.chats.has(Number(msg.chat_id))
+      || this.chats.has(String(msg.chat_id));
+    if (!chatKnown && msg.chat_id) {
+      this.loadChats(true).catch(() => {});
+    }
     
     // If incoming message from external contact, trigger audio and notification
     if (!msg.from_me) {
@@ -1303,6 +1303,46 @@ class WhatsAppStore extends EventTarget {
     this.outboundPollInterval = setInterval(() => {
       this.processOutboundQueue();
     }, 5000);
+  }
+
+  // SSE can lag while it walks older rows. Reload the open thread so a reply
+  // shows on the left without a manual refresh. Outgoing bubbles stay as they are.
+  startInboundRefresh() {
+    if (typeof setInterval === 'undefined' || this.inboundRefreshInterval) return;
+    this.inboundRefreshInterval = setInterval(() => {
+      this.pollActiveChatMessages();
+    }, 5000);
+  }
+
+  async pollActiveChatMessages() {
+    const chatId = this.activeChatId;
+    if (!chatId || this._pollingActiveChat) return;
+    this._pollingActiveChat = true;
+    try {
+      const response = await this.apiGet(`${this.getBaseUrl()}/api_whatsapp_messages.php`, {
+        chat_id: chatId,
+        page: 1,
+        per_page: 50
+      });
+      if (!response || !response.success || !Array.isArray(response.data)) return;
+      let sawInbound = false;
+      for (const msg of response.data) {
+        if (!msg || msg.id == null || msg.from_me) continue;
+        msg.chat_id = chatId;
+        const msgMap = this.messages.get(chatId)
+          || this.messages.get(Number(chatId))
+          || this.messages.get(String(chatId));
+        if (msgMap && (msgMap.has(msg.id) || msgMap.has(Number(msg.id)) || msgMap.has(String(msg.id)))) continue;
+        await this.saveMessage(msg);
+        sawInbound = true;
+      }
+      if (sawInbound && String(this.activeChatId) === String(chatId)) {
+        this.chatAction(chatId, 'mark_read').catch(() => {});
+      }
+    } catch (e) {
+    } finally {
+      this._pollingActiveChat = false;
+    }
   }
   
   async processOutboundQueue() {

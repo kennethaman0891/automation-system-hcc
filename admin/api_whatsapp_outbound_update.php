@@ -24,9 +24,21 @@ $params = [];
 if (isset($input['status'])) { $updates[] = 'status = ?'; $params[] = $input['status']; }
 if (isset($input['attempts'])) { $updates[] = 'attempts = ?'; $params[] = (int)$input['attempts']; }
 if (isset($input['error_message'])) { $updates[] = 'error_message = ?'; $params[] = $input['error_message']; }
-if (isset($input['sent_at'])) { $updates[] = 'sent_at = ?'; $params[] = $input['sent_at']; }
-if (isset($input['delivered_at'])) { $updates[] = 'delivered_at = ?'; $params[] = $input['delivered_at']; }
-if (isset($input['read_at'])) { $updates[] = 'read_at = ?'; $params[] = $input['read_at']; }
+// MySQL TIMESTAMP rejects ISO-8601 (2026-11-05T06:55:02.444Z). A bad clock must
+// not fail the status update — that left sent messages stuck on "processing".
+$normalizeSqlTime = static function ($value): ?string {
+    if ($value === null || $value === '') return null;
+    $ts = strtotime((string)$value);
+    if ($ts === false) return null;
+    return date('Y-m-d H:i:s', $ts);
+};
+foreach (['sent_at', 'delivered_at', 'read_at'] as $timeColumn) {
+    if (!isset($input[$timeColumn])) continue;
+    $sqlTime = $normalizeSqlTime($input[$timeColumn]);
+    if ($sqlTime === null) continue;
+    $updates[] = $timeColumn . ' = ?';
+    $params[] = $sqlTime;
+}
 
 if (!$updates) {
     waJsonResponse(['success' => false, 'error' => 'No fields to update'], 400);

@@ -345,9 +345,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!in_array($ext, ['xlsx', 'xls'])) {
                     $error = 'Invalid file format. Please upload an Excel (.xlsx or .xls) file.';
                 } else {
-                    $uploadDir = sys_get_temp_dir() . '/hcc_ut_imports';
+                    $uploadDir = rtrim(sys_get_temp_dir(), '/\\') . DIRECTORY_SEPARATOR . 'hcc_ut_imports';
                     if (!is_dir($uploadDir)) @mkdir($uploadDir, 0755, true);
-                    $destPath = $uploadDir . '/ut_' . bin2hex(random_bytes(8)) . '.' . $ext;
+                    $destPath = $uploadDir . DIRECTORY_SEPARATOR . 'ut_' . bin2hex(random_bytes(8)) . '.' . $ext;
 
                     if (!move_uploaded_file($file['tmp_name'], $destPath)) {
                         $error = 'Failed to process uploaded file.';

@@ -124,8 +124,13 @@ switch ($action) {
         break;
 
     case 'refresh_qr':
-        $flagFile = '/tmp/whatsapp_qr_refresh_' . session_id();
-        file_put_contents($flagFile, time());
+        $tmpDir = getenv('WHATSAPP_IPC_DIR');
+        if (!$tmpDir || !is_dir($tmpDir)) {
+            $tmpDir = (DIRECTORY_SEPARATOR !== '\\' && is_dir('/tmp')) ? '/tmp' : sys_get_temp_dir();
+        }
+        $sep = DIRECTORY_SEPARATOR;
+        @file_put_contents(rtrim($tmpDir, '/\\') . $sep . 'whatsapp_qr_refresh_default', time());
+        @file_put_contents(rtrim($tmpDir, '/\\') . $sep . 'whatsapp_qr_refresh_' . session_id(), time());
         
         waJsonResponse([
             'success' => true,
@@ -135,8 +140,13 @@ switch ($action) {
         
     case 'logout':
         // Signal bridge to logout
-        $flagFile = '/tmp/whatsapp_logout_' . session_id();
-        file_put_contents($flagFile, time());
+        $tmpDir = getenv('WHATSAPP_IPC_DIR');
+        if (!$tmpDir || !is_dir($tmpDir)) {
+            $tmpDir = (DIRECTORY_SEPARATOR !== '\\' && is_dir('/tmp')) ? '/tmp' : sys_get_temp_dir();
+        }
+        $sep = DIRECTORY_SEPARATOR;
+        @file_put_contents(rtrim($tmpDir, '/\\') . $sep . 'whatsapp_logout_default', time());
+        @file_put_contents(rtrim($tmpDir, '/\\') . $sep . 'whatsapp_logout_' . session_id(), time());
         
         // Update DB
         $db->prepare("UPDATE whatsapp_sessions SET is_connected = 0, qr_code = NULL WHERE session_name = 'default'")->execute();

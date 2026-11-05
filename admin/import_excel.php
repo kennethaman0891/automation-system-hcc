@@ -461,8 +461,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } elseif ($file['size'] > 50 * 1024 * 1024) {
                     $error = 'File exceeds the size limit.';
                 } else {
-                    $uploadDir = sys_get_temp_dir();
-                    $tmpPath = $uploadDir . '/hcc_imp_' . bin2hex(random_bytes(8)) . '.' . $ext;
+                    $uploadDir = rtrim(sys_get_temp_dir(), '/\\');
+                    $tmpPath = $uploadDir . DIRECTORY_SEPARATOR . 'hcc_imp_' . bin2hex(random_bytes(8)) . '.' . $ext;
                     if (move_uploaded_file($file['tmp_name'], $tmpPath)) {
                         try {
                             $activeSheets = scanWorkbookActiveSheets($tmpPath, $ext);

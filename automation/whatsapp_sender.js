@@ -16,9 +16,64 @@
 const puppeteer = require('puppeteer');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 
-const CHROME_PATH = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+/**
+ * Cross-platform detection of Chrome or Chromium executable.
+ * Checks: explicit path -> CHROME_PATH env -> platform standard paths -> Puppeteer cache.
+ */
+function findChrome(explicitPath) {
+    if (explicitPath && fs.existsSync(explicitPath)) return explicitPath;
+    if (process.env.CHROME_PATH && fs.existsSync(process.env.CHROME_PATH)) return process.env.CHROME_PATH;
+
+    let candidates = [];
+    if (process.platform === 'win32') {
+        const progFiles = process.env.PROGRAMFILES || 'C:\\Program Files';
+        const progFilesX86 = process.env['PROGRAMFILES(X86)'] || 'C:\\Program Files (x86)';
+        const localAppData = process.env.LOCALAPPDATA || (process.env.USERPROFILE ? path.join(process.env.USERPROFILE, 'AppData', 'Local') : '');
+
+        candidates = [
+            path.join(progFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+            path.join(progFilesX86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+            localAppData ? path.join(localAppData, 'Google', 'Chrome', 'Application', 'chrome.exe') : '',
+            // Edge fallback on Windows
+            path.join(progFilesX86, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+            path.join(progFiles, 'Microsoft', 'Edge', 'Application', 'msedge.exe')
+        ].filter(Boolean);
+    } else if (process.platform === 'darwin') {
+        candidates = [
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            path.join(os.homedir(), 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome'),
+            '/Applications/Chromium.app/Contents/MacOS/Chromium',
+            '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'
+        ];
+    } else {
+        candidates = [
+            '/usr/bin/google-chrome',
+            '/usr/bin/google-chrome-stable',
+            '/usr/bin/chromium',
+            '/usr/bin/chromium-browser',
+            '/snap/bin/chromium'
+        ];
+    }
+
+    for (const c of candidates) {
+        if (fs.existsSync(c)) return c;
+    }
+
+    try {
+        const pPath = puppeteer.executablePath ? puppeteer.executablePath() : null;
+        if (pPath && fs.existsSync(pPath)) return pPath;
+    } catch (e) {}
+
+    return null;
+}
+
+const CHROME_PATH = findChrome();
 const USER_DATA_DIR = path.join(os.homedir(), '.hcc-whatsapp-data');
+const DEFAULT_USER_AGENT = process.platform === 'win32'
+    ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36'
+    : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36';
 
 /** Puppeteer v22+ removed page.waitForTimeout — use this instead. */
 function delay(ms) {
@@ -161,26 +216,25 @@ async function sendMessage(page) {
  * Main function: launch browser, open WhatsApp Web, attach PDF, send message.
  */
 async function sendToContact(phone, message, pdfPath) {
-    const browser = await puppeteer.launch({
+    const launchOpts = {
         headless: false, // Show browser window so user can see QR scan on first run
         userDataDir: USER_DATA_DIR, // Persist login session
-        executablePath: CHROME_PATH, // Use system Chrome
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-gpu'
         ]
-    });
+    };
+    if (CHROME_PATH) launchOpts.executablePath = CHROME_PATH;
+    const browser = await puppeteer.launch(launchOpts);
 
     let page;
     try {
         page = await browser.newPage();
 
         // Set a realistic user agent so WhatsApp Web doesn't block us
-        await page.setUserAgent(
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36'
-        );
+        await page.setUserAgent(DEFAULT_USER_AGENT);
 
         // Navigate to the contact's chat
         const contactFound = await navigateToContact(page, phone);
@@ -217,10 +271,9 @@ async function sendToContact(phone, message, pdfPath) {
  * Open browser to web.whatsapp.com so the user can scan QR code once to login.
  */
 async function openForLogin() {
-    const browser = await puppeteer.launch({
+    const launchOpts = {
         headless: false,
         userDataDir: USER_DATA_DIR,
-        executablePath: CHROME_PATH,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -228,13 +281,13 @@ async function openForLogin() {
             '--disable-gpu',
             '--window-size=1100,850'
         ]
-    });
+    };
+    if (CHROME_PATH) launchOpts.executablePath = CHROME_PATH;
+    const browser = await puppeteer.launch(launchOpts);
 
     try {
         const page = await browser.newPage();
-        await page.setUserAgent(
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36'
-        );
+        await page.setUserAgent(DEFAULT_USER_AGENT);
         await page.goto('https://web.whatsapp.com', { waitUntil: 'networkidle2', timeout: 45000 });
         await waitForLoggedIn(page);
         return { success: true, message: 'WhatsApp Web login verified!' };

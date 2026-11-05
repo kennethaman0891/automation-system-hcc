@@ -54,9 +54,15 @@ define('DB_NAME', $_env['DB_NAME']);
 define('DB_USER', $_env['DB_USER']);
 define('DB_PASS', $_env['DB_PASS']);
 define('DB_CHARSET', $_env['DB_CHARSET'] ?? 'utf8mb4');
-$dbSocket = $_env['DB_SOCKET'] ?? '/Applications/XAMPP/xamppfiles/var/mysql/mysql.sock';
+$isWindows = (PHP_OS_FAMILY === 'Windows');
+$defaultSocket = $isWindows ? '' : '/Applications/XAMPP/xamppfiles/var/mysql/mysql.sock';
+$dbSocket = $_env['DB_SOCKET'] ?? $defaultSocket;
 define('DB_SOCKET', $dbSocket);
 define('JWT_SECRET', $_env['JWT_SECRET']);
+// Optional. Ingest 401s when this is absent; do not die the app and do not log the value.
+if (isset($_env['WHATSAPP_BRIDGE_SECRET']) && is_string($_env['WHATSAPP_BRIDGE_SECRET']) && $_env['WHATSAPP_BRIDGE_SECRET'] !== '') {
+    define('WHATSAPP_BRIDGE_SECRET', $_env['WHATSAPP_BRIDGE_SECRET']);
+}
 
 define('BASE_URL', '/hcc/');
 
@@ -69,18 +75,32 @@ function getDB() {
             PDO::ATTR_EMULATE_PREPARES => false,
         ];
         $candidates = [];
-        if (defined('DB_SOCKET') && DB_SOCKET) {
-            $candidates[] = "mysql:dbname=" . DB_NAME . ";charset=" . DB_CHARSET . ";unix_socket=" . DB_SOCKET;
-            $candidates[] = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET . ";unix_socket=" . DB_SOCKET;
-        }
-        foreach (['/Applications/XAMPP/xamppfiles/var/mysql/mysql.sock', '/tmp/mysql.sock'] as $sock) {
-            if (!defined('DB_SOCKET') || $sock !== DB_SOCKET) {
-                $candidates[] = "mysql:dbname=" . DB_NAME . ";charset=" . DB_CHARSET . ";unix_socket=" . $sock;
-                $candidates[] = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET . ";unix_socket=" . $sock;
+        $isWindows = (PHP_OS_FAMILY === 'Windows');
+
+        // On Windows: Unix domain sockets do NOT exist. Prioritize TCP 127.0.0.1:3306 directly.
+        if ($isWindows) {
+            $candidates[] = "mysql:host=127.0.0.1;port=3306;dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
+            $candidates[] = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
+        } else {
+            // On macOS / Linux: only check sockets if they actually exist on disk
+            if (defined('DB_SOCKET') && DB_SOCKET && file_exists(DB_SOCKET)) {
+                $candidates[] = "mysql:dbname=" . DB_NAME . ";charset=" . DB_CHARSET . ";unix_socket=" . DB_SOCKET;
+                $candidates[] = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET . ";unix_socket=" . DB_SOCKET;
             }
+            $knownSockets = [
+                '/Applications/XAMPP/xamppfiles/var/mysql/mysql.sock',
+                '/tmp/mysql.sock',
+                '/var/run/mysqld/mysqld.sock',
+            ];
+            foreach ($knownSockets as $sock) {
+                if ((!defined('DB_SOCKET') || $sock !== DB_SOCKET) && file_exists($sock)) {
+                    $candidates[] = "mysql:dbname=" . DB_NAME . ";charset=" . DB_CHARSET . ";unix_socket=" . $sock;
+                    $candidates[] = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET . ";unix_socket=" . $sock;
+                }
+            }
+            $candidates[] = "mysql:host=127.0.0.1;port=3306;dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
+            $candidates[] = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
         }
-        $candidates[] = "mysql:host=127.0.0.1;port=3306;dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
-        $candidates[] = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
 
         $lastError = '';
         foreach ($candidates as $dsn) {

@@ -1522,14 +1522,21 @@ class WaChatList extends WaElement {
           if (fallbackBtn) {
             fallbackBtn.click();
           } else {
-            await this.store?.getOrCreateChat({
-              phone: this.searchQuery,
-              name: this.searchQuery,
-              chat_type: 'individual'
-            });
-            searchInput.value = '';
-            this.searchQuery = '';
-            this.applyFilterAndSearch();
+            const digits = this.searchQuery.replace(/\D/g, '');
+            if (digits.length >= 8) {
+              try {
+                await this.store?.getOrCreateChat({
+                  phone: digits,
+                  name: digits.length === 10 ? `+91 ${digits}` : `+${digits}`,
+                  chat_type: 'individual'
+                });
+                searchInput.value = '';
+                this.searchQuery = '';
+                this.applyFilterAndSearch();
+              } catch (err) {
+                alert((err && err.message) || 'Failed to start chat');
+              }
+            }
           }
         }
       });
@@ -1763,9 +1770,9 @@ class WaChatList extends WaElement {
       return name.includes(q) || phone.includes(q) || roll.includes(q) || preview.includes(q);
     });
     
-    // 2. Direct phone action if query has digits
+    // 2. Direct phone action only when the query has a real number
     let phoneAction = null;
-    if (cleanDigits.length >= 3) {
+    if (cleanDigits.length >= 8) {
       const formatted = cleanDigits.length === 10 ? `+91 ${cleanDigits}` : `+${cleanDigits}`;
       phoneAction = {
         phone: cleanDigits,
@@ -1802,13 +1809,14 @@ class WaChatList extends WaElement {
           const sRoll = String(stu.roll_no || '').toLowerCase();
           const sPhone = String(stu.parent_phone || '').toLowerCase();
           if (sName.includes(q) || sRoll.includes(q) || sPhone.includes(q)) {
-            const cleanPhone = (stu.parent_phone || '').replace(/\D/g, '') || ('98765' + String(stu.roll_no).padStart(5, '0'));
+            const cleanPhone = String(stu.parent_phone || '').replace(/\D/g, '');
+            if (cleanPhone.length < 8) continue;
             const sWaId = (cleanPhone.startsWith('91') ? cleanPhone : ('91' + cleanPhone)) + '@c.us';
             if (!existingChatWaIds.has(sWaId) && !contactsMap.has(sWaId)) {
               contactsMap.set(sWaId, {
                 wa_id: sWaId,
                 name: stu.student_name,
-                phone_e164: '+' + (cleanPhone.startsWith('91') ? cleanPhone : ('91' + cleanPhone)),
+                phone_e164: '+' + cleanPhone,
                 linked_student_roll: stu.roll_no,
                 linked_class_key: hubCfg.classKey || stu.std || ''
               });
@@ -1849,29 +1857,39 @@ class WaChatList extends WaElement {
     const hasContacts = contacts && contacts.length > 0;
     
     if (!hasChats && !hasContacts && !phoneAction) {
+      const digits = (this.searchQuery || '').replace(/\D/g, '');
+      const canStart = digits.length >= 8;
       container.innerHTML = `
         <div class="wa-empty-state">
           <svg class="wa-empty-icon" viewBox="0 0 24 24" fill="currentColor">
             <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/>
           </svg>
           <div class="wa-empty-title">No chats found for "${this.escapeHtml(this.searchQuery)}"</div>
-          <div class="wa-empty-desc">Would you like to start a new chat with this name or number?</div>
+          <div class="wa-empty-desc">${canStart
+            ? 'Would you like to start a new chat with this number?'
+            : 'Enter a mobile number (at least 8 digits) to start a new chat.'}</div>
+          ${canStart ? `
           <button type="button" class="wa-btn-start-chat-fallback" id="btn-fallback-new-chat">
             <svg style="width:16px;height:16px;fill:currentColor;" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-            Start new chat with "${this.escapeHtml(this.searchQuery)}"
-          </button>
+            Start new chat with "${this.escapeHtml(digits.length === 10 ? `+91 ${digits}` : `+${digits}`)}"
+          </button>` : ''}
         </div>
       `;
       container.querySelector('#btn-fallback-new-chat')?.addEventListener('click', async () => {
-        await this.store?.getOrCreateChat({
-          phone: this.searchQuery,
-          name: this.searchQuery,
-          chat_type: 'individual'
-        });
-        const inp = this.$('#search-input');
-        if (inp) inp.value = '';
-        this.searchQuery = '';
-        this.applyFilterAndSearch();
+        if (digits.length < 8) return;
+        try {
+          await this.store?.getOrCreateChat({
+            phone: digits,
+            name: digits.length === 10 ? `+91 ${digits}` : `+${digits}`,
+            chat_type: 'individual'
+          });
+          const inp = this.$('#search-input');
+          if (inp) inp.value = '';
+          this.searchQuery = '';
+          this.applyFilterAndSearch();
+        } catch (err) {
+          alert((err && err.message) || 'Failed to start chat');
+        }
       });
       return;
     }
@@ -1893,15 +1911,24 @@ class WaChatList extends WaElement {
         </div>
       `;
       phoneCard.addEventListener('click', async () => {
-        await this.store?.getOrCreateChat({
-          phone: phoneAction.phone,
-          name: phoneAction.displayPhone,
-          chat_type: 'individual'
-        });
-        const inp = this.$('#search-input');
-        if (inp) inp.value = '';
-        this.searchQuery = '';
-        this.applyFilterAndSearch();
+        const digits = String(phoneAction.phone || '').replace(/\D/g, '');
+        if (digits.length < 8) {
+          alert('Enter a valid WhatsApp number in international format, for example +91 98016 60000.');
+          return;
+        }
+        try {
+          await this.store?.getOrCreateChat({
+            phone: digits,
+            name: phoneAction.displayPhone,
+            chat_type: 'individual'
+          });
+          const inp = this.$('#search-input');
+          if (inp) inp.value = '';
+          this.searchQuery = '';
+          this.applyFilterAndSearch();
+        } catch (err) {
+          alert((err && err.message) || 'Failed to start chat');
+        }
       });
       container.appendChild(phoneCard);
     }
@@ -1951,17 +1978,26 @@ class WaChatList extends WaElement {
           </button>
         `;
         row.addEventListener('click', async () => {
-          await this.store?.getOrCreateChat({
-            phone: contact.phone_e164 || contact.wa_id,
-            name: contact.name,
-            student_roll: contact.linked_student_roll,
-            class_key: contact.linked_class_key,
-            chat_type: 'individual'
-          });
-          const inp = this.$('#search-input');
-          if (inp) inp.value = '';
-          this.searchQuery = '';
-          this.applyFilterAndSearch();
+          const digits = String(contact.phone_e164 || contact.wa_id || '').replace(/\D/g, '');
+          if (digits.length < 8) {
+            alert('Enter a valid WhatsApp number in international format, for example +91 98016 60000.');
+            return;
+          }
+          try {
+            await this.store?.getOrCreateChat({
+              phone: digits,
+              name: contact.name,
+              student_roll: contact.linked_student_roll,
+              class_key: contact.linked_class_key,
+              chat_type: 'individual'
+            });
+            const inp = this.$('#search-input');
+            if (inp) inp.value = '';
+            this.searchQuery = '';
+            this.applyFilterAndSearch();
+          } catch (err) {
+            alert((err && err.message) || 'Failed to start chat');
+          }
         });
         container.appendChild(row);
       });

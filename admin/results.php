@@ -2574,22 +2574,8 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
         });
     })();
 
-    // Notification dropdown toggle
-    (function () {
-        const trig = document.getElementById('notifTrigger');
-        const drop = document.getElementById('notifDropdown');
-        if (trig && drop) {
-            trig.addEventListener('click', (e) => {
-                e.stopPropagation();
-                drop.classList.toggle('show');
-            });
-            document.addEventListener('click', (e) => {
-                if (!drop.contains(e.target) && !trig.contains(e.target)) {
-                    drop.classList.remove('show');
-                }
-            });
-        }
-    })();
+    // Notification dropdown toggle — owned by admin.js (loaded on this page); no inline duplicate here,
+    // otherwise the two handlers fight and the dropdown never opens.
 
     function showDriveToast(filename, driveUrl) {
         let toast = document.getElementById('driveAutoFileToast');

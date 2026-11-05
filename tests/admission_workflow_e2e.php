@@ -365,7 +365,11 @@ $timeline = (int)$db->query('SELECT COUNT(*) FROM admission_enquiry_messages WHE
 record('16', 'Verify audit history', $audit >= 3 && $timeline >= 4 ? 'PASS' : 'FAIL', "audit_rows={$audit} timeline={$timeline}");
 
 // 17 recover a stuck job
-$engine = $root . '/automation/rust_engine/target/release/hcc-automation-engine';
+$exeSuffix = (PHP_OS_FAMILY === 'Windows') ? '.exe' : '';
+$engine = $root . '/automation/rust_engine/target/release/hcc-automation-engine' . $exeSuffix;
+if (!is_file($engine) && PHP_OS_FAMILY === 'Windows') {
+    $engine = $root . '/automation/rust_engine/target/release/hcc-automation-engine';
+}
 if (!is_file($engine) || !$hasJobs) {
     record('17', 'Restart recovery of a pending job', 'SKIP', is_file($engine) ? 'automation_jobs table missing' : 'Release binary not built');
 } else {

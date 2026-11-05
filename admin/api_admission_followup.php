@@ -624,11 +624,24 @@ if ($action === 'cancel') {
 // ─────────────────────────────────────────────────────────────────────────────
 if ($action === 'engine_status') {
     try {
-        $binaryPath = __DIR__ . '/../automation/bin/hcc-automation-engine';
-        if (!file_exists($binaryPath)) {
-            $binaryPath = __DIR__ . '/../automation/rust_engine/target/release/hcc-automation-engine';
+        $isWin = (PHP_OS_FAMILY === 'Windows');
+        $exeSuffix = $isWin ? '.exe' : '';
+        $binaryCandidates = [
+            __DIR__ . '/../automation/bin/hcc-automation-engine' . $exeSuffix,
+            __DIR__ . '/../automation/rust_engine/target/release/hcc-automation-engine' . $exeSuffix,
+        ];
+        if ($isWin) {
+            $binaryCandidates[] = __DIR__ . '/../automation/bin/hcc-automation-engine';
+            $binaryCandidates[] = __DIR__ . '/../automation/rust_engine/target/release/hcc-automation-engine';
         }
-        $hasBinary = file_exists($binaryPath) && is_executable($binaryPath);
+        $binaryPath = '';
+        foreach ($binaryCandidates as $cand) {
+            if (file_exists($cand) && ($isWin || is_executable($cand))) {
+                $binaryPath = $cand;
+                break;
+            }
+        }
+        $hasBinary = ($binaryPath !== '');
 
         // Fetch queue stats from MySQL
         $pendingJobs = (int)$db->query("SELECT COUNT(*) FROM automation_jobs WHERE status = 'pending'")->fetchColumn();
@@ -642,15 +655,26 @@ if ($action === 'engine_status') {
             ORDER BY id DESC LIMIT 10
         ")->fetchAll(PDO::FETCH_ASSOC);
 
-        // Check if daemon is running via pgrep
+        // Check if daemon is running via pgrep (POSIX) or tasklist (Windows)
         $daemonRunning = false;
         $daemonPid = null;
         if (function_exists('exec')) {
             $output = [];
-            @exec('pgrep -f "hcc-automation-engine --daemon"', $output);
-            if (!empty($output) && is_numeric($output[0])) {
-                $daemonRunning = true;
-                $daemonPid = (int)$output[0];
+            if ($isWin) {
+                @exec('tasklist /FI "IMAGENAME eq hcc-automation-engine.exe" /NH /FO CSV 2>NUL', $output);
+                foreach ($output as $line) {
+                    if (preg_match('/^"hcc-automation-engine\.exe","(\d+)"/i', trim($line), $m)) {
+                        $daemonRunning = true;
+                        $daemonPid = (int)$m[1];
+                        break;
+                    }
+                }
+            } else {
+                @exec('pgrep -f "hcc-automation-engine --daemon"', $output);
+                if (!empty($output) && is_numeric($output[0])) {
+                    $daemonRunning = true;
+                    $daemonPid = (int)$output[0];
+                }
             }
         }
 
@@ -678,15 +702,28 @@ if ($action === 'engine_status') {
 if ($action === 'run_engine') {
     verifyApiCSRF();
     try {
-        $binaryPath = __DIR__ . '/../automation/bin/hcc-automation-engine';
-        if (!file_exists($binaryPath)) {
-            $binaryPath = __DIR__ . '/../automation/rust_engine/target/release/hcc-automation-engine';
+        $isWin = (PHP_OS_FAMILY === 'Windows');
+        $exeSuffix = $isWin ? '.exe' : '';
+        $binaryCandidates = [
+            __DIR__ . '/../automation/bin/hcc-automation-engine' . $exeSuffix,
+            __DIR__ . '/../automation/rust_engine/target/release/hcc-automation-engine' . $exeSuffix,
+        ];
+        if ($isWin) {
+            $binaryCandidates[] = __DIR__ . '/../automation/bin/hcc-automation-engine';
+            $binaryCandidates[] = __DIR__ . '/../automation/rust_engine/target/release/hcc-automation-engine';
+        }
+        $binaryPath = '';
+        foreach ($binaryCandidates as $cand) {
+            if (file_exists($cand) && ($isWin || is_executable($cand))) {
+                $binaryPath = $cand;
+                break;
+            }
         }
 
         $engineOutput = '';
         $returnCode = 0;
 
-        if (file_exists($binaryPath) && is_executable($binaryPath)) {
+        if ($binaryPath !== '' && file_exists($binaryPath)) {
             $cmd = escapeshellcmd($binaryPath) . ' --once 2>&1';
             exec($cmd, $lines, $returnCode);
             $engineOutput = implode("\n", $lines);

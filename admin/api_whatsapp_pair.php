@@ -17,11 +17,17 @@ require_once __DIR__ . '/auth_check.php';
 waRequireAuth();
 header('Content-Type: application/json; charset=utf-8');
 
-// NOTE: must match the directory the Node bridge watches. PHP's sys_get_temp_dir()
-// on macOS returns /var/folders/.../T, so use /tmp explicitly.
-$tmpDir   = '/tmp';
-$reqFile  = $tmpDir . '/whatsapp_pair_request';
-$codeFile = $tmpDir . '/whatsapp_pair_code.txt';
+// Cross-platform IPC temp directory matching Node.js bridge getBridgeTempDir()
+$tmpDir = getenv('WHATSAPP_IPC_DIR');
+if (!$tmpDir || !is_dir($tmpDir)) {
+    if (DIRECTORY_SEPARATOR !== '\\' && is_dir('/tmp')) {
+        $tmpDir = '/tmp';
+    } else {
+        $tmpDir = sys_get_temp_dir();
+    }
+}
+$reqFile  = rtrim($tmpDir, '/\\') . DIRECTORY_SEPARATOR . 'whatsapp_pair_request';
+$codeFile = rtrim($tmpDir, '/\\') . DIRECTORY_SEPARATOR . 'whatsapp_pair_code.txt';
 
 $action = $_GET['action'] ?? 'get';
 $body   = json_decode(file_get_contents('php://input'), true);

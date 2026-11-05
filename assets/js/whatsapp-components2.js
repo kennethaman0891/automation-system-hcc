@@ -1426,6 +1426,7 @@ class WaConversationMessages extends HTMLElement {
     if (String(msg.chat_id) !== String(this.store?.activeChatId)) return;
     const container = this.shadowRoot.querySelector('#msg-container');
     if (!container) return;
+    if (msg.id != null && container.querySelector(`wa-message-bubble[data-msg-id="${msg.id}"]`)) return;
 
     const bubble = document.createElement('wa-message-bubble');
     bubble.setAttribute('data-msg-id', msg.id);
@@ -3360,13 +3361,14 @@ class WaContactPicker extends HTMLElement {
         const stuList = hubCfg.students || [];
         for (const stu of stuList) {
           const rawPhone = String(stu.parent_phone || '').replace(/\D/g, '');
-          const cleanPhone = rawPhone.length >= 10 ? (rawPhone.startsWith('91') ? rawPhone : '91' + rawPhone) : ('9198765' + String(stu.roll_no).padStart(5, '0'));
+          if (rawPhone.length < 8) continue;
+          const cleanPhone = rawPhone.startsWith('91') || rawPhone.length !== 10 ? rawPhone : ('91' + rawPhone);
           const waId = cleanPhone + '@c.us';
           if (!contactMap.has(waId)) {
             contactMap.set(waId, {
               wa_id: waId,
               name: stu.student_name || `Student ${stu.roll_no}`,
-              phone_e164: '+' + cleanPhone,
+              phone_e164: '+' + rawPhone,
               linked_student_roll: stu.roll_no,
               linked_class_key: hubCfg.classKey || stu.std || '',
               avatar_url: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(stu.student_name || 'Student')}`
@@ -3509,8 +3511,13 @@ class WaContactPicker extends HTMLElement {
       row.addEventListener('click', async () => {
         try {
           const contact = JSON.parse(row.dataset.contact);
+          const phone = String(contact.phone_e164 || contact.wa_id || '').replace(/\D/g, '');
+          if (phone.length < 8) {
+            alert('Enter a valid WhatsApp number in international format, for example +91 98016 60000.');
+            return;
+          }
           await this.store?.getOrCreateChat({
-            phone: contact.phone_e164 || contact.wa_id,
+            phone: phone,
             name: contact.name,
             student_roll: contact.linked_student_roll,
             class_key: contact.linked_class_key,
@@ -3518,21 +3525,28 @@ class WaContactPicker extends HTMLElement {
           });
           this.close();
         } catch (e) {
-          console.error('Error starting chat from picker:', e);
+          alert((e && e.message) || 'Failed to start chat');
         }
       });
     });
 
     list.querySelector('.wa-cp-direct-phone-card')?.addEventListener('click', async (e) => {
       const card = e.currentTarget;
-      const phone = card.dataset.phone;
-      if (phone) {
+      const phone = String(card.dataset.phone || '').replace(/\D/g, '');
+      if (!phone) return;
+      if (phone.length < 8) {
+        alert('Enter a valid WhatsApp number in international format, for example +91 98016 60000.');
+        return;
+      }
+      try {
         await this.store?.getOrCreateChat({
           phone: phone,
           name: phone.length === 10 ? `+91 ${phone}` : `+${phone}`,
           chat_type: 'individual'
         });
         this.close();
+      } catch (err) {
+        alert((err && err.message) || 'Failed to start chat');
       }
     });
 
@@ -3557,13 +3571,20 @@ class WaContactPicker extends HTMLElement {
       const phone = prompt('Enter 10-digit mobile number or phone with country code:');
       if (phone && phone.trim()) {
         const clean = phone.replace(/\D/g, '');
-        if (clean.length < 5) return alert('Please enter a valid phone number');
-        await this.store?.getOrCreateChat({
-          phone: clean,
-          name: clean.length === 10 ? `+91 ${clean}` : `+${clean}`,
-          chat_type: 'individual'
-        });
-        this.close();
+        if (clean.length < 8) {
+          alert('Enter a valid WhatsApp number in international format, for example +91 98016 60000.');
+          return;
+        }
+        try {
+          await this.store?.getOrCreateChat({
+            phone: clean,
+            name: clean.length === 10 ? `+91 ${clean}` : `+${clean}`,
+            chat_type: 'individual'
+          });
+          this.close();
+        } catch (err) {
+          alert((err && err.message) || 'Failed to start chat');
+        }
       }
     });
   }

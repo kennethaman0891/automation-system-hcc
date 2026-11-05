@@ -10,8 +10,9 @@
 set -u
 cd "$(dirname "$0")" || exit 1
 
-LOG="/tmp/whatsapp-bridge.log"
-LOCK="/tmp/whatsapp-bridge.supervisor.lock"
+TMP_DIR="${TMPDIR:-/tmp}"
+LOG="$TMP_DIR/whatsapp-bridge.log"
+LOCK="$TMP_DIR/whatsapp-bridge.supervisor.lock"
 
 # Single-instance guard
 if [ -e "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
@@ -42,7 +43,8 @@ while true; do
   # Clear any lock left behind by a crash before the next attempt
   rm -f .whatsapp-session/SingletonLock \
         .whatsapp-session/SingletonSocket \
-        .whatsapp-session/SingletonCookie 2>/dev/null
+        .whatsapp-session/SingletonCookie \
+        .whatsapp-session/lockfile 2>/dev/null
 
   sleep 10
 done

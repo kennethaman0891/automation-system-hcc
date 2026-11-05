@@ -718,21 +718,9 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
                 if (uBadge) uBadge.remove();
             });
         }
-        if (trigger && dropdown) {
-            trigger.addEventListener('click', function (e) {
-                e.stopPropagation();
-                var isOpen = dropdown.classList.contains('show');
-                dropdown.classList.toggle('show');
-                if (!isOpen && badge) {
-                    markAllRead(clearUnreadUI);
-                }
-            });
-            document.addEventListener('click', function (e) {
-                if (!dropdown.contains(e.target) && e.target !== trigger) {
-                    dropdown.classList.remove('show');
-                }
-            });
-        }
+        /* Header notification bell: toggle handled globally in admin.js (this page loads it),
+           so we intentionally do NOT attach a second toggle here — a second toggle would fight
+           admin.js and make the bell appear dead (double-toggle = never opens). */
         var markAllBtn = document.getElementById('notifMarkAll');
         if (markAllBtn) {
             markAllBtn.addEventListener('click', function () {

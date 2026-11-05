@@ -849,33 +849,8 @@ $notifData = rcGetRecentNotifications(8);
 
     <script>
         // Notification Dropdown Toggle & Mark as Read
-        const notifTrigger = document.getElementById('notifTrigger');
-        const notifDropdown = document.getElementById('notifDropdown');
-        const notifBadge = document.getElementById('notifBadge');
-
-        if (notifTrigger && notifDropdown) {
-            notifTrigger.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const isOpen = notifDropdown.classList.contains('show');
-                notifDropdown.classList.toggle('show');
-
-                if (!isOpen && notifBadge) {
-                    // Mark notifications as read asynchronously
-                    const fd = new FormData();
-                    fd.append('action', 'mark_notifs_read');
-                    fd.append('csrf_token', '<?= generateCSRFToken() ?>');
-                    fetch('promote_students.php', { method: 'POST', body: fd })
-                        .then(() => { notifBadge.style.display = 'none'; })
-                        .catch(() => {});
-                }
-            });
-
-            document.addEventListener('click', (e) => {
-                if (!notifDropdown.contains(e.target) && e.target !== notifTrigger) {
-                    notifDropdown.classList.remove('show');
-                }
-            });
-        }
+        // The bell toggle is owned by admin.js (loaded on this page); no inline duplicate here,
+        // otherwise the two handlers fight and the dropdown never opens.
 
         // Student Checklist Selection Manager
         const masterCheckbox = document.getElementById('masterCheckbox');

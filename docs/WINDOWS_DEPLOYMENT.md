@@ -28,7 +28,7 @@ Install these yourself. The scripts in this repo do not download them.
 - Composer, then `composer install` in the repo root. `vendor/` is not committed.
 - Either the Rust toolchain (rustup stable, plus the Visual Studio C++ build tools so `cargo` can link) or Windows release binaries you built elsewhere. The binaries in a macOS checkout are not Windows binaries. Do not copy those.
 - Ollama for Windows. It must serve `http://127.0.0.1:11434`.
-- Node.js 18 or newer only if you still run `automation/whatsapp-bridge.js`. That script's default Chrome path is the macOS Chrome binary, so it will not start on Windows until `CHROME_PATH` points at `chrome.exe`. The admission workflow in this document does not need it.
+- Node.js 18 or newer if you run the WhatsApp bridge (`automation\whatsapp-bridge.js`). The bridge automatically detects Chrome in Windows standard installation locations (`Program Files`, `Program Files (x86)`, and `%LOCALAPPDATA%`), or Microsoft Edge as fallback. Start the bridge via `automation\start-bridge.bat` or `automation\windows\start-bridge.ps1`.
 
 Suggested tree:
 
@@ -135,15 +135,25 @@ Start them in this order. Stopping is the reverse order.
 3. Admission AI service.
 4. Follow-up engine (`--daemon`).
 5. Apache (XAMPP Control Panel).
+6. WhatsApp Bridge (optional, for live automated inbound/outbound sync).
 
 ### Foreground
 
-Two PowerShell windows, from any directory:
+Run the background workers in separate PowerShell / CMD windows:
 
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File C:\xampp\htdocs\hcc\automation\windows\start-admission-ai.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File C:\xampp\htdocs\hcc\automation\windows\start-followup-engine.ps1
 ```
+
+If running the WhatsApp Bridge on Windows, open a third window and run:
+
+```
+automation\start-bridge.bat
+```
+(or via PowerShell: `powershell -NoProfile -ExecutionPolicy Bypass -File C:\xampp\htdocs\hcc\automation\windows\start-bridge.ps1`)
+
+The bridge supervisor automatically checks Node.js on `PATH`, locates Google Chrome (or Microsoft Edge as fallback), cleans stale profile locks (`Singleton*` and `lockfile`), supervises the process with auto-restart, and logs output to `logs\whatsapp-bridge.log`.
 
 Closing a window stops that process. The scripts read settings from the environment. They do not contain a database password.
 
@@ -165,18 +175,19 @@ PHP calls the AI service with `RUST_AI_SERVICE_URL`, default `http://127.0.0.1:8
 
 ## Services
 
-`automation\windows\register-services.ps1` registers the two PowerShell scripts. Run it from an elevated PowerShell. It is safe to run again: an existing service is updated, not duplicated.
+`automation\windows\register-services.ps1` registers the background services. Run it from an elevated PowerShell. It is safe to run again: an existing service is updated, not duplicated.
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -File C:\xampp\htdocs\hcc\automation\windows\register-services.ps1 -RepoRoot C:\xampp\htdocs\hcc
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\xampp\htdocs\hcc\automation\windows\register-services.ps1 -RepoRoot C:\xampp\htdocs\hcc -IncludeBridge
 ```
 
-Optional `-NssmPath` points at `nssm.exe` if it is not on `PATH`.
+Optional `-NssmPath` points at `nssm.exe` if it is not on `PATH`. Add `-IncludeBridge` if you also want the WhatsApp Bridge registered as a background service (`HCC-WhatsAppBridge`).
 
 If NSSM is already installed, the script registers:
 
 - `HCC-AdmissionAI` → `start-admission-ai.ps1`
 - `HCC-FollowupEngine` → `start-followup-engine.ps1`
+- `HCC-WhatsAppBridge` → `start-bridge.ps1` (when `-IncludeBridge` is specified)
 
 It passes the current process environment for `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, and `DB_NAME` into the follow-up service. It does not write those values into the repo. If `DB_PASS` is missing on the first run, the follow-up service is registered and not started. If the service already exists, a run without `DB_PASS` leaves that service unchanged so a password already stored on it is not wiped. Set `DB_PASS` and run the script again.
 

@@ -5,7 +5,7 @@
  * for privacy-preserving chat filtering at ingestion time.
  * 
  * GET /admin/api_whatsapp_bridge_filter.php
- * Returns: { roster_numbers: [...], admission_keywords: [...], class_groups: [...] }
+ * Returns: { roster_numbers, linked_contacts, class_groups, known_chats, admission_keywords }
  */
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/includes/whatsapp_functions.php';
@@ -75,7 +75,7 @@ $linkedContacts = [];
 $stmt = $db->query("
     SELECT wa_id, phone_e164, name, source, linked_student_roll, linked_class_key
     FROM whatsapp_contacts
-    WHERE source IN ('student_link', 'teacher_link', 'direct_chat')
+    WHERE source IN ('student_link', 'teacher_link', 'direct_chat', 'manual')
 ");
 while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $linkedContacts[] = $row;
@@ -93,6 +93,22 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $classGroups[] = $row;
 }
 
+$knownChats = [];
+$stmt = $db->query("
+    SELECT wa_chat_id, name
+    FROM whatsapp_chats
+    WHERE chat_type = 'individual'
+      AND wa_chat_id NOT IN ('', '@c.us')
+    ORDER BY id DESC
+    LIMIT 2000
+");
+while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+    $knownChats[] = [
+        'wa_chat_id' => $row['wa_chat_id'],
+        'name' => $row['name'],
+    ];
+}
+
 // Admission keywords (same as in api_whatsapp_ingest.php)
 $admissionKeywords = [
     'admission', 'admissions', 'fee', 'fees', 'nursery', 'lkg', 'ukg',
@@ -107,6 +123,7 @@ waJsonResponse([
         'roster_numbers' => array_merge($studentPhones, $teacherPhones),
         'linked_contacts' => $linkedContacts,
         'class_groups' => $classGroups,
+        'known_chats' => $knownChats,
         'admission_keywords' => $admissionKeywords,
         'generated_at' => date('c')
     ]

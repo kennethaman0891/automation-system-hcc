@@ -5,7 +5,8 @@
 
 param(
     [string]$RepoRoot = "",
-    [string]$NssmPath = ""
+    [string]$NssmPath = "",
+    [switch]$IncludeBridge
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,9 +19,14 @@ if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
 
 $AiScript = Join-Path $RepoRoot "automation\windows\start-admission-ai.ps1"
 $EngineScript = Join-Path $RepoRoot "automation\windows\start-followup-engine.ps1"
+$BridgeScript = Join-Path $RepoRoot "automation\windows\start-bridge.ps1"
 $PowerShellExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 
-foreach ($path in @($AiScript, $EngineScript, $PowerShellExe)) {
+$requiredFiles = @($AiScript, $EngineScript, $PowerShellExe)
+if ($IncludeBridge) {
+    $requiredFiles += $BridgeScript
+}
+foreach ($path in $requiredFiles) {
     if (-not (Test-Path -LiteralPath $path)) {
         Write-Host "Missing file: $path"
         exit 1
@@ -148,6 +154,11 @@ function Show-ScheduledTaskCommands {
     Write-Host ""
     Write-Host "schtasks /Create /TN `"HCC Follow-up Engine`" /SC ONSTART /RU SYSTEM /RL HIGHEST /F /TR `"$engineTr`""
     Write-Host ""
+    if ($IncludeBridge) {
+        $bridgeTr = "$PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $BridgeScript"
+        Write-Host "schtasks /Create /TN `"HCC WhatsApp Bridge`" /SC ONSTART /RU SYSTEM /RL HIGHEST /F /TR `"$bridgeTr`""
+        Write-Host ""
+    }
     Write-Host "Start in, if you create the tasks in the GUI instead: $RepoRoot"
 }
 
@@ -268,6 +279,10 @@ if (-not $haveDbPass) {
     Write-Host "Set DB_PASS to the same value as config\env.php and run this script again."
 } else {
     Register-HccService -Nssm $resolvedNssm -Name "HCC-FollowupEngine" -DisplayName "HCC Follow-up Engine" -ScriptPath $EngineScript -EnvPairs $followupEnv -StartNow -RestartOnExit
+}
+
+if ($IncludeBridge) {
+    Register-HccService -Nssm $resolvedNssm -Name "HCC-WhatsAppBridge" -DisplayName "HCC WhatsApp Bridge" -ScriptPath $BridgeScript -StartNow -RestartOnExit
 }
 
 Write-Host ""

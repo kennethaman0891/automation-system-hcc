@@ -15,12 +15,14 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     waJsonResponse(['success' => false, 'error' => 'Method not allowed'], 405);
 }
 
-// Verify HMAC signature
-$secret = defined('WHATSAPP_BRIDGE_SECRET') ? WHATSAPP_BRIDGE_SECRET : 'change-this-secret-in-config';
-$signature = $_SERVER['HTTP_X_WA_SIGNATURE'] ?? '';
+// HMAC only. Missing or short bridge secret is a hard 401 — no built-in fallback.
+if (!defined('WHATSAPP_BRIDGE_SECRET') || !is_string(WHATSAPP_BRIDGE_SECRET) || strlen(WHATSAPP_BRIDGE_SECRET) < 16) {
+    waJsonResponse(['success' => false, 'error' => 'Bridge secret is not configured'], 401);
+}
+$signature = (string)($_SERVER['HTTP_X_WA_SIGNATURE'] ?? '');
 $payload = file_get_contents('php://input');
-
-if (!$signature || !waValidateHMAC($payload, $signature, $secret)) {
+$expected = hash_hmac('sha256', $payload, WHATSAPP_BRIDGE_SECRET);
+if ($signature === '' || !hash_equals($expected, $signature)) {
     waJsonResponse(['success' => false, 'error' => 'Invalid signature'], 401);
 }
 
@@ -33,6 +35,23 @@ $db = waGetDB();
 $inserted = 0;
 $errors = [];
 
+// null = unknown (try the flag update and ignore a missing column). false = skip.
+$hasAdmissionFlag = null;
+try {
+    $flagChk = $db->prepare("
+        SELECT 1
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'whatsapp_chats'
+          AND COLUMN_NAME = 'is_admission_enquiry'
+        LIMIT 1
+    ");
+    $flagChk->execute();
+    $hasAdmissionFlag = (bool)$flagChk->fetchColumn();
+} catch (Throwable $e) {
+    $hasAdmissionFlag = null;
+}
+
 $db->beginTransaction();
 try {
     foreach ($data as $index => $msg) {
@@ -43,8 +62,24 @@ try {
                 continue;
             }
             
-            // Get or create chat
-            $chatId = waGetOrCreateChat($db, $msg['wa_chat_id'], $msg['chat_type'] ?? 'individual', $msg['chat_name'] ?? null, $msg['chat_avatar'] ?? null);
+            $chatType = $msg['chat_type'] ?? 'individual';
+            $waChatId = (string)$msg['wa_chat_id'];
+            if ($chatType === 'individual') {
+                $groupLike = stripos($waChatId, '@g.us') !== false
+                    || stripos($waChatId, 'broadcast') !== false
+                    || stripos($waChatId, 'channel') !== false;
+                if (!$groupLike) {
+                    // Same rules as New chat: 10-digit Indian mobiles become 91xxxxxxxxxx.
+                    $checked = waValidateWhatsAppPhone($waChatId);
+                    if (!$checked['ok']) {
+                        $errors[] = "Message $index: invalid wa_chat_id";
+                        continue;
+                    }
+                    $waChatId = $checked['digits'] . '@c.us';
+                }
+            }
+
+            $chatId = waGetOrCreateChat($db, $waChatId, $chatType, $msg['chat_name'] ?? null, $msg['chat_avatar'] ?? null);
             
             // Get or create sender contact (for inbound messages)
             $senderId = null;
@@ -93,13 +128,21 @@ try {
             ]);
             $inserted++;
 
-            // If inbound message appears to be an admission enquiry, flag chat
-            if (empty($msg['from_me']) && !empty($msg['body'])) {
-                $bodyLower = strtolower($msg['body']);
+            // Flag admission chats. A missing column must not roll back inserted messages.
+            if ($hasAdmissionFlag !== false && empty($msg['from_me']) && !empty($msg['body'])) {
+                $bodyLower = strtolower((string)$msg['body']);
                 $admissionKeywords = ['admission', 'admissions', 'fee', 'fees', 'nursery', 'lkg', 'ukg', 'standard', 'grade', 'eligibility', 'timings', 'transport', 'campus visit'];
                 foreach ($admissionKeywords as $kw) {
                     if (str_contains($bodyLower, $kw)) {
-                        $db->prepare("UPDATE whatsapp_chats SET is_admission_enquiry = 1 WHERE id = ?")->execute([$chatId]);
+                        try {
+                            $db->exec('SAVEPOINT wa_enq_flag');
+                            $db->prepare("UPDATE whatsapp_chats SET is_admission_enquiry = 1 WHERE id = ?")->execute([$chatId]);
+                            $db->exec('RELEASE SAVEPOINT wa_enq_flag');
+                        } catch (Throwable $e) {
+                            try {
+                                $db->exec('ROLLBACK TO SAVEPOINT wa_enq_flag');
+                            } catch (Throwable $ignored) {}
+                        }
                         break;
                     }
                 }

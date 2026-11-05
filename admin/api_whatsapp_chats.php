@@ -30,104 +30,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $chatId = null;
     $isNew = false;
+    $phoneE164 = null;
 
-    // Clean up any corrupted '@c.us' or empty wa_chat_id rows from prior bugs
+    // Only placeholder ids. Never delete a chat that already has messages.
     try {
-        $db->exec("DELETE FROM whatsapp_chats WHERE wa_chat_id = '@c.us' OR wa_chat_id = '' OR wa_chat_id IS NULL");
-        $db->exec("DELETE FROM whatsapp_contacts WHERE wa_id = '@c.us' OR wa_id = '' OR wa_id IS NULL");
+        $db->exec("
+            DELETE c FROM whatsapp_chats c
+            LEFT JOIN whatsapp_messages m ON m.chat_id = c.id
+            WHERE c.wa_chat_id IN ('', '@c.us')
+              AND m.id IS NULL
+        ");
+        $db->exec("DELETE FROM whatsapp_contacts WHERE wa_id IN ('', '@c.us')");
     } catch (Throwable $e) {}
 
     if ($chatType === 'individual') {
-        $cleanDigits = preg_replace('/\D/', '', $rawPhone);
-
-        // If no phone digits provided or phone looks like a name, try finding student in DB
-        if (strlen($cleanDigits) < 5) {
-            $searchQuery = $name !== '' ? $name : $rawPhone;
-            $matchedStu = null;
-            if ($searchQuery !== '') {
-                $stuStmt = $db->prepare("
-                    SELECT roll_no, student_name, parent_phone, std, division, academic_year, semester
-                    FROM report_card
-                    WHERE student_name LIKE ? OR roll_no = ? OR parent_phone LIKE ?
-                    ORDER BY id DESC LIMIT 1
-                ");
-                $stuStmt->execute(["%$searchQuery%", $searchQuery, "%$searchQuery%"]);
-                $matchedStu = $stuStmt->fetch(PDO::FETCH_ASSOC);
-            }
-
-            if ($matchedStu) {
-                if ($name === '') $name = $matchedStu['student_name'];
-                if ($roll === '') $roll = (string)$matchedStu['roll_no'];
-                if ($classKey === '') $classKey = "{$matchedStu['academic_year']}|{$matchedStu['std']}|{$matchedStu['division']}|{$matchedStu['semester']}";
-                $stuPhone = preg_replace('/\D/', '', (string)($matchedStu['parent_phone'] ?? ''));
-                if (strlen($stuPhone) >= 10) {
-                    $cleanDigits = $stuPhone;
-                } else {
-                    $cleanDigits = '98765' . str_pad($roll ?: '00001', 5, '0', STR_PAD_LEFT);
-                }
-            } else {
-                // Check in whatsapp_contacts
-                $cMatch = null;
-                if ($searchQuery !== '') {
-                    $cStmt = $db->prepare("SELECT wa_id, phone_e164, name, linked_student_roll, linked_class_key FROM whatsapp_contacts WHERE name LIKE ? OR wa_id = ? OR phone_e164 LIKE ? LIMIT 1");
-                    $cStmt->execute(["%$searchQuery%", $searchQuery, "%$searchQuery%"]);
-                    $cMatch = $cStmt->fetch(PDO::FETCH_ASSOC);
-                }
-                if ($cMatch) {
-                    $name = $cMatch['name'];
-                    $cleanDigits = preg_replace('/\D/', '', $cMatch['phone_e164'] ?: $cMatch['wa_id']);
-                    if ($roll === '') $roll = $cMatch['linked_student_roll'] ?? '';
-                    if ($classKey === '') $classKey = $cMatch['linked_class_key'] ?? '';
-                } else {
-                    if ($name === '') $name = $rawPhone !== '' ? $rawPhone : 'Direct Contact';
-                    $hashNum = abs(crc32($name)) % 90000 + 10000;
-                    $cleanDigits = '98765' . $hashNum;
-                }
-            }
+        $checked = waValidateWhatsAppPhone($rawPhone);
+        if (!$checked['ok']) {
+            waJsonResponse(['success' => false, 'error' => $checked['error']], 422);
         }
-
-        if (str_starts_with($cleanDigits, '0')) $cleanDigits = substr($cleanDigits, 1);
-        if (strlen($cleanDigits) === 10) {
-            $cleanDigits = '91' . $cleanDigits;
-        } elseif (strlen($cleanDigits) < 10) {
-            $cleanDigits = '9198765' . str_pad($cleanDigits, 5, '0', STR_PAD_LEFT);
-        }
-
+        $cleanDigits = $checked['digits'];
+        $phoneE164 = $checked['e164'];
         $waChatId = $cleanDigits . '@c.us';
-        $phoneE164 = '+' . $cleanDigits;
+        $providedName = $name;
 
-        // If name wasn't provided, try resolving from contacts or cleanDigits
         if ($name === '') {
-            $cCheck = $db->prepare("SELECT name, linked_student_roll, linked_class_key FROM whatsapp_contacts WHERE wa_id = ? OR phone_e164 = ? LIMIT 1");
+            $cCheck = $db->prepare("SELECT name FROM whatsapp_contacts WHERE wa_id = ? OR phone_e164 = ? LIMIT 1");
             $cCheck->execute([$waChatId, $phoneE164]);
-            $foundC = $cCheck->fetch(PDO::FETCH_ASSOC);
-            if ($foundC && !empty($foundC['name'])) {
-                $name = $foundC['name'];
-                if ($roll === '' && !empty($foundC['linked_student_roll'])) $roll = $foundC['linked_student_roll'];
-                if ($classKey === '' && !empty($foundC['linked_class_key'])) $classKey = $foundC['linked_class_key'];
-            } else {
-                $name = "Contact +" . $cleanDigits;
-            }
+            $foundName = $cCheck->fetchColumn();
+            $name = ($foundName !== false && $foundName !== null && $foundName !== '')
+                ? (string)$foundName
+                : ('Contact +' . $cleanDigits);
         }
 
         if ($avatarUrl === '') {
             $avatarUrl = "https://api.dicebear.com/7.x/initials/svg?seed=" . urlencode($name);
         }
 
-        // Upsert contact in whatsapp_contacts
         try {
             $cStmt = $db->prepare("
-                INSERT INTO whatsapp_contacts 
+                INSERT INTO whatsapp_contacts
                 (wa_id, phone_e164, name, push_name, avatar_url, source, linked_student_roll, linked_class_key, updated_at)
-                VALUES (?, ?, ?, ?, ?, 'direct_chat', ?, ?, NOW())
+                VALUES (?, ?, ?, ?, ?, 'manual', ?, ?, NOW())
                 ON DUPLICATE KEY UPDATE
-                    name = COALESCE(NULLIF(VALUES(name), ''), name),
+                    phone_e164 = VALUES(phone_e164),
+                    name = COALESCE(NULLIF(?, ''), name),
+                    push_name = COALESCE(NULLIF(?, ''), push_name),
                     updated_at = NOW()
             ");
-            $cStmt->execute([$waChatId, $phoneE164, $name, $name, $avatarUrl, $roll ?: null, $classKey ?: null]);
+            $cStmt->execute([
+                $waChatId,
+                $phoneE164,
+                $name,
+                $name,
+                $avatarUrl,
+                $roll !== '' ? $roll : null,
+                $classKey !== '' ? $classKey : null,
+                $providedName,
+                $providedName,
+            ]);
         } catch (Throwable $e) {}
 
-        // Check if chat exists
         $chStmt = $db->prepare("SELECT id FROM whatsapp_chats WHERE wa_chat_id = ?");
         $chStmt->execute([$waChatId]);
         $existingId = $chStmt->fetchColumn();
@@ -137,34 +99,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $db->prepare("UPDATE whatsapp_chats SET last_activity_at = NOW(), is_archived = 0 WHERE id = ?")->execute([$chatId]);
         } else {
             $isNew = true;
-            if ($roll) $metadata['student_roll'] = $roll;
-            if ($classKey) $metadata['class_key'] = $classKey;
+            if ($roll !== '') $metadata['student_roll'] = $roll;
+            if ($classKey !== '') $metadata['class_key'] = $classKey;
             $metadata['parent_phone'] = $phoneE164;
             $metadata['student_name'] = $name;
             $metaJson = json_encode($metadata, JSON_UNESCAPED_UNICODE);
 
             $ins = $db->prepare("
-                INSERT INTO whatsapp_chats 
+                INSERT INTO whatsapp_chats
                 (wa_chat_id, chat_type, name, avatar_url, is_pinned, unread_count, metadata, linked_student_roll, linked_class_key, last_activity_at, created_at, updated_at)
                 VALUES (?, 'individual', ?, ?, 0, 0, ?, ?, ?, NOW(), NOW(), NOW())
             ");
-            $ins->execute([$waChatId, $name, $avatarUrl, $metaJson, $roll ?: null, $classKey ?: null]);
-            $chatId = (int)$db->lastInsertId();
-
-            // Insert initial welcome message so conversation thread is immediately active
-            $initialText = $seedMsg ?: "Dear Parent, welcome to HCC WhatsApp Communication Portal for {$name}. Academic notices, report cards, and school communications will be shared here.";
-            waInsertMessage($db, [
-                'wa_msg_id'     => 'init_' . time() . '_' . $chatId,
-                'chat_id'       => $chatId,
-                'from_me'       => true,
-                'sender_id'     => 'admin@hcc.edu',
-                'sender_name'   => 'HCC High School',
-                'sender_avatar' => '../assets/images/hcclogo.jpg',
-                'msg_type'      => 'text',
-                'body'          => $initialText,
-                'status'        => 'delivered',
-                'timestamp'     => time()
-            ]);
+            try {
+                $ins->execute([
+                    $waChatId,
+                    $name,
+                    $avatarUrl,
+                    $metaJson,
+                    $roll !== '' ? $roll : null,
+                    $classKey !== '' ? $classKey : null,
+                ]);
+                $chatId = (int)$db->lastInsertId();
+            } catch (PDOException $e) {
+                if ((string)$e->getCode() !== '23000') {
+                    throw $e;
+                }
+                $chStmt->execute([$waChatId]);
+                $chatId = (int)$chStmt->fetchColumn();
+                if (!$chatId) {
+                    throw $e;
+                }
+                $isNew = false;
+                $db->prepare("UPDATE whatsapp_chats SET last_activity_at = NOW(), is_archived = 0 WHERE id = ?")->execute([$chatId]);
+            }
         }
     } else {
         // Group or Broadcast Channel
@@ -226,6 +193,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $chatObj = $cStmt->fetch(PDO::FETCH_ASSOC);
 
     if ($chatObj) {
+        $chatObj['id'] = (int)$chatObj['id'];
+        if ($phoneE164 !== null) {
+            $chatObj['phone_e164'] = $phoneE164;
+        }
         if (!empty($chatObj['metadata']) && is_string($chatObj['metadata'])) {
             $chatObj['metadata'] = json_decode($chatObj['metadata'], true) ?: [];
         }
