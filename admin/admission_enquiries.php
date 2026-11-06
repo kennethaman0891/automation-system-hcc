@@ -63,6 +63,7 @@ $search  = trim($_GET['search'] ?? '');
     <link rel="stylesheet" href="../assets/vendor/font-awesome@6.5.0/css/all.min.css">
     <link rel="stylesheet" href="../assets/vendor/inter-fonts.css">
     <link rel="stylesheet" href="../assets/css/admin.css?v=<?= filemtime(__DIR__ . '/../assets/css/admin.css') ?>">
+    <link rel="stylesheet" href="../assets/css/admission-ai-review.css?v=<?= filemtime(__DIR__ . '/../assets/css/admission-ai-review.css') ?>">
     <style>
         /* ── Pipeline & Dashboard Styling ───────────────────────────────────── */
         .enquiry-stats-grid {
@@ -663,6 +664,10 @@ $search  = trim($_GET['search'] ?? '');
                         <i class="fa-solid fa-user-plus" style="color:#0ea5e9;margin-right:8px;"></i> Admission Enquiry Management
                     </h1>
                     <p class="page-sub">Centralized hub to capture WhatsApp enquiries, qualify prospects, and manage admissions pipeline</p>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px;">
+                        <p id="waInboundStatus" class="page-sub" style="margin:0;">Checking WhatsApp link…</p>
+                        <button type="button" id="waLogoutBtn" style="display:none;background:#fff;color:#b91c1c;border:1px solid #fecaca;border-radius:999px;padding:4px 10px;font-size:0.75rem;font-weight:700;cursor:pointer;">Log out of WhatsApp</button>
+                    </div>
                 </div>
                 <div class="header-actions" style="display:flex;">
                     <button type="button" class="btn-primary" id="btnOpenNewEnquiry">
@@ -725,6 +730,107 @@ $search  = trim($_GET['search'] ?? '');
                 </div>
 
                 <!-- 2. Admission Pipeline Funnel Tabs -->
+                
+            <!-- ══════ AI Admission Review (local Ollama) ══════ -->
+            <section class="air-section" id="airSection" aria-label="AI Admission Review">
+                <div class="air-section-hdr">
+                    <div>
+                        <h2><i class="fa-solid fa-brain"></i> AI Admission Review</h2>
+                        <p>Select stored inbound WhatsApp messages (or paste text) → analyze with <strong>local Ollama only</strong> → edit the draft → mark Reviewed → Send. Nothing is sent automatically.</p>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;">
+                        <span class="air-status-pill" id="airAiStatus">Checking local AI…</span>
+                        <span class="air-status-pill warn" id="airBridgeStatus">WhatsApp link…</span>
+                        <button type="button" class="btn-air" id="airBtnRefresh" style="border:1px solid #c7d2fe;background:#fff;color:#3730a3;border-radius:8px;padding:6px 10px;font-size:0.78rem;font-weight:600;cursor:pointer;">Refresh</button>
+                    </div>
+                </div>
+                
+                <div class="air-engine-bar">
+                    <label for="airEngineSelect">Analysis engine</label>
+                    <select id="airEngineSelect">
+                        <option value="local" selected>Local (llama / Ollama) — default</option>
+                        <option value="api">API (NVIDIA / OpenAI-compatible)</option>
+                    </select>
+                    <button type="button" class="btn-air" id="airBtnToggleSettings" style="border:1px solid #c7d2fe;background:#fff;color:#3730a3;border-radius:8px;padding:6px 10px;font-size:0.78rem;font-weight:600;cursor:pointer;">API settings</button>
+                    <span class="air-key-status missing" id="airKeyStatus">API key: Not configured</span>
+                </div>
+                <div class="air-settings" id="airSettingsPanel" style="display:none;">
+                    <h4>API analysis settings (admin)</h4>
+                    <p style="margin:0 0 8px;font-size:0.78rem;color:#475569;">Keys are stored encrypted on the server and never shown again after Save. Connection Test uses a synthetic sample only.</p>
+                    <div class="grid">
+                        <div class="air-field"><label>Provider</label>
+                            <select id="airProvider">
+                                <option value="nvidia">NVIDIA NIM (OpenAI-compatible)</option>
+                                <option value="openai_compatible">Generic OpenAI-compatible</option>
+                            </select>
+                        </div>
+                        <div class="air-field"><label>Model ID (required for API — no default guessed)</label>
+                            <input type="text" id="airApiModel" placeholder="e.g. provider/model-name" autocomplete="off">
+                        </div>
+                        <div class="air-field" style="grid-column:1/-1;"><label>Base URL (HTTPS only)</label>
+                            <input type="url" id="airBaseUrl" placeholder="https://integrate.api.nvidia.com/v1" autocomplete="off">
+                        </div>
+                        <div class="air-field" style="grid-column:1/-1;"><label>API key (leave blank to keep existing)</label>
+                            <input type="password" id="airApiKey" value="" placeholder="Paste key to set/replace" autocomplete="new-password">
+                        </div>
+                    </div>
+                    <div class="air-disclosure" id="airDisclosure"></div>
+                    <div class="air-actions">
+                        <button type="button" class="btn-air primary" id="airBtnSaveSettings">Save settings</button>
+                        <button type="button" class="btn-air" id="airBtnTestConn">Test connection</button>
+                        <button type="button" class="btn-air danger" id="airBtnRemoveKey">Remove saved key</button>
+                    </div>
+                </div>
+
+                <div class="air-body">
+                    <div class="air-panel">
+                        <h3>1. Select source</h3>
+                        <div class="air-context-box" id="airInboundNote">Checking stored inbound messages…</div>
+                        <div class="air-chat-list" id="airChatList"><div class="air-empty">Loading…</div></div>
+                        <h3 style="margin-top:12px;">Inbound messages in selected chat</h3>
+                        <div class="air-context-box" id="airContextHint">Tick the messages that should be analyzed. Analyze sends only that text to the local model.</div>
+                        <div class="air-msg-list" id="airMsgList"><div class="air-empty">Select a chat first</div></div>
+                        <div class="air-manual" id="airManualWrap" style="display:none;">
+                            <div class="air-field">
+                                <label>Or paste parent text (manual analysis — phone/identity stays unknown)</label>
+                                <textarea id="airManualText" placeholder="Paste the parent's message here if no inbound messages are stored yet…"></textarea>
+                            </div>
+                        </div>
+                        <div class="air-actions">
+                            <button type="button" class="btn-air primary" id="airBtnAnalyze">Analyze selected</button>
+                        </div>
+                    </div>
+                    <div class="air-panel">
+                        <h3>2. Drafts &amp; review</h3>
+                        <div class="air-draft-list" id="airDraftList"><div class="air-empty">No drafts yet</div></div>
+                        <div id="airDraftEmpty" class="air-empty" style="margin-top:10px;">Select or create a draft to edit.</div>
+                        <div id="airDraftEditor" style="display:none;margin-top:10px;">
+                            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+                                <span class="air-badge" id="airClassBadge">—</span>
+                                <span class="air-status-pill" id="airDraftStatus">draft</span>
+                            </div>
+                            <div class="air-explain" id="airExplain"></div>
+                            <div class="air-context-box" id="airSourceMeta"></div>
+                            <div class="air-field"><label>Parent / guardian</label><input id="airFParent" type="text"></div>
+                            <div class="air-field"><label>Child name</label><input id="airFStudent" type="text"></div>
+                            <div class="air-field"><label>Requested class</label><input id="airFClass" type="text"></div>
+                            <div class="air-field"><label>Academic year</label><input id="airFYear" type="text"></div>
+                            <div class="air-field"><label>Age / DOB</label><input id="airFAge" type="text"></div>
+                            <div class="air-field"><label>Contact (from verified chat identity only)</label><input id="airFPhone" type="text" readonly></div>
+                            <div class="air-field"><label>Question summary</label><textarea id="airFSummary"></textarea></div>
+                            <div class="air-field"><label>Missing details (one per line)</label><textarea id="airFMissing"></textarea></div>
+                            <div class="air-field"><label>Suggested / edited reply</label><textarea id="airFReply" style="min-height:120px;"></textarea></div>
+                            <div class="air-actions">
+                                <button type="button" class="btn-air" id="airBtnSave">Save draft</button>
+                                <button type="button" class="btn-air" id="airBtnEnquiry">Create / update enquiry</button>
+                                <button type="button" class="btn-air primary" id="airBtnReview">Mark reviewed</button>
+                                <button type="button" class="btn-air primary" id="airBtnSend" disabled title="Mark Reviewed first">Send</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
                 <div class="pipeline-funnel" id="pipelineFunnel">
                     <button type="button" class="funnel-pill <?= $fStatus==='ALL'?'active':'' ?>" data-status="ALL">
                         <span>All Enquiries</span>
@@ -1829,9 +1935,102 @@ $search  = trim($_GET['search'] ?? '');
             window.location.href = `api_admission_enquiry.php?action=export_csv&status=${encodeURIComponent(activeStatusFilter)}&academic_year=${encodeURIComponent(year)}&interested_class=${encodeURIComponent(cls)}`;
         });
 
+        // ── Real-Time Background Polling for WhatsApp Inbound Messages ──────
+        let lastKnownMaxId = 0;
+        let lastTimelineCount = 0;
+
+        async function refreshWaInboundStatus() {
+            const el = document.getElementById('waInboundStatus');
+            if (!el) return;
+            try {
+                const res = await fetch('api_whatsapp_session.php?action=status', { cache: 'no-store' });
+                const data = await res.json();
+                const sess = data && data.session ? data.session : null;
+                const running = !!(data && (data.bridge_running || (sess && sess.bridge_running)));
+                const logoutBtn = document.getElementById('waLogoutBtn');
+                const showLogout = (on) => {
+                    if (!logoutBtn || logoutBtn.dataset.busy === '1') return;
+                    logoutBtn.style.display = on ? 'inline-flex' : 'none';
+                };
+                if (!running) {
+                    el.textContent = 'WhatsApp bridge is not running.';
+                    showLogout(false);
+                    return;
+                }
+                if (!sess || !sess.is_connected) {
+                    el.textContent = 'WhatsApp is not linked. Scan the QR on the WhatsApp page.';
+                    showLogout(false);
+                    return;
+                }
+                showLogout(true);
+                const stored = sess.last_ingest_at ? ('Last parent message stored at ' + sess.last_ingest_at + '.') : '';
+                if (sess.last_skip_note) {
+                    el.textContent = sess.last_skip_note + (stored ? ' ' + stored : '');
+                    return;
+                }
+                el.textContent = stored || 'WhatsApp is linked. No new parent message has been stored.';
+            } catch (e) {
+                el.textContent = 'WhatsApp link status is unavailable.';
+            }
+        }
+
+        async function pollEnquiriesBackground() {
+            refreshWaInboundStatus();
+            try {
+                const activeEl = document.activeElement;
+                const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA') && activeEl.id && activeEl.id.startsWith('inp');
+
+                const year = document.getElementById('filterYear').value;
+                const classVal = document.getElementById('filterClass').value;
+                const staffId = document.getElementById('filterStaff').value;
+                const search = document.getElementById('filterSearch').value;
+
+                const url = `api_admission_enquiry.php?action=list&page=1&status=${encodeURIComponent(activeStatusFilter)}&academic_year=${encodeURIComponent(year)}&interested_class=${encodeURIComponent(classVal)}&assigned_staff_id=${staffId}&search=${encodeURIComponent(search)}`;
+                const res = await fetch(url);
+                const data = await res.json();
+                if (!data || !data.success) return;
+
+                const items = data.data || [];
+                const highestId = items.length ? Math.max(...items.map(i => parseInt(i.id, 10) || 0)) : 0;
+
+                if (lastKnownMaxId === 0) {
+                    lastKnownMaxId = highestId;
+                } else if (highestId > lastKnownMaxId) {
+                    const newItems = items.filter(i => (parseInt(i.id, 10) || 0) > lastKnownMaxId);
+                    lastKnownMaxId = highestId;
+                    if (!isTyping) {
+                        loadEnquiries(currentPage);
+                    }
+                    if (newItems.length) {
+                        const topNew = newItems[0];
+                        showToast(`New WhatsApp Enquiry from ${topNew.parent_name || 'Parent'} (${topNew.interested_class})`, 'info');
+                    }
+                }
+
+                // If conversation modal is open, poll latest messages for this enquiry
+                const modalConv = document.getElementById('modalConversationView');
+                if (modalConv && modalConv.style.display === 'flex' && currentEnquiryId) {
+                    const gRes = await fetch(`api_admission_enquiry.php?action=get&id=${currentEnquiryId}`);
+                    const gData = await gRes.json();
+                    if (gData && gData.success && gData.timeline) {
+                        if (lastTimelineCount === 0) {
+                            lastTimelineCount = gData.timeline.length;
+                        } else if (gData.timeline.length > lastTimelineCount) {
+                            lastTimelineCount = gData.timeline.length;
+                            renderTimelineStream(gData.timeline, gData.data);
+                        }
+                    }
+                }
+            } catch (ignored) {}
+        }
+
+        setInterval(pollEnquiriesBackground, 12000);
+        refreshWaInboundStatus();
+
         // Initial Load
         loadEnquiries(1);
     })();
     </script>
+    <script src="../assets/js/admission-ai-review.js?v=<?= filemtime(__DIR__ . '/../assets/js/admission-ai-review.js') ?>"></script>
 </body>
 </html>

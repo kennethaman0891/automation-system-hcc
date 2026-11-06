@@ -248,12 +248,18 @@ class WhatsAppNotifications {
   constructor() {
     this.container = null;
     this.defaultIcon = '/hcc/assets/images/hcclogo.jpg';
+    /** @type {Map<string, {el: HTMLElement, count: number, chatId: *, title: string, timer: *}>} */
+    this.toastsByChat = new Map();
+    this.overflowEl = null;
+    this.maxVisible = 3;
+    this.defaultTimeout = 4500;
     this.injectStyles();
   }
 
   injectStyles() {
     if (typeof document === 'undefined') return;
-    if (document.getElementById('wa-notifications-style')) return;
+    const existing = document.getElementById('wa-notifications-style');
+    if (existing) existing.remove();
 
     const style = document.createElement('style');
     style.id = 'wa-notifications-style';
@@ -271,7 +277,7 @@ class WhatsAppNotifications {
         pointer-events: none;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       }
-      .wa-toast-banner {
+      .wa-toast-banner, .wa-toast-overflow {
         pointer-events: auto;
         display: flex;
         align-items: center;
@@ -288,97 +294,53 @@ class WhatsAppNotifications {
         transform: translateX(110%);
         opacity: 0;
       }
-      .wa-light .wa-toast-banner, html:not(.wa-dark) .wa-toast-banner {
+      .wa-light .wa-toast-banner, html:not(.wa-dark) .wa-toast-banner,
+      .wa-light .wa-toast-overflow, html:not(.wa-dark) .wa-toast-overflow {
         background: #ffffff;
         color: #111b21;
         border: 1px solid rgba(0, 0, 0, 0.08);
         border-left: 4px solid #00a884;
         box-shadow: 0 4px 18px rgba(0, 0, 0, 0.12);
       }
-      .wa-toast-banner.wa-toast-visible {
+      .wa-toast-banner.wa-toast-visible, .wa-toast-overflow.wa-toast-visible {
         transform: translateX(0);
         opacity: 1;
       }
-      .wa-toast-banner.wa-toast-hiding {
+      .wa-toast-banner.wa-toast-hiding, .wa-toast-overflow.wa-toast-hiding {
         transform: translateX(110%);
         opacity: 0;
       }
-      .wa-toast-banner:hover {
-        filter: brightness(1.05);
-      }
+      .wa-toast-banner:hover, .wa-toast-overflow:hover { filter: brightness(1.05); }
       .wa-toast-avatar {
-        width: 42px;
-        height: 42px;
-        border-radius: 50%;
-        object-fit: cover;
-        background: #202c33;
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: 600;
-        color: #00a884;
-        font-size: 16px;
+        width: 42px; height: 42px; border-radius: 50%; object-fit: cover;
+        background: #202c33; flex-shrink: 0; display: flex; align-items: center;
+        justify-content: center; font-weight: 600; color: #00a884; font-size: 16px;
       }
-      .wa-light .wa-toast-avatar, html:not(.wa-dark) .wa-toast-avatar {
-        background: #e9edef;
-      }
-      .wa-toast-content {
-        flex: 1;
-        min-width: 0;
-      }
-      .wa-toast-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-bottom: 3px;
-      }
+      .wa-light .wa-toast-avatar, html:not(.wa-dark) .wa-toast-avatar { background: #e9edef; }
+      .wa-toast-content { flex: 1; min-width: 0; }
+      .wa-toast-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 3px; gap: 8px; }
       .wa-toast-title {
-        font-size: 14px;
-        font-weight: 600;
-        color: inherit;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        font-size: 14px; font-weight: 600; color: inherit;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       }
-      .wa-toast-time {
-        font-size: 11px;
-        color: #8696a0;
-        margin-left: 8px;
-        flex-shrink: 0;
+      .wa-toast-count {
+        font-size: 11px; font-weight: 700; background: #00a884; color: #fff;
+        border-radius: 999px; padding: 1px 7px; flex-shrink: 0;
       }
+      .wa-toast-time { font-size: 11px; color: #8696a0; margin-left: auto; flex-shrink: 0; }
       .wa-toast-body {
-        font-size: 13px;
-        color: #8696a0;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        line-height: 1.35;
+        font-size: 13px; color: #8696a0; white-space: nowrap;
+        overflow: hidden; text-overflow: ellipsis; line-height: 1.35;
       }
       .wa-toast-close {
-        background: transparent;
-        border: none;
-        color: #8696a0;
-        cursor: pointer;
-        font-size: 18px;
-        line-height: 1;
-        padding: 4px;
-        margin-left: 4px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 24px;
-        height: 24px;
-        flex-shrink: 0;
+        background: transparent; border: none; color: #8696a0; cursor: pointer;
+        font-size: 18px; line-height: 1; padding: 4px; margin-left: 4px;
+        border-radius: 50%; display: flex; align-items: center; justify-content: center;
+        width: 24px; height: 24px; flex-shrink: 0;
       }
-      .wa-toast-close:hover {
-        background: rgba(134, 150, 160, 0.15);
-        color: #e9edef;
-      }
-      .wa-light .wa-toast-close:hover, html:not(.wa-dark) .wa-toast-close:hover {
-        color: #111b21;
-      }
+      .wa-toast-close:hover { background: rgba(134, 150, 160, 0.15); color: #e9edef; }
+      .wa-light .wa-toast-close:hover, html:not(.wa-dark) .wa-toast-close:hover { color: #111b21; }
+      .wa-toast-overflow { justify-content: center; font-size: 13px; font-weight: 600; cursor: default; }
     `;
     document.head.appendChild(style);
   }
@@ -394,79 +356,126 @@ class WhatsAppNotifications {
     return container;
   }
 
-  async requestPermission() {
-    if (typeof window === 'undefined' || !('Notification' in window)) {
-      console.warn('Notifications not supported by this browser.');
-      return 'denied';
-    }
-    if (Notification.permission === 'granted') {
-      return 'granted';
-    }
-    if (Notification.permission !== 'denied') {
-      try {
-        const perm = await Notification.requestPermission();
-        return perm;
-      } catch (e) {
-        return 'denied';
+  chatKey(options = {}, title = '') {
+    if (options.chatId != null && options.chatId !== '') return 'c:' + String(options.chatId);
+    return 't:' + String(title || 'WhatsApp');
+  }
+
+  shouldSuppress(options = {}) {
+    const store = (typeof window !== 'undefined') ? window.WhatsAppStore : null;
+    if (options.force) return false;
+    if (options.silentToast) return true;
+    if (store) {
+      if (store.suppressNotifications) return true;
+      if (store._initialSyncing) return true;
+      if (options.chatId != null && store.activeChatId != null
+          && String(store.activeChatId) === String(options.chatId)) {
+        return true;
       }
+    }
+    return false;
+  }
+
+  async requestPermission() {
+    if (typeof window === 'undefined' || !('Notification' in window)) return 'denied';
+    if (Notification.permission === 'granted') return 'granted';
+    if (Notification.permission !== 'denied') {
+      try { return await Notification.requestPermission(); } catch (e) { return 'denied'; }
     }
     return Notification.permission;
   }
 
   show(title, body, options = {}) {
+    if (this.shouldSuppress(options)) return null;
+
     const isPageFocused = (typeof document !== 'undefined' && document.hasFocus) ? document.hasFocus() : true;
     const canNative = (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted');
 
-    // Trigger native desktop notification if permitted AND (page is blurred OR forceDesktop option)
     if (canNative && (!isPageFocused || options.forceDesktop)) {
       try {
         const iconPath = options.icon || this.defaultIcon;
+        const tag = options.tag || ('wa_chat_' + this.chatKey(options, title));
         const nativeNotif = new Notification(title || 'WhatsApp Message', {
           body: body || '',
           icon: iconPath,
           badge: iconPath,
-          tag: options.tag || ('wa_msg_' + Date.now()),
+          tag,
+          renotify: true,
           silent: options.silent || false
         });
-
         nativeNotif.onclick = () => {
           if (typeof window !== 'undefined') window.focus();
-          if (typeof options.onClick === 'function') {
-            options.onClick();
-          } else if (options.chatId && window.WhatsAppStore) {
-            window.WhatsAppStore.setActiveChat(options.chatId);
-          }
+          this.openChat(options);
           nativeNotif.close();
         };
-
+        // Still show in-app grouped toast when focused later? Only native when blurred.
         return nativeNotif;
       } catch (err) {
         console.warn('Native notification failed, falling back to toast:', err);
       }
     }
 
-    // Otherwise (or if page is focused or native blocked), show sleek in-app toast
     return this.showToast(title, body, options);
+  }
+
+  openChat(options = {}) {
+    if (typeof options.onClick === 'function') {
+      options.onClick();
+      return;
+    }
+    if (options.chatId != null && window.WhatsAppStore && typeof window.WhatsAppStore.setActiveChat === 'function') {
+      window.WhatsAppStore.setActiveChat(options.chatId);
+    }
   }
 
   showToast(title, body, options = {}) {
     if (typeof document === 'undefined') return null;
+    if (this.shouldSuppress(options)) return null;
     this.injectStyles();
     const container = this.getContainer();
     if (!container) return null;
 
-    const toast = document.createElement('div');
-    toast.className = 'wa-toast-banner';
-
+    const key = this.chatKey(options, title);
+    const existing = this.toastsByChat.get(key);
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const avatarSrc = options.avatar || options.icon || this.defaultIcon;
     const initial = (title || 'W').charAt(0).toUpperCase();
-    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const timeout = options.timeout || this.defaultTimeout;
 
+    if (existing && existing.el && document.body.contains(existing.el)) {
+      existing.count += 1;
+      existing.title = title || existing.title;
+      existing.body = body || existing.body;
+      existing.options = { ...existing.options, ...options };
+      const countEl = existing.el.querySelector('.wa-toast-count');
+      if (countEl) {
+        countEl.textContent = String(existing.count);
+        countEl.style.display = existing.count > 1 ? 'inline-block' : 'none';
+      }
+      const bodyEl = existing.el.querySelector('.wa-toast-body');
+      if (bodyEl) bodyEl.textContent = body || '';
+      const titleEl = existing.el.querySelector('.wa-toast-title');
+      if (titleEl) titleEl.textContent = title || 'New Message';
+      const timeEl = existing.el.querySelector('.wa-toast-time');
+      if (timeEl) timeEl.textContent = timeStr;
+      // Move to top of stack (most recent)
+      container.insertBefore(existing.el, container.firstChild);
+      if (existing.timer) clearTimeout(existing.timer);
+      existing.timer = setTimeout(() => this.dismissToast(existing.el), timeout);
+      existing.el._dismissTimer = existing.timer;
+      this.enforceCap();
+      return existing.el;
+    }
+
+    const toast = document.createElement('div');
+    toast.className = 'wa-toast-banner';
+    toast.dataset.chatKey = key;
     toast.innerHTML = `
       <img class="wa-toast-avatar" src="${avatarSrc}" alt="${this.escapeHtml(title || '')}" onerror="this.outerHTML='<div class=\\'wa-toast-avatar\\'>${initial}</div>'">
       <div class="wa-toast-content">
         <div class="wa-toast-header">
           <div class="wa-toast-title">${this.escapeHtml(title || 'New Message')}</div>
+          <span class="wa-toast-count" style="display:none">1</span>
           <div class="wa-toast-time">${timeStr}</div>
         </div>
         <div class="wa-toast-body">${this.escapeHtml(body || '')}</div>
@@ -474,55 +483,103 @@ class WhatsAppNotifications {
       <button class="wa-toast-close" title="Close" aria-label="Close">×</button>
     `;
 
-    // Click handler
     toast.addEventListener('click', (e) => {
       if (e.target.closest('.wa-toast-close')) return;
-      if (typeof options.onClick === 'function') {
-        options.onClick();
-      } else if (options.chatId && window.WhatsAppStore) {
-        window.WhatsAppStore.setActiveChat(options.chatId);
-      }
+      const entry = this.toastsByChat.get(key);
+      this.openChat((entry && entry.options) || options);
       this.dismissToast(toast);
     });
-
-    // Close button
     toast.querySelector('.wa-toast-close')?.addEventListener('click', (e) => {
       e.stopPropagation();
       this.dismissToast(toast);
     });
 
-    container.appendChild(toast);
-
-    // Trigger enter animation
+    container.insertBefore(toast, container.firstChild);
     if (typeof requestAnimationFrame !== 'undefined') {
-      requestAnimationFrame(() => {
-        toast.classList.add('wa-toast-visible');
-      });
+      requestAnimationFrame(() => toast.classList.add('wa-toast-visible'));
     } else {
       toast.classList.add('wa-toast-visible');
     }
 
-    // Auto dismiss after timeout
-    const timeout = options.timeout || 4500;
-    const timer = setTimeout(() => {
-      this.dismissToast(toast);
-    }, timeout);
-
+    const timer = setTimeout(() => this.dismissToast(toast), timeout);
     toast._dismissTimer = timer;
+    this.toastsByChat.set(key, {
+      el: toast, count: 1, chatId: options.chatId, title: title || 'WhatsApp',
+      body: body || '', options: { ...options }, timer
+    });
+    this.enforceCap();
     return toast;
+  }
+
+  enforceCap() {
+    const container = this.getContainer();
+    if (!container) return;
+    const banners = Array.from(container.querySelectorAll('.wa-toast-banner'));
+    // Keep first maxVisible; hide the rest and show overflow chip
+    let hidden = 0;
+    banners.forEach((el, idx) => {
+      if (idx < this.maxVisible) {
+        el.style.display = '';
+      } else {
+        el.style.display = 'none';
+        hidden += 1;
+      }
+    });
+
+    if (hidden > 0) {
+      if (!this.overflowEl || !document.body.contains(this.overflowEl)) {
+        this.overflowEl = document.createElement('div');
+        this.overflowEl.className = 'wa-toast-overflow wa-toast-visible';
+        this.overflowEl.addEventListener('click', () => {
+          // Reveal next hidden toast by dismissing oldest visible? Prefer expand briefly.
+          banners.forEach((el) => { el.style.display = ''; });
+          this.overflowEl.remove();
+          this.overflowEl = null;
+          // Re-cap after a beat so UI stays tidy
+          setTimeout(() => this.enforceCap(), 4000);
+        });
+      }
+      this.overflowEl.textContent = `+${hidden} more notification${hidden === 1 ? '' : 's'}`;
+      // Place after visible toasts
+      const lastVisible = banners[Math.min(this.maxVisible, banners.length) - 1];
+      if (lastVisible && lastVisible.nextSibling !== this.overflowEl) {
+        if (this.overflowEl.parentNode) this.overflowEl.remove();
+        if (lastVisible.nextSibling) container.insertBefore(this.overflowEl, lastVisible.nextSibling);
+        else container.appendChild(this.overflowEl);
+      } else if (!this.overflowEl.parentNode) {
+        container.appendChild(this.overflowEl);
+      }
+      requestAnimationFrame(() => this.overflowEl && this.overflowEl.classList.add('wa-toast-visible'));
+    } else if (this.overflowEl) {
+      this.overflowEl.remove();
+      this.overflowEl = null;
+    }
   }
 
   dismissToast(toast) {
     if (!toast || toast._isDismissing) return;
     toast._isDismissing = true;
     if (toast._dismissTimer) clearTimeout(toast._dismissTimer);
-
+    const key = toast.dataset.chatKey;
+    if (key && this.toastsByChat.has(key)) {
+      const entry = this.toastsByChat.get(key);
+      if (entry && entry.timer) clearTimeout(entry.timer);
+      this.toastsByChat.delete(key);
+    }
     toast.classList.remove('wa-toast-visible');
     toast.classList.add('wa-toast-hiding');
-
     setTimeout(() => {
       toast.remove();
-    }, 300);
+      this.enforceCap();
+    }, 280);
+  }
+
+  dismissAll() {
+    const container = this.getContainer();
+    if (!container) return;
+    Array.from(container.querySelectorAll('.wa-toast-banner')).forEach((el) => this.dismissToast(el));
+    if (this.overflowEl) { this.overflowEl.remove(); this.overflowEl = null; }
+    this.toastsByChat.clear();
   }
 
   escapeHtml(str) {

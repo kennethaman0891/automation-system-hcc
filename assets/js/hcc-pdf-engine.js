@@ -825,121 +825,12 @@
 
     /**
      * Sends PDF via Puppeteer browser automation through the PHP API endpoint.
-     * Generates PDF, encodes as base64, calls api_automated_send.php,
+     * Generates PDF, encodes as base64, USED TO call api_automated_send.php (now 410 — send from WhatsApp hub instead),
      * which triggers the Node.js Puppeteer script.
      */
     HCCPdfEngine.shareWhatsAppAutomated = function (st, docType, meta, phone, customNote, messageOverride) {
-        var note = customNote || '';
-        var _override = (typeof messageOverride === 'string') ? messageOverride : '';
-        var msg = '';
-        if (_override.trim() !== '') {
-            // Teacher-edited message for this student — use it verbatim.
-            msg = _override;
-        } else if (docType === 'unit_test') {
-            msg = window.HCCWhatsApp.templates.unitTest({
-                schoolName: meta.schoolName,
-                studentName: st.name,
-                roll: st.roll,
-                className: meta.className,
-                testType: meta.testType,
-                subjects: st.subjects,
-                obtained: st.obtained,
-                maxTotal: st.max_total,
-                percentage: st.pct,
-                grade: st.grade,
-                remark: st.remark,
-                customNote: note,
-                academicYear: meta.academicYear,
-                principalName: meta.principalName
-            });
-        } else if (docType === 'bonafide') {
-            msg = window.HCCWhatsApp.templates.bonafide({
-                schoolName: meta.schoolName,
-                studentName: st.name,
-                roll: st.roll,
-                className: meta.className,
-                academicYear: st.academic_year || meta.academicYear,
-                grNo: st.gr_no || '3875',
-                certSerial: st.cert_serial || st.roll,
-                dob: st.dob_words || st.dob_digits || '',
-                issueDate: st.issue_date || '',
-                customNote: note,
-                principalName: meta.principalName
-            });
-        } else {
-            msg = window.HCCWhatsApp.templates.reportCard({
-                schoolName: meta.schoolName,
-                studentName: st.name,
-                roll: st.roll,
-                className: meta.className,
-                semester: meta.semester,
-                obtained: st.obtained,
-                maxTotal: st.max_total,
-                percentage: st.pct,
-                grade: st.grade,
-                status: st.status,
-                attendance: st.attendance,
-                remark: st.remark,
-                customNote: note,
-                academicYear: meta.academicYear,
-                principalName: meta.principalName
-            });
-        }
-
-        if (window.HCCWhatsApp && window.HCCWhatsApp.showToast) {
-            window.HCCWhatsApp.showToast('Preparing automated send for ' + st.name + '...', 'fa-spinner fa-spin');
-        }
-
-        return HCCPdfEngine.generateSinglePdf(st, docType, meta).then(function (res) {
-            // Convert blob to base64 data URL for the API call
-            return new Promise(function (resolve, reject) {
-                var reader = new FileReader();
-                reader.onloadend = function () {
-                    var base64 = reader.result; // data:application/pdf;base64,...
-                    fetch('../admin/api_automated_send.php', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            phone: window.HCCWhatsApp ? window.HCCWhatsApp.cleanPhone(phone) : phone,
-                            message: msg,
-                            pdf_base64: base64,
-                            filename: res.fileName,
-                            student_roll: st.roll,
-                            student_name: st.name,
-                            academic_year: st.academic_year || meta.academicYear || '',
-                            std: st.std || '',
-                            division: st.division || '',
-                            semester: meta.semester || '',
-                            test_type: meta.testType || '',
-                            doc_type: docType,
-                            dispatch_method: 'auto'
-                        })
-                    })
-                    .then(function (r) { return r.json(); })
-                    .then(function (result) {
-                        if (result.success) {
-                            if (window.HCCWhatsApp && window.HCCWhatsApp.showToast) {
-                                window.HCCWhatsApp.showToast('PDF sent successfully to ' + st.name + '!', 'fa-check-circle');
-                            }
-                            resolve(result);
-                        } else {
-                            var errMsg = result.error || 'Unknown error';
-                            if (window.HCCWhatsApp && window.HCCWhatsApp.showToast) {
-                                window.HCCWhatsApp.showToast('Send failed: ' + errMsg, 'fa-exclamation-triangle');
-                            }
-                            reject(new Error(errMsg));
-                        }
-                    })
-                    .catch(function (err) {
-                        if (window.HCCWhatsApp && window.HCCWhatsApp.showToast) {
-                            window.HCCWhatsApp.showToast('Network error: ' + err.message, 'fa-exclamation-triangle');
-                        }
-                        reject(err);
-                    });
-                };
-                reader.readAsDataURL(res.blob);
-            });
-        });
+        // REMOVED: automated WhatsApp sending. Use the WhatsApp hub Send button.
+        return Promise.reject(new Error('Automated WhatsApp sending has been removed. Open the WhatsApp hub, attach the PDF or paste the message, and press Send.'));
     };
 
     window.HCCPdfEngine = HCCPdfEngine;

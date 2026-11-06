@@ -1108,5 +1108,56 @@
         if (rawStudents.length > 0) {
             updatePreview(0);
         }
+
+        // ════════════════════════════════════════════════════════════════════
+        // HUB TEMPLATE LIBRARY WIRING
+        // ════════════════════════════════════════════════════════════════════
+        const hubTplLib = document.getElementById('wa-template-library-hub');
+        const btnTemplatesHub = document.getElementById('btnTemplatesHub');
+
+        if (hubTplLib && btnTemplatesHub) {
+            btnTemplatesHub.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const st = rawStudents[activeIdx];
+                if (!st) {
+                    if (window.HCCWhatsApp && window.HCCWhatsApp.showToast) {
+                        window.HCCWhatsApp.showToast('⚠️ Select a student first.', 'fa-triangle-exclamation');
+                    }
+                    return;
+                }
+                const classLabel = (st.class_label || (st.std ? 'STD ' + st.std + ' ' + (st.division || '') : 'your class'));
+                const student = {
+                    roll: st.roll,
+                    name: st.name,
+                    parent_phone: st.parent_phone || '',
+                    class_label: classLabel,
+                    academic_year: st.academic_year || year,
+                    semester: st.semester || semester,
+                    division: st.division || division
+                };
+                hubTplLib.open({
+                    hubMode: true,
+                    student: student,
+                    onSelect: (filledBody) => {
+                        // Inject into the hub composer (contenteditable bubble)
+                        if (mockBubbleText) {
+                            mockBubbleText.textContent = filledBody;
+                            mockBubbleText.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                        // Save as override for this student so it persists
+                        const st2 = rawStudents[activeIdx];
+                        if (st2) {
+                            messageOverrides[String(st2.roll)] = filledBody;
+                            persistMessageOverrides();
+                            syncBubbleEditState(st2);
+                        }
+                        if (window.HCCWhatsApp && window.HCCWhatsApp.showToast) {
+                            window.HCCWhatsApp.showToast('✅ Template applied to message.', 'fa-check');
+                        }
+                    }
+                });
+            });
+        }
     });
 })();

@@ -68,7 +68,8 @@ try {
                 $groupLike = stripos($waChatId, '@g.us') !== false
                     || stripos($waChatId, 'broadcast') !== false
                     || stripos($waChatId, 'channel') !== false;
-                if (!$groupLike) {
+                $isLid = stripos($waChatId, '@lid') !== false;
+                if (!$groupLike && !$isLid) {
                     // Same rules as New chat: 10-digit Indian mobiles become 91xxxxxxxxxx.
                     $checked = waValidateWhatsAppPhone($waChatId);
                     if (!$checked['ok']) {
@@ -76,6 +77,10 @@ try {
                         continue;
                     }
                     $waChatId = $checked['digits'] . '@c.us';
+                }
+                // @lid / title:@slug@lid kept as-is (no phone available)
+                if ($isLid) {
+                    $waChatId = strtolower(trim($waChatId));
                 }
             }
 
@@ -128,23 +133,29 @@ try {
             ]);
             $inserted++;
 
-            // Flag admission chats. A missing column must not roll back inserted messages.
-            if ($hasAdmissionFlag !== false && empty($msg['from_me']) && !empty($msg['body'])) {
-                $bodyLower = strtolower((string)$msg['body']);
-                $admissionKeywords = ['admission', 'admissions', 'fee', 'fees', 'nursery', 'lkg', 'ukg', 'standard', 'grade', 'eligibility', 'timings', 'transport', 'campus visit'];
-                foreach ($admissionKeywords as $kw) {
-                    if (str_contains($bodyLower, $kw)) {
-                        try {
-                            $db->exec('SAVEPOINT wa_enq_flag');
-                            $db->prepare("UPDATE whatsapp_chats SET is_admission_enquiry = 1 WHERE id = ?")->execute([$chatId]);
-                            $db->exec('RELEASE SAVEPOINT wa_enq_flag');
-                        } catch (Throwable $e) {
-                            try {
-                                $db->exec('ROLLBACK TO SAVEPOINT wa_enq_flag');
-                            } catch (Throwable $ignored) {}
-                        }
-                        break;
-                    }
+            // A chat-list preview (bridge could not open the chat) is a stand-in. When the
+            // real message arrives, drop the stand-in so the hub does not show it twice.
+            $isPreviewOnly = is_array($msg['metadata'] ?? null) && !empty($msg['metadata']['preview_only']);
+            if (!$isPreviewOnly && empty($msg['from_me']) && trim((string)($msg['body'] ?? '')) !== '') {
+                try {
+                    waDropSupersededPreviews($db, (int)$chatId, (string)$msg['body']);
+                } catch (Throwable $prevEx) {
+                    error_log('Preview cleanup warning: ' . $prevEx->getMessage());
+                }
+            }
+
+            // ── Automatically sync with Admission Enquiries & Follow-ups Pipeline ──
+            // Previews are not synced; the real message syncs when the chat is read.
+            if (empty($msg['from_me']) && !$isPreviewOnly) {
+                try {
+                    $db->exec('SAVEPOINT wa_enq_sync');
+                    waSyncInboundAdmissionEnquiry($db, $msg, $chatId, $senderId, $waChatId, $chatType);
+                    $db->exec('RELEASE SAVEPOINT wa_enq_sync');
+                } catch (Throwable $enqEx) {
+                    try {
+                        $db->exec('ROLLBACK TO SAVEPOINT wa_enq_sync');
+                    } catch (Throwable $ignored) {}
+                    error_log('Admission enquiry sync warning: ' . $enqEx->getMessage());
                 }
             }
             
@@ -163,3 +174,346 @@ waJsonResponse([
     'inserted' => $inserted,
     'errors' => $errors
 ]);
+
+/**
+ * Automatically syncs an incoming WhatsApp message with the Admission Enquiries pipeline:
+ *  - If an enquiry already exists for this phone or chat, appends to admission_enquiry_messages,
+ *    updates follow-up state, and logs history.
+ *  - If no enquiry exists and this is an individual incoming chat, automatically captures a new enquiry
+ *    in admission_enquiries, sets next_followup_date to today, and links it to whatsapp_chats.
+ */
+function waPhoneIsLinkedSchoolLine(PDO $db, string $phone10): bool {
+    if (strlen($phone10) < 10) {
+        return false;
+    }
+    try {
+        $stmt = $db->query("SELECT phone_number FROM whatsapp_sessions WHERE session_name = 'default' LIMIT 1");
+        $digits = preg_replace('/\D/', '', (string)$stmt->fetchColumn());
+        if (strlen($digits) === 10 && preg_match('/^[6-9]/', $digits)) {
+            $digits = '91' . $digits;
+        }
+        return $digits !== '' && str_ends_with($digits, $phone10);
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+function waPhoneOnSchoolRoster(PDO $db, string $phone10): bool {
+    if (strlen($phone10) < 10) {
+        return false;
+    }
+    try {
+        $stmt = $db->prepare("SELECT parent_phone FROM report_card WHERE parent_phone LIKE ? LIMIT 20");
+        $stmt->execute(['%' . $phone10]);
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $digits = preg_replace('/\D/', '', (string)($row['parent_phone'] ?? ''));
+            if (str_ends_with($digits, $phone10)) {
+                return true;
+            }
+        }
+    } catch (Throwable $e) {}
+    try {
+        $chk = $db->query("SHOW TABLES LIKE 'teacher_contacts'");
+        if ($chk && $chk->fetchColumn()) {
+            $teacher = $db->prepare("SELECT phone FROM teacher_contacts WHERE phone LIKE ? LIMIT 20");
+            $teacher->execute(['%' . $phone10]);
+            while ($row = $teacher->fetch(PDO::FETCH_ASSOC)) {
+                $digits = preg_replace('/\D/', '', (string)($row['phone'] ?? ''));
+                if (str_ends_with($digits, $phone10)) {
+                    return true;
+                }
+            }
+        }
+    } catch (Throwable $e) {}
+    return false;
+}
+
+function waMessageHasAdmissionIntent(string $body): bool {
+    $text = mb_strtolower($body);
+    if (preg_match('/\b(admissions?|fees?|nursery|lkg|ukg|prospectus|brochure|vacancy|vacant|seats?|apply|application|registration|register)\b/u', $text)) {
+        return true;
+    }
+    if (preg_match('/\b(class|standard|std|grade)\s*([0-9]{1,2}|i{1,3}|iv|vi{0,3}|ix|x|xi|xii|nursery|lkg|ukg)\b/u', $text)) {
+        return true;
+    }
+    if (preg_match('/\b([0-9]{1,2}(?:st|nd|rd|th)?|nursery|lkg|ukg)\s*(class|standard|std|grade)\b/u', $text)) {
+        return true;
+    }
+    return false;
+}
+
+function waInboundIsBlankSync(array $msg, string $bodyText): bool {
+    $msgType = strtolower((string)($msg['msg_type'] ?? 'text'));
+    $meta = $msg['metadata'] ?? [];
+    if (is_string($meta)) {
+        $decoded = json_decode($meta, true);
+        $meta = is_array($decoded) ? $decoded : [];
+    }
+    if (!is_array($meta)) {
+        $meta = [];
+    }
+    $waMsgId = (string)($msg['wa_msg_id'] ?? '');
+    $isSync = $msgType === 'system' || !empty($meta['sync']) || str_starts_with($waMsgId, 'chat_sync_');
+    $hasMedia = !empty($msg['media_url']) || in_array($msgType, ['image', 'video', 'audio', 'document', 'sticker'], true);
+    return $isSync || ($bodyText === '' && !$hasMedia);
+}
+
+function waSyncInboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, ?int $senderId, string $waChatId, string $chatType): ?int {
+    if (!empty($msg['from_me']) || $chatType !== 'individual') {
+        return null;
+    }
+
+    $bodyText = trim((string)($msg['body'] ?? ''));
+    if (waInboundIsBlankSync($msg, $bodyText)) {
+        return null;
+    }
+    $rawDigitsEarly = preg_replace('/\D/', '', $waChatId);
+    $linkedTail = strlen($rawDigitsEarly) > 10 ? substr($rawDigitsEarly, -10) : $rawDigitsEarly;
+    if (waPhoneIsLinkedSchoolLine($db, $linkedTail)) {
+        return null;
+    }
+    $rawDigits = preg_replace('/\D/', '', $waChatId);
+    if (str_starts_with($rawDigits, '0')) {
+        $rawDigits = substr($rawDigits, 1);
+    }
+    if (strlen($rawDigits) === 10 && preg_match('/^[6-9]/', $rawDigits)) {
+        $rawDigits = '91' . $rawDigits;
+    }
+    if (strlen($rawDigits) < 10) {
+        return null;
+    }
+
+    $phoneE164 = '+' . $rawDigits;
+    $phone10 = strlen($rawDigits) > 10 ? substr($rawDigits, -10) : $rawDigits;
+    $formattedPhone = '+' . substr($rawDigits, 0, 2) . ' ' . substr($rawDigits, 2, 5) . ' ' . substr($rawDigits, 7);
+
+    $parentName = trim((string)($msg['sender_name'] ?? ($msg['sender_push_name'] ?? '')));
+    if ($parentName === '' || strtolower($parentName) === 'you') {
+        $parentName = 'Parent (' . $phone10 . ')';
+    }
+
+    // 1. Check if an active enquiry already exists
+    $enqStmt = $db->prepare("
+        SELECT id, parent_name, student_name, interested_class, academic_year, status, followup_category, chat_id
+        FROM admission_enquiries
+        WHERE chat_id = ? 
+           OR phone_e164 = ? 
+           OR phone_number LIKE ?
+        ORDER BY id DESC LIMIT 1
+    ");
+    $enqStmt->execute([$chatId, $phoneE164, "%{$phone10}%"]);
+    $existing = $enqStmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($existing) {
+        $enquiryId = (int)$existing['id'];
+        $waMsgId = (string)($msg['wa_msg_id'] ?? '');
+        if ($waMsgId !== '') {
+            $byId = $db->prepare("
+                SELECT id FROM admission_enquiry_messages
+                WHERE enquiry_id = ? AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.wa_msg_id')) = ?
+                LIMIT 1
+            ");
+            $byId->execute([$enquiryId, $waMsgId]);
+            if ($byId->fetchColumn()) {
+                return $enquiryId;
+            }
+        }
+        if ($bodyText !== '') {
+            $byBody = $db->prepare("
+                SELECT id FROM admission_enquiry_messages
+                WHERE enquiry_id = ? AND message_type = 'incoming_message' AND body = ?
+                  AND created_at >= (NOW() - INTERVAL 6 HOUR)
+                LIMIT 1
+            ");
+            $byBody->execute([$enquiryId, $bodyText]);
+            if ($byBody->fetchColumn()) {
+                return $enquiryId;
+            }
+        }
+
+        // Append to conversation timeline
+        $msgIns = $db->prepare("
+            INSERT INTO admission_enquiry_messages
+            (enquiry_id, message_type, body, admin_name, metadata, created_at)
+            VALUES (?, 'incoming_message', ?, ?, ?, NOW())
+        ");
+        $metaJson = json_encode([
+            'wa_msg_id' => $msg['wa_msg_id'] ?? null,
+            'chat_id' => $chatId,
+            'source' => 'whatsapp_inbound'
+        ], JSON_UNESCAPED_UNICODE);
+        $msgIns->execute([
+            $enquiryId,
+            $bodyText !== '' ? $bodyText : '[Media / Attachment received on WhatsApp]',
+            $parentName,
+            $metaJson
+        ]);
+
+        // Update enquiry activity timestamp and reset reminder if it was previously reminded
+        $upStmt = $db->prepare("
+            UPDATE admission_enquiries
+            SET updated_at = NOW(),
+                chat_id = COALESCE(chat_id, ?),
+                contact_id = COALESCE(contact_id, ?),
+                next_followup_date = CASE
+                    WHEN COALESCE(is_completed, 0) = 0 AND COALESCE(is_cancelled, 0) = 0 THEN CURDATE()
+                    ELSE next_followup_date
+                END,
+                reminder_status = CASE 
+                    WHEN reminder_status = 'reminded' THEN 'pending' 
+                    ELSE reminder_status 
+                END
+            WHERE id = ?
+        ");
+        $upStmt->execute([$chatId, $senderId, $enquiryId]);
+
+        // Log follow-up history entry
+        $histStmt = $db->prepare("
+            INSERT INTO admission_followup_history
+            (enquiry_id, action, title, details, performed_by, manual_sent_confirmed, delivery_verified, created_at)
+            VALUES (?, 'note_added', 'Parent WhatsApp Message Received', ?, 'WhatsApp Ingest', 0, 0, NOW())
+        ");
+        $snippet = $bodyText !== '' ? (mb_substr($bodyText, 0, 180) . (mb_strlen($bodyText) > 180 ? '...' : '')) : 'Media / Attachment received.';
+        $histStmt->execute([$enquiryId, $snippet]);
+
+        // Ensure whatsapp_chats is linked
+        try {
+            $db->prepare("
+                UPDATE whatsapp_chats 
+                SET is_admission_enquiry = 1,
+                    metadata = JSON_SET(COALESCE(metadata, '{}'), '$.enquiry_id', ?)
+                WHERE id = ?
+            ")->execute([$enquiryId, $chatId]);
+        } catch (Throwable $ignored) {}
+
+        return $enquiryId;
+    }
+
+    // A roster parent who only says "ok" stays in the WhatsApp hub.
+    // An unknown number, or a roster number asking about admission, becomes an enquiry.
+    if (waPhoneOnSchoolRoster($db, $phone10) && !waMessageHasAdmissionIntent($bodyText)) {
+        return null;
+    }
+
+    // 2. New Enquiry Auto-Capture
+    // Detect grade / class interest from message text
+    $detectedClass = 'General Enquiry';
+    $gradePatterns = [
+        '/\b(nursery|playgroup|pre-kg)\b/i' => 'Nursery',
+        '/\b(lkg|junior kg|jr kg)\b/i' => 'LKG',
+        '/\b(ukg|senior kg|sr kg)\b/i' => 'UKG',
+        '/\b(1st|first|std 1|class 1|grade 1)\b/i' => 'STD I',
+        '/\b(2nd|second|std 2|class 2|grade 2)\b/i' => 'STD II',
+        '/\b(3rd|third|std 3|class 3|grade 3)\b/i' => 'STD III',
+        '/\b(4th|fourth|std 4|class 4|grade 4)\b/i' => 'STD IV',
+        '/\b(5th|fifth|std 5|class 5|grade 5)\b/i' => 'STD V',
+        '/\b(6th|sixth|std 6|class 6|grade 6)\b/i' => 'STD VI',
+        '/\b(7th|seventh|std 7|class 7|grade 7)\b/i' => 'STD VII',
+        '/\b(8th|eighth|std 8|class 8|grade 8)\b/i' => 'STD VIII',
+        '/\b(9th|ninth|std 9|class 9|grade 9)\b/i' => 'STD IX',
+        '/\b(10th|tenth|std 10|class 10|grade 10)\b/i' => 'STD X',
+        '/\b(11th|eleventh|std 11|class 11|grade 11|jr college|fyjc)\b/i' => 'STD XI',
+        '/\b(12th|twelfth|std 12|class 12|grade 12|syjc)\b/i' => 'STD XII',
+    ];
+    foreach ($gradePatterns as $pat => $cls) {
+        if (preg_match($pat, $bodyText)) {
+            $detectedClass = $cls;
+            break;
+        }
+    }
+
+    // Check report_card for existing parent match
+    $matchedParent = 0;
+    $matchedRoll = null;
+    $matchedClass = null;
+    try {
+        $rcStmt = $db->prepare("
+            SELECT student_name, roll_no, std, division, academic_year 
+            FROM report_card 
+            WHERE parent_phone LIKE ? 
+            LIMIT 1
+        ");
+        $rcStmt->execute(["%{$phone10}%"]);
+        $rcMatch = $rcStmt->fetch(PDO::FETCH_ASSOC);
+        if ($rcMatch) {
+            $matchedParent = 1;
+            $matchedRoll = $rcMatch['roll_no'];
+            $matchedClass = 'STD ' . $rcMatch['std'] . ' ' . $rcMatch['division'];
+        }
+    } catch (Throwable $ignored) {}
+
+    // Academic Year
+    $academicYear = '2026-27';
+    try {
+        if (function_exists('getAllSettings')) {
+            $st = getAllSettings();
+            if (!empty($st['academic_year'])) $academicYear = $st['academic_year'];
+        }
+    } catch (Throwable $ignored) {}
+
+    $suggestedMsg = "Namaste {$parentName}, thank you for contacting Hindustani Covenant Church High School. We would be pleased to assist you with admission details for {$detectedClass}. Could you please share the student's full name and current school?";
+
+    $newEnqSql = "
+        INSERT INTO admission_enquiries (
+            parent_name, phone_number, phone_e164, student_name, interested_class, academic_year,
+            original_message, enquiry_source, status, followup_category,
+            next_followup_date, next_followup_time, priority, reminder_status,
+            suggested_message, next_recommended_action,
+            chat_id, contact_id, matched_student_roll, matched_student_class, matched_existing_parent,
+            created_by_name, created_at, updated_at
+        ) VALUES (
+            ?, ?, ?, NULL, ?, ?,
+            ?, 'whatsapp', 'NEW', 'First response pending',
+            CURDATE(), '10:00:00', 'high', 'pending',
+            ?, 'Review WhatsApp enquiry, share prospectus and schedule interaction.',
+            ?, ?, ?, ?, ?,
+            'WhatsApp Automation', NOW(), NOW()
+        )
+    ";
+    $newStmt = $db->prepare($newEnqSql);
+    $newStmt->execute([
+        $parentName, $formattedPhone, $phoneE164, $detectedClass, $academicYear,
+        $bodyText !== '' ? $bodyText : '[WhatsApp Inbound Enquiry]',
+        $suggestedMsg,
+        $chatId, $senderId, $matchedRoll, $matchedClass, $matchedParent
+    ]);
+    $newEnquiryId = (int)$db->lastInsertId();
+
+    // Insert into admission_enquiry_messages
+    $db->prepare("
+        INSERT INTO admission_enquiry_messages
+        (enquiry_id, message_type, body, admin_name, metadata, created_at)
+        VALUES (?, 'incoming_message', ?, ?, ?, NOW())
+    ")->execute([
+        $newEnquiryId,
+        $bodyText !== '' ? $bodyText : '[WhatsApp Inbound Enquiry]',
+        $parentName,
+        json_encode([
+            'source' => 'whatsapp',
+            'phone' => $phoneE164,
+            'wa_msg_id' => $msg['wa_msg_id'] ?? null
+        ], JSON_UNESCAPED_UNICODE)
+    ]);
+
+    // Insert into admission_followup_history
+    $db->prepare("
+        INSERT INTO admission_followup_history
+        (enquiry_id, action, title, details, performed_by, manual_sent_confirmed, delivery_verified, created_at)
+        VALUES (?, 'created', 'New WhatsApp Admission Enquiry Captured', ?, 'WhatsApp Automation', 0, 0, NOW())
+    ")->execute([
+        $newEnquiryId,
+        "Enquiry captured automatically from incoming WhatsApp message. Class: {$detectedClass}. Follow-up scheduled for today."
+    ]);
+
+    // Link chat metadata
+    try {
+        $db->prepare("
+            UPDATE whatsapp_chats 
+            SET is_admission_enquiry = 1,
+                metadata = JSON_SET(COALESCE(metadata, '{}'), '$.enquiry_id', ?)
+            WHERE id = ?
+        ")->execute([$newEnquiryId, $chatId]);
+    } catch (Throwable $ignored) {}
+
+    return $newEnquiryId;
+}

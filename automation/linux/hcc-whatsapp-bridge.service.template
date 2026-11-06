@@ -1,0 +1,28 @@
+[Unit]
+Description=HCC WhatsApp Bridge supervisor
+Documentation=file://__HCC_REPO_ROOT__/docs/LINUX_DEPLOYMENT.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Restarts only on crash (on-failure). Does not send messages by itself.
+# Outbound sends only happen when the user presses Send in the hub.
+Type=simple
+WorkingDirectory=__HCC_AUTOMATION_DIR__
+ExecStart=/usr/bin/env bash __HCC_AUTOMATION_DIR__/start-bridge.sh
+Restart=on-failure
+RestartSec=10
+# Prefer the same IPC + log conventions as start-bridge.sh (/tmp on Linux).
+Environment=NODE_ENV=production
+# Optional overrides (uncomment and edit after install):
+# Environment=CHROME_PATH=/usr/bin/google-chrome-stable
+# Environment=WHATSAPP_IPC_DIR=/tmp
+# Environment=API_BASE_URL=http://127.0.0.1/hcc/admin
+# EnvironmentFile=-__HCC_AUTOMATION_DIR__/.env
+
+# Hardening (user service friendly; system service may tighten further)
+NoNewPrivileges=true
+PrivateTmp=false
+
+[Install]
+WantedBy=default.target

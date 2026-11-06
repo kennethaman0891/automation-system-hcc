@@ -3,7 +3,7 @@ require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/includes/whatsapp_functions.php';
 require_once __DIR__ . '/auth_check.php';
 
-waRequireAuth();
+waRequireBridgeOrAuth();
 header('Content-Type: application/json; charset=utf-8');
 
 $db = waGetDB();

@@ -50,7 +50,25 @@ if (isset($_env['JWT_SECRET']) && strpos((string)$_env['JWT_SECRET'], 'CHANGE_ME
 }
 
 define('DB_HOST', $_env['DB_HOST']);
-define('DB_NAME', $_env['DB_NAME']);
+$_dbNameFinal = $_env['DB_NAME'];
+// Offline / e2e override. ONLY honored for CLI / PHP built-in test server.
+// An HTTP request to Apache/nginx/php-fpm can NEVER switch the database via
+// query string, headers, cookies, or even a process env meant for tests —
+// we require PHP_SAPI to be cli or cli-server.
+$_hccDbOverride = null;
+if (in_array(PHP_SAPI, ['cli', 'cli-server'], true)) {
+    $_hccDbOverride = getenv('HCC_DB_NAME');
+    if (!is_string($_hccDbOverride) || $_hccDbOverride === '') {
+        $_waTest = strtolower(trim((string)(getenv('WA_TEST_MODE') ?: '')));
+        if (in_array($_waTest, ['1', 'true', 'yes', 'on'], true)) {
+            $_hccDbOverride = 'hcc_wa_test';
+        }
+    }
+}
+if (is_string($_hccDbOverride) && $_hccDbOverride !== '' && preg_match('/^[A-Za-z0-9_]+$/', $_hccDbOverride)) {
+    $_dbNameFinal = $_hccDbOverride;
+}
+define('DB_NAME', $_dbNameFinal);
 define('DB_USER', $_env['DB_USER']);
 define('DB_PASS', $_env['DB_PASS']);
 define('DB_CHARSET', $_env['DB_CHARSET'] ?? 'utf8mb4');

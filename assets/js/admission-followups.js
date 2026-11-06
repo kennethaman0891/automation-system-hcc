@@ -623,6 +623,84 @@
                 }
             });
         }
+
+        // ── Real-time background sync for WhatsApp Inbound Messages ──────
+        let prevCountsSum = null;
+        let lastHistoryCount = 0;
+
+        async function refreshWaInboundStatus() {
+            const el = document.getElementById('waInboundStatus');
+            if (!el) return;
+            try {
+                const res = await fetch('api_whatsapp_session.php?action=status', { cache: 'no-store' });
+                const data = await res.json();
+                const sess = data && data.session ? data.session : null;
+                const running = !!(data && (data.bridge_running || (sess && sess.bridge_running)));
+                const logoutBtn = document.getElementById('waLogoutBtn');
+                const showLogout = (on) => {
+                    if (!logoutBtn || logoutBtn.dataset.busy === '1') return;
+                    logoutBtn.style.display = on ? 'inline-flex' : 'none';
+                };
+                if (!running) {
+                    el.textContent = 'WhatsApp bridge is not running.';
+                    showLogout(false);
+                    return;
+                }
+                if (!sess || !sess.is_connected) {
+                    el.textContent = 'WhatsApp is not linked. Scan the QR on the WhatsApp page.';
+                    showLogout(false);
+                    return;
+                }
+                showLogout(true);
+                const stored = sess.last_ingest_at ? ('Last parent message stored at ' + sess.last_ingest_at + '.') : '';
+                if (sess.last_skip_note) {
+                    el.textContent = sess.last_skip_note + (stored ? ' ' + stored : '');
+                    return;
+                }
+                el.textContent = stored || 'WhatsApp is linked. No new parent message has been stored.';
+            } catch (e) {
+                el.textContent = 'WhatsApp link status is unavailable.';
+            }
+        }
+
+        async function pollFollowupsBackground() {
+            refreshWaInboundStatus();
+            try {
+                const res = await fetch('api_admission_followup.php?action=get_dashboard_counts');
+                const data = await res.json();
+                if (!data || !data.success) return;
+
+                const c = data.counts || {};
+                const currentSum = (c.today || 0) + (c.overdue || 0) + (c.awaiting_responses || 0) + (c.high_priority || 0);
+
+                if (prevCountsSum === null) {
+                    prevCountsSum = currentSum;
+                } else if (currentSum !== prevCountsSum) {
+                    prevCountsSum = currentSum;
+                    loadDashboardCounts();
+                    loadSection(currentSection);
+                }
+
+                // If Followup Modal is open, live refresh parent WhatsApp conversation in Step 2
+                const modal = document.getElementById('followupModal');
+                if (modal && modal.style.display === 'flex' && currentEnquiryId) {
+                    const getRes = await fetch(`api_admission_followup.php?action=get&id=${currentEnquiryId}`);
+                    const getData = await getRes.json();
+                    if (getData && getData.success) {
+                        if (getData.messages) {
+                            renderConversationThread(getData.messages, getData.enquiry);
+                        }
+                        if (getData.history && getData.history.length > lastHistoryCount) {
+                            lastHistoryCount = getData.history.length;
+                            renderHistoryTimeline(getData.history);
+                        }
+                    }
+                }
+            } catch (ignored) {}
+        }
+
+        setInterval(pollFollowupsBackground, 12000);
+        refreshWaInboundStatus();
     });
 
     // Expose helpers to global scope

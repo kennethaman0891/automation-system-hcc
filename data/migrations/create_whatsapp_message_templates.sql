@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS `whatsapp_message_templates` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `slug` VARCHAR(80) NOT NULL,
+  `title` VARCHAR(160) NOT NULL,
+  `category` VARCHAR(60) NOT NULL DEFAULT 'general',
+  `scope` ENUM('personal','group','both') NOT NULL DEFAULT 'both',
+  `body` TEXT NOT NULL,
+  `placeholders` JSON DEFAULT NULL,
+  `is_starter` TINYINT(1) NOT NULL DEFAULT 0,
+  `is_archived` TINYINT(1) NOT NULL DEFAULT 0,
+  `usage_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `created_by` INT UNSIGNED DEFAULT NULL,
+  `updated_by` INT UNSIGNED DEFAULT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_wa_tpl_slug` (`slug`),
+  KEY `idx_wa_tpl_category` (`category`),
+  KEY `idx_wa_tpl_scope` (`scope`),
+  KEY `idx_wa_tpl_archived` (`is_archived`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

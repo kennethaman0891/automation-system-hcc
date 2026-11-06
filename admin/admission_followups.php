@@ -98,6 +98,8 @@ foreach (preg_split('/\s+/', $adminName) as $part) {
                     <div>
                         <h1>Admission Follow-up Command Center</h1>
                         <p>Track next follow-up dates, review parent chats &amp; dispatch manually via WhatsApp.</p>
+                        <p id="waInboundStatus" style="margin:6px 0 0;font-size:0.82rem;color:#64748b;">Checking WhatsApp link…</p>
+                        <button type="button" id="waLogoutBtn" style="display:none;margin-top:8px;background:#fff;color:#b91c1c;border:1px solid #fecaca;border-radius:999px;padding:4px 10px;font-size:0.75rem;font-weight:700;cursor:pointer;">Log out of WhatsApp</button>
                     </div>
                 </div>
 

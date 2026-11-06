@@ -108,4 +108,17 @@ The engine writes a suggested message and a staff notification. A person still h
 - `logs/`
 - `automation/.whatsapp-session` and `%USERPROFILE%\.hcc-whatsapp-data` if those session folders exist
 
-WhatsApp session folders are not required for this deployment. Do not create them to satisfy a checklist, and do not commit them.
+WhatsApp session folders are not required for this deployment.
+
+### Bridge process supervisors
+
+| OS | How to keep the bridge running |
+|---|---|
+| macOS | `./automation/install-launchd.sh` (renders `com.hcc.whatsapp-bridge.plist.template`) |
+| Windows | `automation\start-bridge.bat` / `windows\start-bridge.ps1` (see `WINDOWS_DEPLOYMENT.md`) |
+| Linux | `./automation/linux/install-systemd.sh` (see `LINUX_DEPLOYMENT.md`) |
+
+Delete-for-everyone is queued as outbound `msg_type=revoke`. The bridge must be
+connected to perform it inside WhatsApp Web. Optional env `WHATSAPP_REVOKE_WINDOW_SEC`
+overrides the default 48-hour window check (PHP + Node share the same rule).
+ Do not create them to satisfy a checklist, and do not commit them.

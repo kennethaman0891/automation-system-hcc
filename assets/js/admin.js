@@ -130,10 +130,67 @@ window.hccConfirm = function (options) {
   });
 };
 
+window.hccWhatsAppLogout = function (button) {
+  const confirmFn = window.hccConfirm || function (opts) {
+    const message = opts && opts.message ? opts.message : 'Log out of WhatsApp?';
+    return Promise.resolve(window.confirm(message));
+  };
+  return confirmFn({
+    title: 'Log out of WhatsApp',
+    message: 'This unlinks the school WhatsApp from this computer. New parent messages stop until someone scans the QR again.',
+    confirmText: 'Log out',
+    cancelText: 'Stay linked',
+    type: 'danger'
+  }).then(async (confirmed) => {
+    if (!confirmed) return false;
+    if (button) {
+      button.dataset.busy = '1';
+      button.disabled = true;
+    }
+    try {
+      const res = await fetch('api_whatsapp_session.php?action=logout', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Accept': 'application/json' }
+      });
+      const data = await res.json();
+      if (!data || !data.success) {
+        window.alert((data && data.error) || 'Could not log out of WhatsApp.');
+        return false;
+      }
+      const status = document.getElementById('waInboundStatus');
+      if (status) {
+        status.textContent = 'WhatsApp logged out. Scan the QR on the WhatsApp page to link again.';
+      }
+      document.querySelectorAll('#waLogoutBtn').forEach((btn) => {
+        if (!btn.closest('#waLinkChip')) btn.style.display = 'none';
+      });
+      document.dispatchEvent(new CustomEvent('hcc:whatsapp-logout'));
+      return true;
+    } catch (e) {
+      window.alert('Could not log out of WhatsApp.');
+      return false;
+    } finally {
+      if (button) {
+        button.disabled = false;
+        delete button.dataset.busy;
+      }
+    }
+  });
+};
+
 /* ============================================================
    HCC Admin — Core Navigation & Global Interactions
    ============================================================ */
 document.addEventListener('DOMContentLoaded', () => {
+  const waLogoutBtn = document.getElementById('waLogoutBtn');
+  if (waLogoutBtn && waLogoutBtn.dataset.bound !== '1') {
+    waLogoutBtn.dataset.bound = '1';
+    waLogoutBtn.addEventListener('click', () => {
+      window.hccWhatsAppLogout(waLogoutBtn);
+    });
+  }
+
 
   /* ── 1. Sidebar Toggle & Mobile Off-Canvas Drawer ── */
   const sidebarToggles = Array.from(document.querySelectorAll('#sidebarToggle, .js-sidebar-toggle'));

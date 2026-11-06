@@ -227,3 +227,8 @@ Do not declare this deployment production-ready until `tests/admission_workflow_
 cd C:\xampp\htdocs\hcc
 C:\xampp\php\php.exe tests\admission_workflow_e2e.php
 ```
+
+## Related docs
+
+- Linux bridge service: `docs/LINUX_DEPLOYMENT.md`
+- macOS LaunchAgent: `./automation/install-launchd.sh`

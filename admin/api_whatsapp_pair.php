@@ -37,6 +37,15 @@ if (!is_array($body)) {
 
 switch ($action) {
     case 'request':
+        $db = waGetDB();
+        $stmt = $db->prepare("SELECT last_poll_at FROM whatsapp_sessions WHERE session_name = 'default'");
+        $stmt->execute();
+        $sess = $stmt->fetch(PDO::FETCH_ASSOC);
+        $lastPollTs = !empty($sess['last_poll_at']) ? strtotime($sess['last_poll_at']) : 0;
+        if ((time() - $lastPollTs) >= 45) {
+            waJsonResponse(['success' => false, 'error' => 'WhatsApp bridge is not running. Start the bridge first.'], 503);
+        }
+
         $phone = preg_replace('/\D/', '', (string)($body['phone'] ?? ''));
         if (strlen($phone) < 8) {
             waJsonResponse(['success' => false, 'error' => 'Enter the WhatsApp number (10 digits for +91, or include the country code).'], 400);

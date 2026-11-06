@@ -8,20 +8,47 @@ require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/includes/whatsapp_functions.php';
 require_once __DIR__ . '/auth_check.php';
 
-waRequireAuth();
+waRequireBridgeOrAuth();
 header('Content-Type: application/json; charset=utf-8');
 
 $db = waGetDB();
 $action = $_GET['action'] ?? ($_POST['action'] ?? 'status');
+
+function waEnsureSessionIngestColumns(PDO $db): void {
+    static $ready = false;
+    if ($ready) {
+        return;
+    }
+    try {
+        $cols = $db->query('SHOW COLUMNS FROM whatsapp_sessions')->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Throwable $e) {
+        return;
+    }
+    if (!in_array('last_ingest_at', $cols, true)) {
+        $db->exec('ALTER TABLE whatsapp_sessions ADD COLUMN last_ingest_at DATETIME NULL DEFAULT NULL');
+    }
+    if (!in_array('last_skip_note', $cols, true)) {
+        $db->exec('ALTER TABLE whatsapp_sessions ADD COLUMN last_skip_note VARCHAR(255) NULL DEFAULT NULL');
+    }
+    $ready = true;
+}
+
+waEnsureSessionIngestColumns($db);
 
 switch ($action) {
     case 'status':
         $stmt = $db->prepare("SELECT * FROM whatsapp_sessions WHERE session_name = 'default'");
         $stmt->execute();
         $session = $stmt->fetch(PDO::FETCH_ASSOC);
-        
+
+        $lastPollTs = !empty($session['last_poll_at']) ? strtotime($session['last_poll_at']) : 0;
+        $isBridgeRunning = (time() - $lastPollTs) < 45;
+        $qrExpiresTs = !empty($session['qr_expires_at']) ? strtotime($session['qr_expires_at']) : 0;
+        $isQrValid = !empty($session['qr_code']) && ($qrExpiresTs > time());
+
         waJsonResponse([
             'success' => true,
+            'bridge_running' => $isBridgeRunning,
             'session' => $session ? [
                 'id' => (int)$session['id'],
                 'is_connected' => (bool)$session['is_connected'],
@@ -30,28 +57,51 @@ switch ($action) {
                 'phone_number' => $session['phone_number'],
                 'device_name' => $session['device_name'],
                 'platform' => $session['platform'],
-                'qr_expires_at' => $session['qr_expires_at']
+                'qr_expires_at' => $session['qr_expires_at'],
+                'qr_valid' => $isQrValid,
+                'bridge_running' => $isBridgeRunning,
+                'last_ingest_at' => $session['last_ingest_at'] ?? null,
+                'last_skip_note' => $session['last_skip_note'] ?? null
             ] : null
         ]);
         break;
         
     case 'qr':
-        $stmt = $db->prepare("SELECT qr_code, qr_expires_at FROM whatsapp_sessions WHERE session_name = 'default'");
+        $stmt = $db->prepare("SELECT qr_code, qr_expires_at, last_poll_at FROM whatsapp_sessions WHERE session_name = 'default'");
         $stmt->execute();
         $session = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if ($session && $session['qr_code'] && $session['qr_expires_at'] && strtotime($session['qr_expires_at']) > time()) {
+
+        $lastPollTs = !empty($session['last_poll_at']) ? strtotime($session['last_poll_at']) : 0;
+        $isBridgeRunning = (time() - $lastPollTs) < 45;
+        $qrExpiresTs = !empty($session['qr_expires_at']) ? strtotime($session['qr_expires_at']) : 0;
+        $isQrValid = !empty($session['qr_code']) && ($qrExpiresTs > time());
+
+        if ($session && $isQrValid) {
             waJsonResponse([
                 'success' => true,
+                'bridge_running' => $isBridgeRunning,
                 'qr_code' => $session['qr_code'],
                 'expires_at' => $session['qr_expires_at']
             ]);
         } else {
+            if ($isBridgeRunning) {
+                $tmpDir = getenv('WHATSAPP_IPC_DIR');
+                if (!$tmpDir || !is_dir($tmpDir)) {
+                    $tmpDir = (DIRECTORY_SEPARATOR !== '\\' && is_dir('/tmp')) ? '/tmp' : sys_get_temp_dir();
+                }
+                $flagPath = rtrim($tmpDir, '/\\') . DIRECTORY_SEPARATOR . 'whatsapp_qr_refresh_default';
+                // UI polls every few seconds — do not thrash the bridge with refresh flags.
+                if (!is_file($flagPath) || (time() - (int)@filemtime($flagPath)) >= 20) {
+                    @file_put_contents($flagPath, time());
+                }
+            }
+
             waJsonResponse([
                 'success' => false,
-                'error' => 'No valid QR code. Request refresh.',
+                'bridge_running' => $isBridgeRunning,
+                'error' => $isBridgeRunning ? 'No valid QR code. Refresh requested.' : 'WhatsApp bridge is offline.',
                 'action' => 'refresh_qr'
-            ], 404);
+            ], $isBridgeRunning ? 404 : 503);
         }
         break;
         
@@ -118,8 +168,22 @@ switch ($action) {
             $payload = $_POST;
         }
         $lastPoll = !empty($payload['last_poll_at']) ? date('Y-m-d H:i:s', strtotime((string)$payload['last_poll_at'])) : date('Y-m-d H:i:s');
-        $db->prepare("UPDATE whatsapp_sessions SET last_poll_at = ?, updated_at = NOW() WHERE session_name = 'default'")
-           ->execute([$lastPoll]);
+        $sets = ['last_poll_at = ?', 'updated_at = NOW()'];
+        $params = [$lastPoll];
+        if (!empty($payload['last_ingest_at'])) {
+            $ingestTs = strtotime((string)$payload['last_ingest_at']);
+            if ($ingestTs) {
+                $sets[] = 'last_ingest_at = ?';
+                $params[] = date('Y-m-d H:i:s', $ingestTs);
+            }
+        }
+        if (array_key_exists('last_skip_note', $payload)) {
+            $note = $payload['last_skip_note'];
+            $sets[] = 'last_skip_note = ?';
+            $params[] = ($note === null || $note === '') ? null : mb_substr((string)$note, 0, 255);
+        }
+        $db->prepare('UPDATE whatsapp_sessions SET ' . implode(', ', $sets) . " WHERE session_name = 'default'")
+           ->execute($params);
         waJsonResponse(['success' => true]);
         break;
 
@@ -129,8 +193,8 @@ switch ($action) {
             $tmpDir = (DIRECTORY_SEPARATOR !== '\\' && is_dir('/tmp')) ? '/tmp' : sys_get_temp_dir();
         }
         $sep = DIRECTORY_SEPARATOR;
+        // Bridge watches whatsapp_qr_refresh_default (and sessionName). PHP session_id flags were never read.
         @file_put_contents(rtrim($tmpDir, '/\\') . $sep . 'whatsapp_qr_refresh_default', time());
-        @file_put_contents(rtrim($tmpDir, '/\\') . $sep . 'whatsapp_qr_refresh_' . session_id(), time());
         
         waJsonResponse([
             'success' => true,
@@ -145,8 +209,8 @@ switch ($action) {
             $tmpDir = (DIRECTORY_SEPARATOR !== '\\' && is_dir('/tmp')) ? '/tmp' : sys_get_temp_dir();
         }
         $sep = DIRECTORY_SEPARATOR;
+        // Bridge watches whatsapp_logout_default (and sessionName). Do not write PHP session_id orphans.
         @file_put_contents(rtrim($tmpDir, '/\\') . $sep . 'whatsapp_logout_default', time());
-        @file_put_contents(rtrim($tmpDir, '/\\') . $sep . 'whatsapp_logout_' . session_id(), time());
         
         // Update DB
         $db->prepare("UPDATE whatsapp_sessions SET is_connected = 0, qr_code = NULL WHERE session_name = 'default'")->execute();

@@ -16,9 +16,13 @@ node_modules/
 
 # --- large / session artifacts (never commit) ---
 automation/.whatsapp-session/
+automation/.whatsapp-session-test/
 automation/admission-ai-service/
 automation/rust_engine/
 automation/bin/
+
+# --- private runtime data ---
+data/private/
 
 # --- dependencies (restored via composer install) ---
 vendor/

@@ -237,7 +237,18 @@ if ($action === 'get') {
         $conversationMessages = [];
         $chatInfo = null;
 
-        if ($cleanPhone !== '') {
+        if (!empty($enquiry['chat_id'])) {
+            $chatStmt = $db->prepare("
+                SELECT c.id, c.wa_chat_id, c.name, c.avatar_url, c.unread_count
+                FROM whatsapp_chats c
+                WHERE c.id = ?
+                LIMIT 1
+            ");
+            $chatStmt->execute([(int)$enquiry['chat_id']]);
+            $chatInfo = $chatStmt->fetch(PDO::FETCH_ASSOC);
+        }
+
+        if (!$chatInfo && $cleanPhone !== '') {
             // Find chat
             $chatStmt = $db->prepare("
                 SELECT c.id, c.wa_chat_id, c.name, c.avatar_url, c.unread_count
@@ -247,19 +258,33 @@ if ($action === 'get') {
             ");
             $chatStmt->execute(["%{$cleanPhone}%", "%{$phone10}%"]);
             $chatInfo = $chatStmt->fetch(PDO::FETCH_ASSOC);
+        }
 
-            if ($chatInfo) {
-                $msgStmt = $db->prepare("
-                    SELECT m.id, m.wa_msg_id, m.from_me, m.sender_name, m.msg_type, 
-                           m.body, m.status, m.received_at
-                    FROM whatsapp_messages m
-                    WHERE m.chat_id = ?
-                    ORDER BY m.id ASC
-                    LIMIT 100
-                ");
-                $msgStmt->execute([(int)$chatInfo['id']]);
-                $conversationMessages = $msgStmt->fetchAll(PDO::FETCH_ASSOC);
-            }
+        if ($chatInfo) {
+            $msgStmt = $db->prepare("
+                SELECT m.id, m.wa_msg_id, m.from_me, m.sender_name, m.msg_type, 
+                       m.body, m.status, m.received_at
+                FROM whatsapp_messages m
+                WHERE m.chat_id = ?
+                ORDER BY m.id ASC
+                LIMIT 100
+            ");
+            $msgStmt->execute([(int)$chatInfo['id']]);
+            $conversationMessages = $msgStmt->fetchAll(PDO::FETCH_ASSOC);
+        }
+
+        // If whatsapp_messages is empty for this chat, load from admission_enquiry_messages
+        if (empty($conversationMessages)) {
+            $emStmt = $db->prepare("
+                SELECT id, 'text' as msg_type, 
+                       CASE WHEN message_type = 'incoming_message' THEN 0 ELSE 1 END as from_me,
+                       body, 'delivered' as status, created_at as received_at, admin_name as sender_name
+                FROM admission_enquiry_messages
+                WHERE enquiry_id = ?
+                ORDER BY id ASC
+            ");
+            $emStmt->execute([$id]);
+            $conversationMessages = $emStmt->fetchAll(PDO::FETCH_ASSOC);
         }
 
         // If no suggested message yet, generate a default based on category

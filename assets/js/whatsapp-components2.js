@@ -571,18 +571,20 @@ class WaMessageBubble extends HTMLElement {
       ? new Date(msg.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })
       : '';
 
-    // Status Tick SVG
+    // Status Tick SVG — queued/pending/sent/delivered/read/failed (+ retry)
     let statusTickHtml = '';
     if (isOwn) {
       const status = (msg.status || 'sent').toLowerCase();
-      if (status === 'pending') {
-        statusTickHtml = `<span class="wa-tick pending" title="Pending">🕐</span>`;
+      if (status === 'pending' || status === 'queued' || status === 'processing') {
+        statusTickHtml = `<span class="wa-tick pending" title="${status}">🕐</span>`;
       } else if (status === 'sent') {
         statusTickHtml = `<svg class="wa-tick sent" viewBox="0 0 16 15" width="16" height="15" fill="#8696a0" title="Sent"><path d="M15.01 3.316l-.478-.372a.365.365 0 0 0-.51.063L6.466 12.07l-3.52-3.18a.366.366 0 0 0-.505.018l-.423.435a.366.366 0 0 0 .018.505l4.183 3.778c.07.063.16.098.254.098.094 0 .185-.035.255-.098l8.22-9.799a.365.365 0 0 0-.063-.51z"/></svg>`;
       } else if (status === 'delivered') {
         statusTickHtml = `<svg class="wa-tick delivered" viewBox="0 0 16 15" width="16" height="15" fill="#8696a0" title="Delivered"><path d="M15.01 3.316l-.478-.372a.365.365 0 0 0-.51.063L6.466 12.07l-1.92-1.73a.366.366 0 0 0-.505.018l-.423.435a.366.366 0 0 0 .018.505l2.583 2.333c.07.063.16.098.254.098.094 0 .185-.035.255-.098l8.22-9.799a.365.365 0 0 0-.063-.51z"/><path d="M11.51 3.316l-.478-.372a.365.365 0 0 0-.51.063L2.966 12.07l-1.92-1.73a.366.366 0 0 0-.505.018l-.423.435a.366.366 0 0 0 .018.505l2.583 2.333c.07.063.16.098.254.098.094 0 .185-.035.255-.098l8.22-9.799a.365.365 0 0 0-.063-.51z"/></svg>`;
       } else if (status === 'read') {
         statusTickHtml = `<svg class="wa-tick read" viewBox="0 0 16 15" width="16" height="15" fill="#53bdeb" title="Read"><path d="M15.01 3.316l-.478-.372a.365.365 0 0 0-.51.063L6.466 12.07l-1.92-1.73a.366.366 0 0 0-.505.018l-.423.435a.366.366 0 0 0 .018.505l2.583 2.333c.07.063.16.098.254.098.094 0 .185-.035.255-.098l8.22-9.799a.365.365 0 0 0-.063-.51z"/><path d="M11.51 3.316l-.478-.372a.365.365 0 0 0-.51.063L2.966 12.07l-1.92-1.73a.366.366 0 0 0-.505.018l-.423.435a.366.366 0 0 0 .018.505l2.583 2.333c.07.063.16.098.254.098.094 0 .185-.035.255-.098l8.22-9.799a.365.365 0 0 0-.063-.51z"/></svg>`;
+      } else if (status === 'failed' || status === 'error') {
+        statusTickHtml = `<button type="button" class="wa-tick-retry" data-act="retry" title="Failed — click to retry">⚠ Retry</button>`;
       }
     }
 
@@ -954,6 +956,16 @@ class WaMessageBubble extends HTMLElement {
           margin: 3px 0 -2px 10px;
           user-select: none;
         }
+        .wa-tick-retry {
+          border: none;
+          background: #fee2e2;
+          color: #b91c1c;
+          font-size: 10px;
+          font-weight: 700;
+          border-radius: 8px;
+          padding: 2px 6px;
+          cursor: pointer;
+        }
         .wa-tick {
           display: inline-flex;
           align-items: center;
@@ -1106,6 +1118,15 @@ class WaMessageBubble extends HTMLElement {
 
   bindBubbleEvents(docUrl, docName) {
     const msg = this.msg;
+
+    this.shadowRoot.querySelector('[data-act="retry"]')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        if (this.store?.retryMessage) await this.store.retryMessage(msg.id || msg.wa_msg_id);
+      } catch (err) {
+        console.warn('retry failed', err);
+      }
+    });
 
     // PDF Preview Lightbox trigger
     this.shadowRoot.querySelector('#btn-preview-pdf')?.addEventListener('click', (e) => {
@@ -1507,13 +1528,44 @@ class WaComposer extends HTMLElement {
   connectedCallback() {
     this.render();
     this.bindEvents();
+    // Composer is only available once a conversation is open.
+    this.boundChatState = () => this.syncChatState();
+    this.store = this.store || window.WhatsAppStore;
+    if (this.store) {
+      this.store.addEventListener('chat:selected', this.boundChatState);
+      this.store.addEventListener('chat:cleared', this.boundChatState);
+      this.store.addEventListener('chats:updated', this.boundChatState);
+    }
+    this.syncChatState();
     this.boundReplyListener = (e) => this.setQuotedMessage(e.detail.message);
     window.addEventListener('reply-to-message', this.boundReplyListener);
     this.boundSetTextListener = (e) => this.setText(e.detail?.text || '');
     window.addEventListener('set-composer-text', this.boundSetTextListener);
   }
 
+  hasActiveChat() {
+    const s = this.store || window.WhatsAppStore;
+    if (!s) return false;
+    if (s.activeChat) return true;
+    const id = s.activeChatId;
+    if (id == null || id === '') return false;
+    return !!(s.chats && (s.chats.get(id) || s.chats.get(parseInt(id, 10)) || s.chats.get(String(id))
+      || Array.from(s.chats.values()).find(c => c.id == id)));
+  }
+
+  syncChatState() {
+    const active = this.hasActiveChat();
+    this.toggleAttribute('no-chat', !active);
+    this.setAttribute('aria-hidden', active ? 'false' : 'true');
+    if (this.textarea) this.textarea.disabled = !active;
+  }
+
   disconnectedCallback() {
+    if (this.store && this.boundChatState) {
+      this.store.removeEventListener('chat:selected', this.boundChatState);
+      this.store.removeEventListener('chat:cleared', this.boundChatState);
+      this.store.removeEventListener('chats:updated', this.boundChatState);
+    }
     window.removeEventListener('reply-to-message', this.boundReplyListener);
     window.removeEventListener('set-composer-text', this.boundSetTextListener);
     this.stopRecordingCleanup();
@@ -1554,6 +1606,7 @@ class WaComposer extends HTMLElement {
           position: relative;
           z-index: 40;
         }
+        :host([no-chat]) { display: none !important; }
         
         /* REPLY BANNER */
         .wa-reply-banner {
@@ -1804,11 +1857,25 @@ class WaComposer extends HTMLElement {
         }
         
         /* KEYBOARD HINT FOOTER */
+        .wa-tpl-btn {
+          border: none;
+          background: #e7f8f3;
+          color: #008069;
+          font-weight: 700;
+          font-size: 11px;
+          border-radius: 16px;
+          padding: 6px 10px;
+          cursor: pointer;
+          flex-shrink: 0;
+        }
+        .wa-tpl-btn:hover { background: #d0f0e8; }
         .wa-composer-hints {
           display: flex;
           justify-content: flex-end;
-          gap: 12px;
-          padding: 0 16px 6px;
+          flex-wrap: wrap;
+          gap: 4px 14px;
+          padding: 2px 16px 8px;
+          line-height: 1.6;
           font-size: 11px;
           color: #8696a0;
           user-select: none;
@@ -1847,6 +1914,8 @@ class WaComposer extends HTMLElement {
         <wa-icon-button id="btn-emoji" icon="emoji" tooltip="Emoji"></wa-icon-button>
         <!-- Paperclip Attach button -->
         <wa-icon-button id="btn-attach" icon="attach" tooltip="Attach"></wa-icon-button>
+        <!-- Message templates library -->
+        <button type="button" class="wa-tpl-btn" id="btn-templates" title="Message templates">Templates</button>
         
         <!-- Expanding Textarea Pill -->
         <div class="wa-input-pill">
@@ -1897,6 +1966,18 @@ class WaComposer extends HTMLElement {
     this.emojiPicker = this.shadowRoot.querySelector('#emoji-picker');
     this.attachBtn = this.shadowRoot.querySelector('#btn-attach');
     this.attachMenu = this.shadowRoot.querySelector('#attach-menu');
+    this.templatesBtn = this.shadowRoot.querySelector('#btn-templates');
+    this.templatesBtn?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const lib = document.getElementById('wa-template-library');
+      if (lib && typeof lib.open === 'function') {
+        const selected = (this.store && this.store.selectedChatIds) ? Array.from(this.store.selectedChatIds) : [];
+        lib.open({ chat_ids: selected });
+      } else {
+        console.warn('wa-template-library not mounted');
+      }
+    });
 
     // Auto-grow textarea & input tracking
     this.textarea?.addEventListener('input', () => {
@@ -2168,7 +2249,7 @@ class WaComposer extends HTMLElement {
     const text = this.textarea?.value.trim() || '';
     const chatId = this.store?.activeChatId;
 
-    if (!chatId || (!text && this.attachments.length === 0)) return;
+    if (!chatId || !this.hasActiveChat() || (!text && this.attachments.length === 0)) return;
 
     try {
       const att = this.attachments[0] || null;
@@ -3925,33 +4006,152 @@ class WaQrModal extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
+    this._pollTimer = null;
+    this._lastQr = '';
+    this.store = null;
   }
 
   connectedCallback() {
+    this.store = window.WhatsAppStore || null;
     this.render();
   }
 
-  open() { this.setAttribute('open', ''); }
-  close() { this.removeAttribute('open'); }
+  disconnectedCallback() {
+    this.stopPolling();
+  }
+
+  open(opts) {
+    // manual = user clicked "Show QR / Relink"; do not auto-close when already linked.
+    this._manual = !!(opts && opts.manual);
+    if (this.hasAttribute('open')) { this.loadQr(false); return; }
+    this.setAttribute('open', '');
+    this.loadQr(!this._manual);
+    this.startPolling();
+  }
+
+  close() {
+    this.removeAttribute('open');
+    this.stopPolling();
+  }
+
+  startPolling() {
+    this.stopPolling();
+    this._pollTimer = setInterval(() => this.loadQr(false), 3000);
+  }
+
+  stopPolling() {
+    if (this._pollTimer) {
+      clearInterval(this._pollTimer);
+      this._pollTimer = null;
+    }
+  }
+
+  async loadQr(forceRefresh) {
+    if (this._loading) return;          // throttle: never overlap polls
+    this._loading = true;
+    try { await this._loadQrInner(forceRefresh); } finally { this._loading = false; }
+  }
+
+  async _loadQrInner(forceRefresh) {
+    const store = this.store || window.WhatsAppStore;
+    const imgBox = this.shadowRoot?.querySelector('.wa-qr-img');
+    const statusEl = this.shadowRoot?.querySelector('.wa-qr-status');
+    if (!imgBox || !statusEl) return;
+
+    let sessInfo = null;
+    try {
+      if (store) {
+        const sess = await store.loadSession();
+        sessInfo = sess;
+        if (sess && sess.is_connected && this._manual) {
+          this._lastQr = '';
+          imgBox.innerHTML = '<svg viewBox="0 0 24 24" width="72" height="72" fill="#00a884" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-1.2 14.2-4-4 1.4-1.4 2.6 2.6 5.6-5.6 1.4 1.4-7 7z"/></svg>';
+          const phone = sess.phone_number ? ' (' + String(sess.phone_number) + ')' : '';
+          statusEl.textContent = 'WhatsApp is linked' + phone + '. To link a different phone, use ⋮ menu → "Log out of WhatsApp"; a new QR will then appear here.';
+          statusEl.style.color = '#059669';
+          return;
+        }
+        if (sess && sess.is_connected) {
+          statusEl.textContent = 'WhatsApp is linked. Closing…';
+          statusEl.style.color = '#059669';
+          this.stopPolling();
+          setTimeout(() => this.close(), 800);
+          store.loadChats(true).catch(() => {});
+          return;
+        }
+      }
+
+      let qr = store ? await store.getQR() : null;
+      if (!qr && sessInfo && sessInfo.bridge_running === false) {
+        this._lastQr = '';
+        imgBox.textContent = 'Bridge offline';
+        statusEl.textContent = 'WhatsApp bridge is offline — start it to get a QR. On this Mac run: automation/start-bridge.sh (or double-click automation/Start WhatsApp Bridge.command). The QR appears here automatically.';
+        statusEl.style.color = '#b45309';
+        return;
+      }
+      if (!qr && store && forceRefresh) {
+        statusEl.textContent = 'Requesting a fresh QR from the bridge…';
+        await store.refreshQR();
+        await new Promise(r => setTimeout(r, 1500));
+        qr = await store.getQR();
+      }
+
+      if (qr) {
+        if (qr !== this._lastQr) {
+          this._lastQr = qr;
+          imgBox.innerHTML = '';
+          const img = document.createElement('img');
+          img.alt = 'WhatsApp QR code';
+          img.width = 220;
+          img.height = 220;
+          img.style.width = '220px';
+          img.style.height = '220px';
+          img.style.objectFit = 'contain';
+          img.src = qr;
+          imgBox.appendChild(img);
+        }
+        statusEl.textContent = 'QR ready — scan with WhatsApp → Linked Devices';
+        statusEl.style.color = '#059669';
+      } else {
+        this._lastQr = '';
+        imgBox.textContent = 'Waiting for QR…';
+        statusEl.textContent = 'Bridge is running — waiting for WhatsApp Web to show a QR (usually a few seconds).';
+        statusEl.style.color = '#f59e0b';
+      }
+    } catch (e) {
+      statusEl.textContent = 'Could not load QR. Is the bridge running?';
+      statusEl.style.color = '#ef4444';
+    }
+  }
 
   render() {
     this.shadowRoot.innerHTML = `
       <style>
         :host { position: fixed; inset: 0; z-index: 9999; display: none; align-items: center; justify-content: center; background: rgba(11,20,26,0.7); }
         :host([open]) { display: flex; }
-        .wa-qr-box { width: 360px; background: #ffffff; border-radius: 14px; padding: 24px; text-align: center; box-shadow: 0 16px 40px rgba(0,0,0,0.3); }
+        .wa-qr-box { width: 380px; background: #ffffff; border-radius: 14px; padding: 24px; text-align: center; box-shadow: 0 16px 40px rgba(0,0,0,0.3); }
         .wa-qr-title { font-size: 18px; font-weight: 700; margin-bottom: 8px; color: #111b21; }
-        .wa-qr-desc { font-size: 13px; color: #667781; margin-bottom: 20px; line-height: 1.4; }
-        .wa-qr-img { width: 220px; height: 220px; margin: 0 auto 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 80px; }
+        .wa-qr-desc { font-size: 13px; color: #667781; margin-bottom: 16px; line-height: 1.4; }
+        .wa-qr-img { width: 220px; height: 220px; margin: 0 auto 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 40px; overflow: hidden; }
+        .wa-qr-status { font-size: 12px; color: #64748b; min-height: 18px; margin-bottom: 14px; }
+        .wa-qr-actions { display: flex; gap: 8px; justify-content: center; }
+        .wa-qr-actions button { border: none; border-radius: 6px; padding: 8px 14px; cursor: pointer; font-weight: 600; }
+        .wa-qr-refresh { background: #e2e8f0; color: #0f172a; }
+        .wa-qr-done { background: #00a884; color: #fff; }
       </style>
       <div class="wa-qr-box">
         <div class="wa-qr-title">Link School WhatsApp</div>
-        <div class="wa-qr-desc">Scan this QR code with WhatsApp on your official school phone to sync real-time conversations.</div>
-        <div class="wa-qr-img">📲</div>
-        <button style="background:#00a884;color:#fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-weight:600;" id="qr-close-btn">Done</button>
+        <div class="wa-qr-desc">Phone → WhatsApp → <strong>Linked Devices</strong> → <strong>Link a Device</strong>, then scan this code.</div>
+        <div class="wa-qr-img" style="font-size:13px;color:#94a3b8;">Loading…</div>
+        <div class="wa-qr-status">Loading QR…</div>
+        <div class="wa-qr-actions">
+          <button type="button" class="wa-qr-refresh" id="qr-refresh-btn">Refresh QR</button>
+          <button type="button" class="wa-qr-done" id="qr-close-btn">Done</button>
+        </div>
       </div>
     `;
     this.shadowRoot.querySelector('#qr-close-btn')?.addEventListener('click', () => this.close());
+    this.shadowRoot.querySelector('#qr-refresh-btn')?.addEventListener('click', () => this.loadQr(true));
   }
 }
 customElements.define('wa-qr-modal', WaQrModal);
@@ -5066,11 +5266,70 @@ class WaApp extends HTMLElement {
         .wa-top-brand {
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 10px;
           font-size: 13.5px;
           font-weight: 700;
           letter-spacing: 0.3px;
+          min-width: 0;
         }
+        .wa-top-logo {
+          width: 34px;
+          height: 34px;
+          border-radius: 50%;
+          background: #ffffff;
+          object-fit: contain;
+          padding: 2px;
+          box-sizing: border-box;
+          flex-shrink: 0;
+          box-shadow: 0 0 0 1px rgba(255,255,255,0.35);
+        }
+        .wa-top-title {
+          display: flex;
+          flex-direction: column;
+          min-width: 0;
+          line-height: 1.15;
+        }
+        .wa-top-title b {
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .wa-top-title small {
+          font-size: 11px;
+          font-weight: 500;
+          color: #c8efe4;
+          white-space: nowrap;
+        }
+        .wa-top-qr {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          background: #ffffff;
+          color: #005c4b;
+          border: none;
+          border-radius: 8px;
+          padding: 3px 10px 3px 3px;
+          font-size: 12px;
+          font-weight: 700;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+        .wa-top-qr.no-thumb { padding: 5px 10px; }
+        .wa-top-qr:hover { background: #e7f8f3; }
+        .wa-top-qr img {
+          width: 34px;
+          height: 34px;
+          display: block;
+          border-radius: 4px;
+          background: #fff;
+          image-rendering: pixelated;
+        }
+        .wa-top-qr.linked {
+          background: rgba(255,255,255,0.15);
+          color: #ffffff;
+          padding: 5px 10px;
+        }
+        .wa-top-qr.linked:hover { background: rgba(255,255,255,0.25); }
         .wa-top-actions {
           display: flex;
           align-items: center;
@@ -5102,7 +5361,14 @@ class WaApp extends HTMLElement {
           width: 7px;
           height: 7px;
           border-radius: 50%;
-          background: #25d366;
+          background: #94a3b8;
+        }
+        .wa-status-badge.is-linked .wa-status-dot { background: #25d366; }
+        .wa-status-badge.is-unlinked { color: #fde68a; }
+        .wa-status-badge.is-unlinked .wa-status-dot { background: #f59e0b; }
+        .wa-top-bar { height: 52px; gap: 12px; }
+        @media (max-width: 900px) {
+          .wa-top-title small, .wa-top-btn .wa-top-btn-label { display: none; }
         }
         
         /* 2-PANE DESKTOP CONTAINER */
@@ -5147,17 +5413,25 @@ class WaApp extends HTMLElement {
       <!-- TOP STATUS & FULLSCREEN BAR -->
       <div class="wa-top-bar">
         <div class="wa-top-brand">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.816 9.816 0 0 0 12.04 2z"/></svg>
-          <span>Hindustani Covenant Church — WhatsApp Web Replica</span>
+          <img class="wa-top-logo" id="top-school-logo" src="${this.escapeAttr(window.HCC_LOGO_URL || window.HCC_LOGO_DATA_URL || '/hcc/assets/images/hcclogo.jpg')}" alt="HCC High School logo">
+          <svg style="display:none" viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.816 9.816 0 0 0 12.04 2z"/></svg>
+          <span class="wa-top-title">
+            <b>Hindustani Covenant Church High School</b>
+            <small>WhatsApp Web Replica · manual send only</small>
+          </span>
         </div>
         <div class="wa-top-actions">
-          <span class="wa-status-badge">
+          <span class="wa-status-badge" id="top-session-status" title="Live WhatsApp link status">
             <span class="wa-status-dot"></span>
-            <span>Connected</span>
+            <span id="top-session-text">Checking…</span>
           </span>
+          <button type="button" class="wa-top-qr no-thumb" id="btn-top-qr" title="Show WhatsApp QR code">
+            <img id="top-qr-thumb" alt="WhatsApp QR code" style="display:none;">
+            <span id="top-qr-label">QR code</span>
+          </button>
           <button class="wa-top-btn" id="btn-fullscreen-toggle" title="Toggle Fullscreen WhatsApp Web">
             <span>⛶</span>
-            <span>Fullscreen WhatsApp Web</span>
+            <span class="wa-top-btn-label">Fullscreen</span>
           </button>
           <button class="wa-top-btn" id="btn-dark-toggle" title="Toggle Dark Mode">🌙</button>
         </div>
@@ -5188,6 +5462,106 @@ class WaApp extends HTMLElement {
       <wa-qr-modal id="qr-modal"></wa-qr-modal>
       <wa-settings id="settings-modal"></wa-settings>
     `;
+  }
+
+  escapeAttr(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  /**
+   * Top bar: real WhatsApp link status + QR access.
+   * - Not linked: shows a thumbnail of the real QR (session API) — click to enlarge.
+   * - Linked: "Show QR / Relink" opens the pairing modal on demand.
+   * Read-only polling (GET status/qr), max once per 8s, paused while the tab is hidden.
+   * Never sends, refreshes or logs out anything by itself.
+   */
+  bindTopBarSession(qrModal) {
+    const root = this.shadowRoot;
+    const badge = root.querySelector('#top-session-status');
+    const text = root.querySelector('#top-session-text');
+    const btn = root.querySelector('#btn-top-qr');
+    const thumb = root.querySelector('#top-qr-thumb');
+    const label = root.querySelector('#top-qr-label');
+    const store = this.store || window.WhatsAppStore;
+    if (!badge || !btn) return;
+
+    let lastQr = '';
+    let busy = false;
+    let lastPollAt = 0;
+    const MIN_INTERVAL = 8000;
+
+    const applyStatus = (sess) => {
+      const known = !!sess;
+      const linked = !!(sess && sess.is_connected);
+      badge.classList.toggle('is-linked', linked);
+      badge.classList.toggle('is-unlinked', known && !linked);
+      text.textContent = !known ? 'Checking…' : (linked ? 'Connected' : (sess.bridge_running === false ? 'Bridge offline' : 'Not linked'));
+      const phone = sess && sess.phone_number ? String(sess.phone_number) : '';
+      badge.title = linked ? ('WhatsApp linked' + (phone ? ' · ' + phone : '')) : (known ? 'WhatsApp is not linked — scan the QR' : 'Checking WhatsApp link…');
+      if (linked) {
+        btn.classList.add('linked', 'no-thumb');
+        thumb.style.display = 'none';
+        label.textContent = 'Show QR / Relink';
+        btn.title = 'WhatsApp is linked. Open pairing panel (QR / relink instructions)';
+      } else {
+        btn.classList.remove('linked');
+        if (!lastQr) {
+          btn.classList.add('no-thumb');
+          thumb.style.display = 'none';
+          label.textContent = known ? 'Link WhatsApp (QR)' : 'QR code';
+        }
+        btn.title = 'Scan this QR with WhatsApp → Linked Devices (click to enlarge)';
+      }
+      return linked;
+    };
+
+    const applyQr = (qr, sess) => {
+      if (qr && typeof qr === 'string' && /^data:image\//.test(qr)) {
+        if (qr !== lastQr) { lastQr = qr; thumb.src = qr; }   // only swap when changed (no flicker)
+        thumb.style.display = 'block';
+        btn.classList.remove('no-thumb');
+        label.textContent = 'Scan QR to link';
+      } else {
+        lastQr = '';
+        thumb.removeAttribute('src');
+        thumb.style.display = 'none';
+        btn.classList.add('no-thumb');
+        const running = !!(sess && sess.bridge_running);
+        label.textContent = running ? 'Waiting for QR…' : 'Bridge offline — start it for QR';
+        btn.title = running
+          ? 'The WhatsApp bridge is running and preparing a QR code'
+          : 'WhatsApp bridge is offline — start it on this Mac (automation/start-bridge.sh) to get a QR';
+      }
+    };
+
+    const poll = async (force) => {
+      if (busy || !store) return;
+      if (!force && (document.hidden || Date.now() - lastPollAt < MIN_INTERVAL)) return;
+      busy = true;
+      lastPollAt = Date.now();
+      try {
+        const sess = await store.loadSession();
+        const linked = applyStatus(sess || { is_connected: false });
+        if (!linked) {
+          const qr = await store.getQR();   // read-only GET; never triggers refresh_qr
+          applyQr(qr, sess);
+        }
+      } catch (e) {
+        applyStatus(null);
+      } finally {
+        busy = false;
+      }
+    };
+
+    btn.addEventListener('click', () => qrModal?.open({ manual: true }));
+    if (store) {
+      store.addEventListener('session:updated', (e) => applyStatus(e.detail));
+      store.addEventListener('session:disconnected', () => { applyStatus({ is_connected: false }); poll(true); });
+    }
+    applyStatus(store && store.session ? store.session : null);
+    poll(true);
+    this._topBarTimer = setInterval(() => poll(false), MIN_INTERVAL);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(false); });
   }
 
   bindAppOrchestration() {
@@ -5267,6 +5641,28 @@ class WaApp extends HTMLElement {
     const onOpenContactPicker = () => contactPicker?.open();
     this.addEventListener('open-contact-picker', onOpenContactPicker);
     window.addEventListener('open-contact-picker', onOpenContactPicker);
+
+    // Top-bar live session status + QR (real session API, throttled; no fake status)
+    this.bindTopBarSession(qrModal);
+
+    // Pairing: open QR modal when the bridge session is not linked.
+    // Chats still load from MySQL even while disconnected.
+    const onOpenQrModal = (e) => qrModal?.open({ manual: !!(e && e.detail && e.detail.manual) });
+    this.addEventListener('open-qr-modal', onOpenQrModal);
+    window.addEventListener('open-qr-modal', onOpenQrModal);
+    (async () => {
+      try {
+        if (!this.store) return;
+        const sess = await this.store.loadSession();
+        const linked = !!(sess && sess.is_connected);
+        // Always refresh the chat list from the API (works offline of WhatsApp Web).
+        await this.store.loadChats(true);
+        if (!linked) qrModal?.open();
+      } catch (e) {
+        console.warn('Pairing bootstrap failed', e);
+        qrModal?.open();
+      }
+    })();
 
     // Fullscreen toggle event from menus
     this.addEventListener('toggle-fullscreen', () => {

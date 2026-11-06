@@ -109,18 +109,48 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     ];
 }
 
+// Get all parent phones from admission_enquiries
+$admissionPhones = [];
+try {
+    $stmt = $db->query("
+        SELECT DISTINCT phone_e164, phone_number, parent_name, student_name, interested_class
+        FROM admission_enquiries
+        WHERE (phone_e164 IS NOT NULL AND phone_e164 != '')
+           OR (phone_number IS NOT NULL AND phone_number != '')
+    ");
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $raw = !empty($row['phone_e164']) ? $row['phone_e164'] : $row['phone_number'];
+        $clean = preg_replace('/\D/', '', $raw);
+        if (str_starts_with($clean, '0')) $clean = substr($clean, 1);
+        if (strlen($clean) === 10) $clean = '91' . $clean;
+        if (strlen($clean) >= 10) {
+            $admissionPhones[] = [
+                'wa_id' => $clean . '@c.us',
+                'phone_e164' => '+' . $clean,
+                'name' => $row['parent_name'] ?: 'Enquiry Parent',
+                'student_name' => $row['student_name'] ?? null,
+                'interested_class' => $row['interested_class'] ?? null,
+                'source' => 'admission_enquiry'
+            ];
+        }
+    }
+} catch (Throwable $e) {}
+
 // Admission keywords (same as in api_whatsapp_ingest.php)
 $admissionKeywords = [
     'admission', 'admissions', 'fee', 'fees', 'nursery', 'lkg', 'ukg',
-    'standard', 'grade', 'eligibility', 'timings', 'transport', 'campus visit',
-    'enquiry', 'inquiry', 'apply', 'application', 'form', 'prospectus',
-    'age criteria', 'age limit', 'vacancy', 'seat', 'available', 'open'
+    'standard', 'grade', 'class', 'std', 'school', 'curriculum', 'cbse', 'icse', 'state',
+    'eligibility', 'timings', 'timing', 'transport', 'bus', 'campus visit', 'visit',
+    'enquiry', 'inquiry', 'apply', 'application', 'form', 'prospectus', 'brochure',
+    'age criteria', 'age limit', 'vacancy', 'vacant', 'seat', 'seats', 'available', 'open',
+    'syllabus', 'uniform', 'interaction', 'interview', 'registration', 'register',
+    'hello', 'hi', 'namaste', 'good morning', 'good afternoon', 'inquire', 'admit'
 ];
 
 waJsonResponse([
     'success' => true,
     'data' => [
-        'roster_numbers' => array_merge($studentPhones, $teacherPhones),
+        'roster_numbers' => array_merge($studentPhones, $teacherPhones, $admissionPhones),
         'linked_contacts' => $linkedContacts,
         'class_groups' => $classGroups,
         'known_chats' => $knownChats,

@@ -1,0 +1,6 @@
+{
+  "personal": { "wa_chat_id": "919999000001@c.us", "name": "Fixture Parent One", "chat_type": "individual" },
+  "group":    { "wa_chat_id": "120363999000002@g.us", "name": "Fixture Class Group", "chat_type": "group" },
+  "lid":      { "wa_chat_id": "123456789012345@lid", "name": "Fixture LID Contact", "chat_type": "individual" },
+  "self":     { "wa_chat_id": "919999000099@c.us", "name": "Message yourself (fixture)", "chat_type": "individual" }
+}

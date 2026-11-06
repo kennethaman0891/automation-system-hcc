@@ -17,11 +17,10 @@
  */
 
 require_once __DIR__ . '/../includes/functions.php';
-require_once __DIR__ . '/../admin/includes/whatsapp_functions.php';
+require_once __DIR__ . '/includes/whatsapp_functions.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
-// Same session rules as the other WhatsApp admin APIs. Localhost QA may pass qa_test=1.
 $auth = waRequireAuth();
 
 $db = waGetDB();
@@ -316,14 +315,14 @@ function handleGetDraft(PDO $db): void {
 }
 
 /**
- * Approve AI draft and dispatch to WhatsApp outbound queue
- * ALL AI responses MUST be approved by an administrator before sending!
+ * Approve AI draft (stores approval only — NEVER sends WhatsApp)
+ * Copy final_message into the hub and press Send to deliver.
  */
 function handleApproveDraft(PDO $db, array $input, ?array $auth): void {
     $draftId = (int)($input['draft_id'] ?? 0);
     $chatId = (int)($input['chat_id'] ?? 0);
     $editedText = trim($input['edited_text'] ?? '');
-    $sendImmediately = !empty($input['send_immediately']);
+    // AI approve never sends. User must press Send in the hub with the text.
 
     if ($draftId <= 0 && $chatId <= 0) {
         waJsonResponse(['success' => false, 'error' => 'draft_id or chat_id is required'], 400);
@@ -368,54 +367,17 @@ function handleApproveDraft(PDO $db, array $input, ?array $auth): void {
         ")->execute([$adminId, $draft['enquiry_id']]);
     }
 
-    $outboundQueueId = null;
-    $sentMessageId = null;
-
-    if ($sendImmediately) {
-        // Enqueue to outbound queue for delivery
-        $insQueue = $db->prepare("
-            INSERT INTO `whatsapp_outbound_queue` (
-                `chat_id`, `msg_type`, `body`, `priority`, `status`, `scheduled_at`, `dispatched_by`, `related_doc_type`
-            ) VALUES (
-                ?, 'text', ?, 5, 'queued', NOW(), ?, 'admission_reply'
-            )
-        ");
-        $insQueue->execute([$draft['chat_id'], $finalMessageText, $adminId]);
-        $outboundQueueId = (int)$db->lastInsertId();
-
-        // Also record in whatsapp_messages as outgoing message from school
-        $waMsgId = 'adm_' . time() . '_' . bin2hex(random_bytes(4));
-        $now = time();
-        $insMsg = $db->prepare("
-            INSERT INTO `whatsapp_messages` (
-                `wa_msg_id`, `chat_id`, `from_me`, `sender_id`, `sender_name`,
-                `msg_type`, `body`, `status`, `timestamp`, `received_at`
-            ) VALUES (
-                ?, ?, 1, 'school_admin', 'HCC Admission Office',
-                'text', ?, 'sent', ?, NOW()
-            )
-        ");
-        $insMsg->execute([$waMsgId, $draft['chat_id'], $finalMessageText, $now]);
-        $sentMessageId = (int)$db->lastInsertId();
-
-        // Update chat last message & activity
-        $db->prepare("
-            UPDATE `whatsapp_chats` 
-            SET `last_message_id` = ?, 
-                `last_activity_at` = NOW(), 
-                `updated_at` = NOW() 
-            WHERE `id` = ?
-        ")->execute([$sentMessageId, $draft['chat_id']]);
-    }
-
+    // Never enqueue to WhatsApp from AI. Return the text; user presses Send in the hub.
     waJsonResponse([
+
         'success' => true,
         'draft_id' => (int)$draft['id'],
         'status' => 'approved',
         'final_message' => $finalMessageText,
-        'sent_immediately' => $sendImmediately,
-        'outbound_queue_id' => $outboundQueueId,
-        'sent_message_id' => $sentMessageId
+        'sent_immediately' => false,
+        'outbound_queue_id' => null,
+        'sent_message_id' => null,
+        'note' => 'AI never sends. Copy the text into the hub compose box and press Send.'
     ]);
 }
 

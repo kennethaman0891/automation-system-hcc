@@ -35,6 +35,15 @@ flush();
 $db = waGetDB();
 $adminId = (int)$_SESSION['admin_id'];
 $lastEventId = isset($_SERVER['HTTP_LAST_EVENT_ID']) ? (int)$_SERVER['HTTP_LAST_EVENT_ID'] : 0;
+// Fresh connections must not replay the whole message table as "new" events —
+// that floods the hub with stacked toasts for every recent inbound.
+if ($lastEventId <= 0) {
+    try {
+        $lastEventId = (int)$db->query('SELECT COALESCE(MAX(id), 0) FROM whatsapp_messages')->fetchColumn();
+    } catch (Throwable $e) {
+        $lastEventId = 0;
+    }
+}
 
 // Polling-based SSE: poll database for new events
 $pollInterval = 2; // seconds
@@ -42,7 +51,12 @@ $maxRuntime = 300; // 5 minutes max per connection
 $startTime = time();
 $lastHeartbeat = time();
 
-function sendEvent(string $event, array $data): void {
+function sendEvent(string $event, array $data, ?int $id = null): void {
+    // id lets EventSource resume with Last-Event-ID after the 5-minute reconnect,
+    // so messages stored during the reconnect gap are not skipped.
+    if ($id !== null && $id > 0) {
+        echo "id: {$id}\n";
+    }
     echo "event: {$event}\n";
     echo "data: " . json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n\n";
     flush();
@@ -107,7 +121,7 @@ while (time() - $startTime < $maxRuntime) {
                 'metadata' => $msg['metadata'] ? json_decode($msg['metadata'], true) : null
             ];
             
-            sendEvent('message', $payload);
+            sendEvent('message', $payload, (int)$msg['id']);
         }
     }
     

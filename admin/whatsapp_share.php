@@ -885,6 +885,9 @@ if ($selectedRollsParam !== '') {
                                 <button type="button" class="wa-btn wa-btn-ghost wa-btn-sm" id="openCompanionBtn" title="Launch official WhatsApp click-to-chat window with pre-filled message">
                                     <i class="fa-brands fa-whatsapp"></i> Open WhatsApp
                                 </button>
+                                <button type="button" class="wa-btn wa-btn-ghost wa-btn-sm" id="btnTemplatesHub" title="Choose a message template for this student">
+                                    <i class="fas fa-copy"></i> Templates
+                                </button>
                                 <button type="button" class="wa-btn wa-btn-send wa-btn-sm" id="paneSendBtn" title="Confirm that this message was sent in WhatsApp">
                                     <i class="fas fa-check-double"></i> Mark as Sent
                                 </button>
@@ -961,6 +964,11 @@ if ($selectedRollsParam !== '') {
                 <button type="button" id="waLinkFab" style="display:none;position:fixed;right:24px;bottom:24px;z-index:12001;background:#00a884;color:#fff;border:none;border-radius:999px;padding:12px 18px;font-weight:700;font-size:0.85rem;cursor:pointer;box-shadow:0 8px 24px rgba(0,168,132,0.35);">
                     <i class="fa-brands fa-whatsapp"></i> Link WhatsApp
                 </button>
+                <div id="waLinkChip" style="display:none;position:fixed;right:24px;bottom:24px;z-index:12001;align-items:center;gap:10px;background:#fff;color:#0f172a;border:1px solid #bbf7d0;border-radius:999px;padding:8px 8px 8px 14px;box-shadow:0 8px 24px rgba(15,23,42,0.16);font-size:0.82rem;font-weight:700;">
+                    <i class="fa-brands fa-whatsapp" style="color:#00a884;"></i>
+                    <span id="waLinkChipText">WhatsApp linked</span>
+                    <button type="button" id="waLogoutBtn" style="background:#b91c1c;color:#fff;border:none;border-radius:999px;padding:8px 12px;font-weight:700;font-size:0.78rem;cursor:pointer;">Log out</button>
+                </div>
 
                 <div id="waLinkOverlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.72);z-index:12002;align-items:center;justify-content:center;padding:16px;">
                     <div style="background:#fff;border-radius:16px;padding:24px;max-width:400px;width:100%;text-align:center;box-shadow:0 24px 60px rgba(0,0,0,0.35);position:relative;">
@@ -996,11 +1004,25 @@ if ($selectedRollsParam !== '') {
                 (function () {
                     var overlay  = document.getElementById('waLinkOverlay');
                     var fab      = document.getElementById('waLinkFab');
+                    var chip     = document.getElementById('waLinkChip');
+                    var chipText = document.getElementById('waLinkChipText');
                     var img      = document.getElementById('waLinkQr');
                     var spin     = document.getElementById('waLinkSpin');
                     var statusEl = document.getElementById('waLinkStatus');
                     var closeBtn = document.getElementById('waLinkClose');
                     var dismissed = false;
+                    var logoutPending = false;
+
+                    document.addEventListener('hcc:whatsapp-logout', function () {
+                        logoutPending = true;
+                        chip.style.display = 'none';
+                        dismissed = false;
+                        overlay.style.display = 'flex';
+                        img.style.display = 'none';
+                        spin.style.display = 'inline';
+                        spin.textContent = 'Waiting for bridge QR…';
+                        statusEl.innerHTML = '<span style="color:#f59e0b;font-weight:600;">Logged out.</span> Waiting for a new QR…';
+                    });
 
                     function showQR() { dismissed = false; overlay.style.display = 'flex'; fab.style.display = 'none'; }
                     function hideQR() { dismissed = true; overlay.style.display = 'none'; fab.style.display = 'inline-flex'; }
@@ -1018,12 +1040,19 @@ if ($selectedRollsParam !== '') {
                         try {
                             var s = await fetch('api_whatsapp_session.php?action=status', { cache: 'no-store' }).then(function (r) { return r.json(); });
                             var sess = s && s.session ? s.session : null;
-                            if (sess && sess.is_connected) {
+                            if (sess && sess.is_connected && !logoutPending) {
                                 overlay.style.display = 'none';
                                 fab.style.display = 'none';
+                                chip.style.display = 'inline-flex';
+                                var phone = sess.phone_number ? String(sess.phone_number) : '';
+                                chipText.textContent = phone ? ('WhatsApp linked · ' + phone) : 'WhatsApp linked';
                                 return;
                             }
+                            if (!sess || !sess.is_connected) logoutPending = false;
+                            chip.style.display = 'none';
                             if (!dismissed) overlay.style.display = 'flex';
+
+                            var bridgeAlive = !!(s && (s.bridge_running || (sess && sess.bridge_running)));
 
                             var q = await fetch('api_whatsapp_session.php?action=qr', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return null; });
                             if (q && q.success && q.qr_code) {
@@ -1033,17 +1062,23 @@ if ($selectedRollsParam !== '') {
                                     img.style.display = 'block';
                                     spin.style.display = 'none';
                                 }
-                                statusEl.textContent = 'QR ready — scan it now (expires soon)';
+                                statusEl.innerHTML = '<span style="color:#059669;font-weight:600;">● QR ready</span> — scan it now with WhatsApp';
                             } else {
                                 img.style.display = 'none';
                                 spin.style.display = 'inline';
-                                statusEl.textContent = 'Waiting for bridge to generate a QR…';
+                                if (!bridgeAlive && (!q || q.bridge_running === false)) {
+                                    spin.innerHTML = '<span style="color:#ef4444;font-size:0.85rem;"><i class="fa-solid fa-triangle-exclamation"></i> Bridge offline</span>';
+                                    statusEl.innerHTML = '<span style="color:#ef4444;font-weight:600;">WhatsApp bridge is not running</span><br><span style="color:#64748b;font-size:0.75rem;">Start it to get a QR: run <code>./automation/start-bridge.sh</code> in Terminal, or double-click <code>automation/Start WhatsApp Bridge.command</code></span>';
+                                } else {
+                                    spin.innerHTML = 'Waiting for bridge QR&hellip;';
+                                    statusEl.innerHTML = '<span style="color:#f59e0b;">Waiting for bridge to generate a QR…</span>';
+                                }
                             }
                         } catch (e) { /* silent */ }
                     }
 
                     tick();
-                    setInterval(tick, 5000);
+                    setInterval(tick, 3000);
 
                     // ── Phone-number pairing code (no QR / no camera) ──
                     var pairToggle = document.getElementById('waPairToggle');
@@ -1142,14 +1177,19 @@ if ($selectedRollsParam !== '') {
         </div>
     </div>
 
+    <wa-template-library id="wa-template-library"></wa-template-library>
+    <wa-template-library id="wa-template-library-hub"></wa-template-library>
+
     <script src="../assets/vendor/html2canvas@1.4.1/html2canvas.min.js"></script>
     <script src="../assets/vendor/jspdf@2.5.1/jspdf.umd.min.js"></script>
     <script src="../assets/vendor/jszip@3.10.1/jszip.min.js"></script>
     <script src="../assets/js/hcc-logo-base64.js?v=<?= filemtime(__DIR__ . '/../assets/js/hcc-logo-base64.js') ?>"></script>
     <script src="../assets/js/whatsapp-audio-notifications.js?v=<?= filemtime(__DIR__ . '/../assets/js/whatsapp-audio-notifications.js') ?>"></script>
+    <script>window.HCC_LOGO_URL = <?= e_js(BASE_URL . 'assets/images/hcclogo.jpg') ?>;</script>
     <script src="../assets/js/whatsapp-store.js?v=<?= filemtime(__DIR__ . '/../assets/js/whatsapp-store.js') ?>"></script>
     <script src="../assets/js/whatsapp-components.js?v=<?= filemtime(__DIR__ . '/../assets/js/whatsapp-components.js') ?>"></script>
     <script src="../assets/js/whatsapp-components2.js?v=<?= filemtime(__DIR__ . '/../assets/js/whatsapp-components2.js') ?>"></script>
+    <script src="../assets/js/whatsapp-templates.js?v=<?= filemtime(__DIR__ . '/../assets/js/whatsapp-templates.js') ?>"></script>
     <script src="../assets/js/hcc-pdf-engine.js?v=<?= filemtime(__DIR__ . '/../assets/js/hcc-pdf-engine.js') ?>"></script>
     <script src="../assets/js/whatsapp-share.js?v=<?= filemtime(__DIR__ . '/../assets/js/whatsapp-share.js') ?>"></script>
     <script src="../assets/js/whatsapp-hub.js?v=<?= filemtime(__DIR__ . '/../assets/js/whatsapp-hub.js') ?>"></script>
@@ -1272,6 +1312,7 @@ if ($selectedRollsParam !== '') {
         } catch (initErr) {
             console.warn('Initial store check/sync notice:', initErr);
         }
+
     });
     </script>
 </body>

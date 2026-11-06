@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Mock WhatsApp Web (offline)</title>
+<style>
+  body { margin:0; font-family: system-ui, sans-serif; background:#0b141a; color:#e9edef; display:flex; height:100vh; }
+  #qr-pane { margin:auto; text-align:center; }
+  #app { display:none; width:100%; height:100%; }
+  #pane-side { width:360px; border-right:1px solid #222; overflow:auto; background:#111b21; }
+  #main { flex:1; display:flex; flex-direction:column; }
+  #messages { flex:1; overflow:auto; padding:16px; }
+  footer { padding:10px; background:#202c33; display:flex; gap:8px; align-items:center; }
+  [contenteditable] { flex:1; min-height:24px; background:#2a3942; padding:8px 12px; border-radius:8px; outline:none; }
+  .message-out, .message-in { max-width:70%; margin:6px 0; padding:8px 10px; border-radius:8px; position:relative; }
+  .message-out { background:#005c4b; margin-left:auto; }
+  .message-in { background:#202c33; margin-right:auto; }
+  .chat-row { padding:12px 14px; border-bottom:1px solid #222; cursor:pointer; }
+  .chat-row.active { background:#2a3942; }
+  #status-bar { font-size:12px; opacity:.7; padding:6px 12px; }
+</style>
+</head>
+<body>
+<div id="qr-pane">
+  <h2>Mock WhatsApp — Scan QR</h2>
+  <canvas id="mock-qr" width="256" height="256" aria-label="Scan this QR code"></canvas>
+  <p id="qr-hint">Waiting for bridge…</p>
+</div>
+<div id="app">
+  <div id="pane-side" data-testid="chat-list"></div>
+  <div id="main" style="display:flex;flex-direction:column;flex:1">
+    <div id="status-bar">Mock connected</div>
+    <header id="chat-header" data-id=""></header>
+    <div id="messages"></div>
+    <footer>
+      <div contenteditable="true" data-tab="10" aria-label="Type a message" id="composer"></div>
+      <button data-testid="send" aria-label="Send" id="send-btn">Send</button>
+    </footer>
+  </div>
+</div>
+<script>
+window.__MOCK__ = {
+  loggedIn: false,
+  failNextSend: false,
+  failNextRevoke: false,
+  chats: {},
+  active: null,
+  received: [], // outbound captures for assertions
+  seq: 1
+};
+
+function drawQR() {
+  const c = document.getElementById('mock-qr');
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0,0,256,256);
+  ctx.fillStyle = '#000';
+  for (let i=0;i<40;i++) {
+    ctx.fillRect((i*37)%240, (i*53)%240, 12, 12);
+  }
+  ctx.fillText('MOCK-QR-' + Date.now(), 20, 240);
+}
+
+function renderChats() {
+  const root = document.getElementById('pane-side');
+  root.innerHTML = '';
+  Object.values(window.__MOCK__.chats).forEach(ch => {
+    const row = document.createElement('div');
+    row.className = 'chat-row' + (window.__MOCK__.active === ch.wa_chat_id ? ' active' : '');
+    row.setAttribute('role', 'listitem');
+    row.setAttribute('data-id', ch.wa_chat_id);
+    row.setAttribute('data-chat-id', ch.wa_chat_id);
+    row.innerHTML = '<span data-testid="cell-frame-title" title="'+ch.name+'" dir="auto">'+ch.name+'</span>'
+      + (ch.unread ? '<span data-testid="icon-unread-count">1</span>' : '');
+    row.onclick = () => openChat(ch.wa_chat_id);
+    root.appendChild(row);
+  });
+}
+
+function openChat(jid) {
+  const ch = window.__MOCK__.chats[jid];
+  if (!ch) return false;
+  window.__MOCK__.active = jid;
+  document.getElementById('chat-header').setAttribute('data-id', jid);
+  document.getElementById('chat-header').textContent = ch.name;
+  const box = document.getElementById('messages');
+  box.innerHTML = '';
+  (ch.messages || []).forEach(m => appendBubble(m, false));
+  renderChats();
+  return true;
+}
+
+function appendBubble(m, track) {
+  const el = document.createElement('div');
+  el.className = m.from_me ? 'message-out' : 'message-in';
+  el.setAttribute('data-id', m.wa_msg_id);
+  el.setAttribute('data-testid', 'msg-container');
+  const text = document.createElement('span');
+  text.className = 'copyable-text';
+  text.setAttribute('dir', 'auto');
+  text.textContent = m.body || '';
+  el.appendChild(text);
+  const icon = document.createElement('span');
+  if (m.from_me) {
+    const st = m.status || 'sent';
+    icon.setAttribute('data-icon', st === 'read' ? 'msg-dblcheck-ack' : st === 'delivered' ? 'msg-dblcheck' : 'msg-check');
+    icon.setAttribute('aria-label', st === 'read' ? 'Read' : st === 'delivered' ? 'Delivered' : 'Sent');
+  }
+  el.appendChild(icon);
+  document.getElementById('messages').appendChild(el);
+  if (track) {
+    const ch = window.__MOCK__.chats[window.__MOCK__.active];
+    if (ch) ch.messages.push(m);
+  }
+}
+
+function doSend() {
+  if (window.__MOCK__.failNextSend) {
+    // Leave composer filled and keep failing until the page clears failNextSend explicitly.
+    // (A second click must not accidentally succeed after one refused Enter.)
+    const composer = document.getElementById('composer');
+    const keep = (composer.innerText || composer.textContent || '').trim();
+    composer.innerHTML = '';
+    composer.textContent = keep;
+    return false;
+  }
+  const composer = document.getElementById('composer');
+  const body = (composer.innerText || composer.textContent || '').trim();
+  if (!body || !window.__MOCK__.active) return false;
+  const jid = window.__MOCK__.active;
+  const id = 'true_' + jid + '_' + (Date.now()) + '_' + (window.__MOCK__.seq++);
+  const msg = { wa_msg_id: id, wa_chat_id: jid, from_me: true, body, status: 'sent', timestamp: Math.floor(Date.now()/1000), msg_type: 'text' };
+  appendBubble(msg, true);
+  window.__MOCK__.received.push({ ...msg, at: Date.now() });
+  composer.innerHTML = '';
+  composer.textContent = '';
+  return true;
+}
+
+document.getElementById('send-btn').onclick = doSend;
+document.getElementById('composer').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    doSend();
+  }
+});
+
+window.MockAPI = {
+  login(chats) {
+    window.__MOCK__.loggedIn = true;
+    window.__MOCK__.chats = {};
+    (chats || []).forEach(c => {
+      window.__MOCK__.chats[c.wa_chat_id] = { ...c, messages: c.messages || [], unread: !!c.unread };
+    });
+    document.getElementById('qr-pane').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    renderChats();
+    const first = Object.keys(window.__MOCK__.chats)[0];
+    if (first) openChat(first);
+  },
+  logout() {
+    window.__MOCK__.loggedIn = false;
+    window.__MOCK__.active = null;
+    document.getElementById('app').style.display = 'none';
+    document.getElementById('qr-pane').style.display = 'block';
+    drawQR();
+  },
+  injectIncoming(msg) {
+    const jid = msg.wa_chat_id;
+    if (!window.__MOCK__.chats[jid]) {
+      window.__MOCK__.chats[jid] = { wa_chat_id: jid, name: msg.sender_name || jid, messages: [], unread: true };
+    }
+    const m = {
+      wa_msg_id: msg.wa_msg_id || ('false_' + jid + '_' + Date.now()),
+      wa_chat_id: jid,
+      from_me: false,
+      body: msg.body || '',
+      status: 'delivered',
+      timestamp: msg.timestamp || Math.floor(Date.now()/1000),
+      msg_type: msg.msg_type || 'text',
+      sender_name: msg.sender_name || ''
+    };
+    window.__MOCK__.chats[jid].messages.push(m);
+    window.__MOCK__.chats[jid].unread = true;
+    if (window.__MOCK__.active === jid) appendBubble(m, false);
+    else renderChats();
+    return m;
+  },
+  ack(waMsgId, status) {
+    Object.values(window.__MOCK__.chats).forEach(ch => {
+      (ch.messages||[]).forEach(m => {
+        if (m.wa_msg_id === waMsgId) m.status = status;
+      });
+    });
+    // refresh icons in DOM
+    document.querySelectorAll('#main [data-id="'+waMsgId+'"]').forEach(el => {
+      const icon = el.querySelector('[data-icon]') || document.createElement('span');
+      icon.setAttribute('data-icon', status === 'read' ? 'msg-dblcheck-ack' : status === 'delivered' ? 'msg-dblcheck' : 'msg-check');
+      icon.setAttribute('aria-label', status === 'read' ? 'Read' : status === 'delivered' ? 'Delivered' : 'Sent');
+      if (!icon.parentNode) el.appendChild(icon);
+    });
+  },
+  revoke(waMsgId) {
+    if (window.__MOCK__.failNextRevoke) {
+      window.__MOCK__.failNextRevoke = false;
+      return { ok: false, error: 'mock revoke failure' };
+    }
+    let found = false;
+    Object.values(window.__MOCK__.chats).forEach(ch => {
+      const before = ch.messages.length;
+      ch.messages = (ch.messages||[]).filter(m => m.wa_msg_id !== waMsgId);
+      if (ch.messages.length !== before) found = true;
+    });
+    document.querySelectorAll('#main [data-id="'+waMsgId+'"]').forEach(el => el.remove());
+    return { ok: found, how: found ? 'removed' : 'missing' };
+  },
+  state() { return JSON.parse(JSON.stringify({
+    loggedIn: window.__MOCK__.loggedIn,
+    active: window.__MOCK__.active,
+    received: window.__MOCK__.received,
+    chats: window.__MOCK__.chats,
+    failNextSend: window.__MOCK__.failNextSend
+  })); }
+};
+
+// Bridge compatibility: WABridge.isLoggedIn used during session check
+window.WABridge = window.WABridge || {};
+window.WABridge.isLoggedIn = () => !!window.__MOCK__.loggedIn;
+
+drawQR();
+</script>
+</body>
+</html>

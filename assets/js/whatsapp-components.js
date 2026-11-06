@@ -560,8 +560,9 @@ class WaChatItem extends WaElement {
         </div>
         <div class="wa-chat-info">
           <div class="wa-chat-top">
-            <span class="wa-chat-name" title="${this.escapeHtml(chat.name || 'Unknown')}">
+            <span class="wa-chat-name" title="${this.escapeHtml(chat.name || 'Unknown')}${(String(chat.wa_chat_id||'').includes('@lid') ? ' · no phone (@lid)' : '')}">
               <span>${this.escapeHtml(chat.name || 'Unknown')}</span>
+              ${String(chat.wa_chat_id||'').includes('@lid') ? '<span class="wa-enquiry-pill" style="background:#eef2ff;color:#3730a3;" title="Linked-device chat id (no phone yet)">@lid</span>' : ''}
               ${(chat.ai_draft && chat.ai_draft.admin_status === 'pending') ? `<span class="wa-enquiry-pill" style="background:#00a884;color:#fff;" title="AI Admission Draft Ready">🤖 AI DRAFT</span>` : (enquiryStatus ? `<span class="wa-enquiry-pill status-${enquiryStatus}">${enquiryStatus}</span>` : '')}
             </span>
             <span class="wa-chat-time">${formattedTime}</span>
@@ -800,9 +801,12 @@ class WaChatList extends WaElement {
           border-radius: 50%;
           box-shadow: 0 0 0 0.5px rgba(0,0,0,0.1);
         }
+        .wa-avatar-online-dot.is-offline { background: #f59e0b; }
+        .wa-avatar-online-dot.is-unknown { background: #94a3b8; }
         .wa-cl-profile-title {
           display: flex;
           flex-direction: column;
+          flex: 1;
           min-width: 0;
           justify-content: center;
         }
@@ -858,7 +862,7 @@ class WaChatList extends WaElement {
         .wa-cl-header-actions {
           display: flex;
           align-items: center;
-          gap: 2px;
+          gap: 4px;
           flex-shrink: 0;
         }
         .wa-header-toast {
@@ -1319,7 +1323,7 @@ class WaChatList extends WaElement {
         <div class="wa-cl-profile" id="profile-trigger" title="${this.escapeHtml(schoolName)} · Official WhatsApp Portal">
           <div class="wa-cl-avatar-wrap">
             <wa-avatar src="${schoolLogo}" name="${this.escapeHtml(schoolName)}" size="40"></wa-avatar>
-            <span class="wa-avatar-online-dot" title="Connected & Online"></span>
+            <span class="wa-avatar-online-dot is-unknown" id="profile-session-dot" title="Checking WhatsApp link…"></span>
           </div>
           <div class="wa-cl-profile-title">
             <div class="wa-cl-profile-heading">
@@ -1335,12 +1339,6 @@ class WaChatList extends WaElement {
           </div>
         </div>
         <div class="wa-cl-header-actions">
-          <!-- Community Icon -->
-          <wa-icon-button id="btn-communities" icon="community" tooltip="Communities"></wa-icon-button>
-          <!-- Status Icon -->
-          <wa-icon-button id="btn-status" icon="status" tooltip="Status updates"></wa-icon-button>
-          <!-- Channels Icon -->
-          <wa-icon-button id="btn-channels" icon="channels" tooltip="School Channels"></wa-icon-button>
           <!-- New Admission Enquiry Icon -->
           <wa-icon-button id="btn-new-enquiry" icon="add" tooltip="New Admission Enquiry"></wa-icon-button>
           <!-- New Chat Icon -->
@@ -1389,7 +1387,7 @@ class WaChatList extends WaElement {
         <div class="wa-menu-divider"></div>
         <button class="wa-menu-item wa-menu-item-danger" data-action="logout">
           <svg viewBox="0 0 24 24"><path fill="currentColor" d="m17 7-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
-          <span>Log out</span>
+          <span>Log out of WhatsApp</span>
         </button>
       </div>
       
@@ -1594,6 +1592,23 @@ class WaChatList extends WaElement {
       else this.dispatch('open-settings');
     });
 
+    // Profile dot mirrors the real WhatsApp session (no hardcoded "Connected")
+    const sessionDot = this.$('#profile-session-dot');
+    const applySessionDot = (sess) => {
+      if (!sessionDot) return;
+      const linked = !!(sess && sess.is_connected);
+      sessionDot.classList.toggle('is-unknown', !sess);
+      sessionDot.classList.toggle('is-offline', !!sess && !linked);
+      sessionDot.title = !sess ? 'Checking WhatsApp link…' : (linked ? 'WhatsApp linked' : 'WhatsApp not linked — scan QR in the top bar');
+    };
+    const dotStore = this.store || window.WhatsAppStore;
+    if (dotStore && !this._sessionDotBound) {
+      this._sessionDotBound = true;
+      dotStore.addEventListener('session:updated', (e) => applySessionDot(e.detail));
+      dotStore.addEventListener('session:disconnected', () => applySessionDot({ is_connected: false }));
+    }
+    applySessionDot(dotStore && dotStore.session ? dotStore.session : null);
+
     // Header Actions
     this.$('#btn-communities')?.addEventListener('click', () => {
       this.showToast('Communities', 'HCC High School Class Communities are active.');
@@ -1660,17 +1675,26 @@ class WaChatList extends WaElement {
         } else if (action === 'starred') {
           this.setFilter('starred');
         } else if (action === 'logout') {
-          const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
-          confirmFn({
-            title: 'Log Out of WhatsApp',
-            message: 'Are you sure you want to log out from WhatsApp Web Replica?',
-            confirmText: 'Log Out',
-            type: 'danger'
-          }).then((confirmed) => {
-            if (confirmed) {
-              this.store?.logout();
-            }
-          });
+          const finish = (ok) => {
+            if (!ok || !this.store) return;
+            this.store.isOnline = false;
+            this.store.session = null;
+            this.store.saveSession({ is_connected: false });
+            this.store.dispatchEvent(new CustomEvent('session:disconnected'));
+          };
+          if (typeof window.hccWhatsAppLogout === 'function') {
+            window.hccWhatsAppLogout(item).then(finish);
+          } else {
+            const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
+            confirmFn({
+              title: 'Log out of WhatsApp',
+              message: 'This unlinks the school WhatsApp from this computer. New parent messages stop until someone scans the QR again.',
+              confirmText: 'Log out',
+              type: 'danger'
+            }).then((confirmed) => {
+              if (confirmed) Promise.resolve(this.store?.logout()).then(finish);
+            });
+          }
         } else {
           alert(`${item.textContent.trim()} action selected.`);
         }
@@ -2166,6 +2190,7 @@ class WaIconButton extends WaElement {
     
     const icons = {
       search: '<svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>',
+      add: '<svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>',
       more_vert: '<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>',
       community: '<svg viewBox="0 0 24 24"><path d="M12.071 8.243a3.504 3.504 0 1 0 0-7.008 3.504 3.504 0 0 0 0 7.008zm-5.75 4.316c.307-.84.819-1.579 1.488-2.158C7.159 10.15 6.275 10 5.32 10c-2.454 0-4.32 1.636-4.32 3.636v1.455c0 .5.409.909.909.909h7.405a5.55 5.55 0 0 1-1.028-2.433c-.007-.037-.013-.075-.015-.114v-.893zm11.5 0v.893c-.002.039-.008.077-.015.114a5.55 5.55 0 0 1-1.028 2.433h7.405c.5 0 .909-.409.909-.909v-1.455c0-2-1.866-3.636-4.32-3.636-.955 0-1.839.15-2.489.401.669.579 1.181 1.318 1.488 2.158zm-5.75-2.007c-2.348 0-4.25 1.702-4.25 3.801v1.693c0 .523.427.953.95.953h6.6c.523 0 .95-.43.95-.953v-1.693c0-2.099-1.902-3.801-4.25-3.801z"/></svg>',
       status: '<svg viewBox="0 0 24 24"><path d="M12 20.5a8.5 8.5 0 0 1-7.36-4.25 1 1 0 0 0-1.73 1A10.5 10.5 0 0 0 12 22.5a10.5 10.5 0 0 0 9.09-5.25 1 1 0 0 0-1.73-1A8.5 8.5 0 0 1 12 20.5zM3.41 11.25a8.5 8.5 0 0 1 2.23-5.5 1 1 0 1 0-1.5-1.32A10.5 10.5 0 0 0 1.4 11.25a1 1 0 0 0 2.01 0zm17.18 0a1 1 0 0 0 2.01 0 10.5 10.5 0 0 0-2.74-6.82 1 1 0 1 0-1.5 1.32 8.5 8.5 0 0 1 2.23 5.5zm-8.59-7.75a8.47 8.47 0 0 1 5.95 2.47 1 1 0 0 0 1.41-1.41A10.47 10.47 0 0 0 12 1.5a10.47 10.47 0 0 0-7.36 3.06 1 1 0 0 0 1.41 1.41A8.47 8.47 0 0 1 12 3.5z"/></svg>',
@@ -2229,7 +2254,7 @@ class WaIconButton extends WaElement {
         }
       </style>
       <button class="wa-icon-btn ${disabled ? 'disabled' : ''}" ${disabled ? 'disabled' : ''} title="${this.escapeHtml(tooltip)}">
-        ${icons[icon] || icon}
+        ${icons[icon] || ''}
       </button>
     `;
   }

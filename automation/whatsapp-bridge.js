@@ -7,6 +7,9 @@
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const fs = require('fs');
+const waListRules = require('./wa-list-rules');
+const waRevokeRules = require('./wa-revoke-rules');
+const waSafety = require('./wa-safety');
 const puppeteer = require('puppeteer');
 const axios = require('axios');
 const os = require('os');
@@ -113,7 +116,8 @@ class WhatsAppBridge extends EventEmitter {
       logLevel: config.logLevel || process.env.LOG_LEVEL || 'info'
     };
     
-    this.browser = null;
+    
+this.browser = null;
     this.page = null;
     this.isConnected = false;
     this.isPolling = false;
@@ -151,6 +155,7 @@ class WhatsAppBridge extends EventEmitter {
     this.filterRefreshTimer = null;
     this.consecutiveQrDetections = 0;
     this.sending = false;
+    this.shuttingDown = false;
     this.pollingNow = false;
     this.recentOutboundChatIds = new Set();
     this.recentOutboundBodies = new Map();
@@ -160,12 +165,28 @@ class WhatsAppBridge extends EventEmitter {
     this.lastRevisitAt = 0;
     this.ingestNotices = new Map();
     this.ingestedMsgIds = new Set();
+    this.chatPreviewByTitle = new Map();
+    this.chatListPrimed = false;
+    this.didInitialListPass = false;
+    this.lastChatListSummary = '';
+    this.lastIngestAt = null;
+    this.lastSkipNote = '';
     if (!this.config.bridgeSecret || String(this.config.bridgeSecret).length < 16) {
       this.log('error', 'WHATSAPP_BRIDGE_SECRET is missing or shorter than 16 characters; ingest posts will be refused');
     }
     
     // Ensure directories exist
     this.ensureDirs();
+
+    // Test-mode hardening: isolated profile, mock entry URL, fixture-only chats.
+    if (waSafety.isTestMode()) {
+      this.config.userDataDir = process.env.USER_DATA_DIR
+        || path.join(__dirname, '.whatsapp-session-test');
+      this.config.enablePrivacyFilter = false;
+      if (this.privacyFilter) this.privacyFilter.enabled = false;
+      this.config.headless = process.env.HEADLESS === 'false' ? false : true;
+      this.log('warn', 'WA_TEST_MODE=1 — real WhatsApp navigation is blocked; using mock + fixture chats only');
+    }
   }
   
   ensureDirs() {
@@ -335,6 +356,15 @@ class WhatsAppBridge extends EventEmitter {
         return { allowed: true, reason: 'admin_or_self' };
       }
 
+      // Linked-device chats without a phone: allow when we already know the id
+      // (known_chats / recent open) — never invent a phone from @lid digits.
+      if (waChatId.includes('@lid') && this.privacyFilter.rosterNumbers.has(waChatId)) {
+        return { allowed: true, reason: 'known_lid' };
+      }
+      if (waChatId.includes('@lid') && this.recentOutboundChatIds.has(waChatId)) {
+        return { allowed: true, reason: 'recent_lid' };
+      }
+
       // Check wa_chat_id (format: 919876543210@c.us)
       if (waChatId && this.privacyFilter.rosterNumbers.has(waChatId)) {
         return { allowed: true, reason: 'roster_number' };
@@ -379,15 +409,15 @@ class WhatsAppBridge extends EventEmitter {
       return { allowed: true, reason: 'outbound' };
     }
 
-    // Admin / self-test incoming replies are always allowed
-    if (chatContext.is_self || (this.phoneNumber && waChatId.startsWith(this.normalizePhoneDigits(this.phoneNumber)))) {
-      return { allowed: true, reason: 'admin_or_self' };
-    }
-
     const body = (message.body || '').toLowerCase();
     const senderWaId = (message.sender_wa_id || '').toLowerCase();
     const waChatId = (chatContext.wa_chat_id || message.wa_chat_id || '').toLowerCase();
     const chatType = chatContext.chat_type || 'individual';
+
+    // Admin / self-test incoming replies are always allowed
+    if (chatContext.is_self || (this.phoneNumber && waChatId.startsWith(this.normalizePhoneDigits(this.phoneNumber)))) {
+      return { allowed: true, reason: 'admin_or_self' };
+    }
 
     // 1. Check if sender is in roster
     if (senderWaId && this.privacyFilter.rosterNumbers.has(senderWaId)) {
@@ -425,7 +455,11 @@ class WhatsAppBridge extends EventEmitter {
       return { allowed: false, reason: 'unauthorized_group' };
     }
 
-    // 5. Individual chat from unknown number - reject
+    // 5. Individual chat from prospective parent / admission enquiry
+    if (chatType === 'individual') {
+      return { allowed: true, reason: 'individual_admission_enquiry' };
+    }
+
     return { allowed: false, reason: 'unknown_sender' };
   }
 
@@ -461,6 +495,20 @@ class WhatsAppBridge extends EventEmitter {
         this.log('info', `Using Chrome executable: ${this.config.executablePath}`);
       } else {
         this.log('warn', 'No Chrome or Edge executable found; attempting Puppeteer default launch');
+      }
+
+      // Clean up stale IPC files from prior runs
+      const staleIpcFiles = [
+        'whatsapp_pair_request',
+        'whatsapp_pair_code.txt',
+        'whatsapp_qr_refresh_default',
+        `whatsapp_qr_refresh_${this.config.sessionName}`
+      ];
+      for (const f of staleIpcFiles) {
+        try {
+          const p = path.join(this.config.ipcDir, f);
+          if (fs.existsSync(p)) fs.unlinkSync(p);
+        } catch (e) {}
       }
 
       // Launch browser with persistent profile
@@ -511,7 +559,7 @@ class WhatsAppBridge extends EventEmitter {
       
       // Navigate to WhatsApp Web
       this.log('info', 'Navigating to WhatsApp Web...');
-      await this.page.goto('https://web.whatsapp.com', { waitUntil: 'networkidle2', timeout: 120000 });
+      await this.safeGoto(waSafety.resolveWhatsAppEntryUrl(), { waitUntil: 'networkidle2', timeout: 120000 });
       
       // Inject bridge scripts
       await this.injectBridgeScripts();
@@ -665,6 +713,117 @@ class WhatsAppBridge extends EventEmitter {
             } catch (e) {}
           });
           return messages;
+        },
+
+        // Visible chat-list rows. Index matches openUnreadRow's node list.
+        // Phone is set only when the row itself contains one. @lid is not a phone.
+        getChatListRows: () => {
+          const root = document.querySelector('#pane-side') || document.querySelector('[data-testid="chat-list"]');
+          if (!root) return [];
+          const phoneLike = (value) => {
+            const raw = String(value || '').trim();
+            if (!raw || /@lid/i.test(raw)) return '';
+            const jid = raw.match(/(\d{8,15})@(?:c\.us|s\.whatsapp\.net)/i);
+            if (jid) return jid[1];
+            if (/[a-z]/i.test(raw)) return '';
+            const digits = raw.replace(/\D/g, '');
+            if (digits.length >= 8 && digits.length <= 15) return digits;
+            return '';
+          };
+          const ROW_SEL = '[role="listitem"], [role="row"], [data-testid="cell-frame-container"]';
+          const TIME_RE = /^(\d{1,2}:\d{2}(\s*[ap]\.?\s?m\.?)?|yesterday|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})$/i;
+          const rows = root.querySelectorAll(ROW_SEL);
+          const out = [];
+          rows.forEach((el, index) => {
+            // A chat is often matched twice (listitem > row). Keep the outer one only;
+            // index still matches openUnreadRow's node list.
+            const outer = el.parentElement && el.parentElement.closest(ROW_SEL);
+            if (outer && root.contains(outer)) return;
+            const titleEl = el.querySelector('[data-testid="cell-frame-title"]')
+              || el.querySelector('span[title][dir="auto"]')
+              || el.querySelector('span[dir="auto"]');
+            const title = (titleEl?.getAttribute('title') || titleEl?.textContent || '').trim();
+            if (!title) return;
+            let time = '';
+            el.querySelectorAll('div, span').forEach(node => {
+              if (time || node.children.length) return;
+              const text = (node.textContent || '').trim();
+              if (text && text.length <= 12 && TIME_RE.test(text)) time = text;
+            });
+            let preview = '';
+            el.querySelectorAll('span[title], span[dir="auto"], span[dir="ltr"]').forEach(span => {
+              if (preview) return;
+              if (titleEl && (span === titleEl || titleEl.contains(span) || span.contains(titleEl))) return;
+              const text = (span.getAttribute('title') || span.textContent || '').trim();
+              if (!text || text === title || text === time || TIME_RE.test(text)) return;
+              preview = text;
+            });
+            const dataId = [
+              el.getAttribute('data-id'),
+              el.getAttribute('data-chat-id'),
+              el.querySelector('[data-id]')?.getAttribute('data-id') || '',
+              el.querySelector('[data-chat-id]')?.getAttribute('data-chat-id') || ''
+            ].join(' ');
+            const labels = [el.getAttribute('aria-label') || ''];
+            el.querySelectorAll('[aria-label]').forEach(node => {
+              labels.push(node.getAttribute('aria-label') || '');
+            });
+            const labelText = labels.join(' | ');
+            const badge = el.querySelector('[data-testid="icon-unread-count"], [data-testid="cell-frame-unread"], [data-icon*="unread" i], [data-testid*="unread" i]');
+            let unreadCount = 0;
+            const countMatch = labelText.match(/(\d+)\s+unread/i);
+            if (countMatch) unreadCount = parseInt(countMatch[1], 10) || 0;
+            else if (badge && /^\d{1,4}$/.test((badge.textContent || '').trim())) unreadCount = parseInt(badge.textContent.trim(), 10) || 0;
+            const unread = !!badge || /\bunread\b/i.test(labelText) || unreadCount > 0;
+            const icons = Array.from(el.querySelectorAll('[data-icon]')).map(n => n.getAttribute('data-icon') || '').join(' ');
+            // Last message was ours (tick icons or "You:"). Not an incoming preview.
+            const outgoing = /status-(check|dblcheck|time)|msg-(check|dblcheck|time)|(^|\s)(check|dblcheck)(\s|$)/i.test(icons)
+              || /^you:/i.test(preview)
+              || labels.some(label => /^(read|delivered|sent|pending)$/i.test(String(label).trim()));
+            const groupHint = /default-group|community/i.test(icons);
+            const rowText = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+            let lidId = '';
+            const lidMatch = String(dataId).match(/(\d+)@lid/i);
+            if (lidMatch) lidId = (lidMatch[1] + '@lid').toLowerCase();
+            out.push({
+              index,
+              title: title.slice(0, 80),
+              preview: preview.slice(0, 200),
+              time,
+              rowText,
+              phone: phoneLike(dataId) || phoneLike(title),
+              wa_chat_id: lidId || (phoneLike(dataId) ? phoneLike(dataId) + '@c.us' : ''),
+              unread,
+              unreadCount,
+              outgoing,
+              groupHint
+            });
+          });
+          return out;
+        },
+
+        // Structure-only probe of the first rows (no names, no message text). Used to
+        // check unread/preview selectors against the live build. Read-only.
+        probeChatList: () => {
+          const root = document.querySelector('#pane-side') || document.querySelector('[data-testid="chat-list"]');
+          if (!root) return { root: false };
+          const ROW_SEL = '[role="listitem"], [role="row"], [data-testid="cell-frame-container"]';
+          const all = root.querySelectorAll(ROW_SEL);
+          const keep = (label) => /unread|read|delivered|sent|pinned|muted|message/i.test(label)
+            ? String(label).replace(/\d+/g, 'N').slice(0, 40) : '';
+          const sample = [];
+          for (let i = 0; i < all.length && sample.length < 4; i++) {
+            const el = all[i];
+            sample.push({
+              role: el.getAttribute('role') || '',
+              nested: !!(el.parentElement && el.parentElement.closest(ROW_SEL)),
+              testids: Array.from(new Set(Array.from(el.querySelectorAll('[data-testid]')).map(n => n.getAttribute('data-testid')))).slice(0, 12),
+              icons: Array.from(new Set(Array.from(el.querySelectorAll('[data-icon]')).map(n => n.getAttribute('data-icon')))).slice(0, 12),
+              labels: Array.from(new Set(Array.from(el.querySelectorAll('[aria-label]')).map(n => keep(n.getAttribute('aria-label') || '')).filter(Boolean))).slice(0, 6),
+              titledSpans: el.querySelectorAll('span[title]').length
+            });
+          }
+          return { root: true, rows: all.length, scrollTop: Math.round(root.scrollTop || 0), sample };
         },
 
         // Unread chat-list rows. A row often has a name and no phone; index lets
@@ -876,11 +1035,30 @@ class WhatsAppBridge extends EventEmitter {
           const logged = !!(window.WABridge && window.WABridge.isLoggedIn && window.WABridge.isLoggedIn());
           const qr = (window.WABridge && window.WABridge.getQR) ? window.WABridge.getQR() : null;
           const body = document.body ? (document.body.innerText || '') : '';
-          const expired = /click to reload|select to reload|qr code expired|refresh qr code|tap.{0,20}menu/i.test(body);
+
+          // Look for a SHORT, visible reload label on an expired QR — not a huge
+          // container whose innerText happens to include those words.
+          const reloadBtn = Array.from(document.querySelectorAll('button, [role="button"], span'))
+            .find(el => {
+              if (!el || el.offsetParent === null) return false;
+              const txt = (el.innerText || el.getAttribute('aria-label') || '').trim();
+              if (!txt || txt.length > 64) return false;
+              return /^(?:click|select|tap)\s+to\s+reload(?:\s+qr(?:\s*code)?)?$|^reload\s*qr(?:\s*code)?$|^refresh\s*qr(?:\s*code)?$|^qr\s*code\s*expired$/i.test(txt);
+            });
+          const expired = !!reloadBtn;
+
+          // Check if on phone pairing or error screen offering "Log in with QR code"
+          const qrLoginBtn = Array.from(document.querySelectorAll('button, [role="button"], span, div'))
+            .find(el => {
+              const txt = (el.innerText || el.getAttribute('aria-label') || '').trim();
+              return /^(?:log\s*in|link)\s+with\s+qr(?:\s*code)?$/i.test(txt);
+            });
+          const hasLogInWithQR = !!qrLoginBtn;
+
           let linkError = '';
           const errMatch = body.match(/(couldn['’]t link[^\n]*|unable to link[^\n]*|something went wrong[^\n]*|try again later[^\n]*)/i);
           if (errMatch) linkError = errMatch[0].trim().slice(0, 160);
-          return { logged, qr, expired, linkError };
+          return { logged, qr, expired, hasLogInWithQR, linkError };
         });
 
         // 1) Logged in — done
@@ -892,19 +1070,46 @@ class WhatsAppBridge extends EventEmitter {
           return;
         }
 
-        // If QR expired, click to refresh it
-        if (state.expired) {
-          this.log('info', 'QR expired on screen — clicking to refresh...');
+        // Return to QR screen if stuck on phone pairing or error screen
+        if (!state.qr && state.hasLogInWithQR) {
+          this.log('info', 'Found "Log in with QR code" button — switching back to QR view...');
           await this.page.evaluate(() => {
             const btn = Array.from(document.querySelectorAll('button, [role="button"], span, div'))
-              .find(el => el.innerText && /reload/i.test(el.innerText));
+              .find(el => /^(?:log\s*in|link)\s+with\s+qr(?:\s*code)?$/i.test((el.innerText || el.getAttribute('aria-label') || '').trim()));
             if (btn) btn.click();
-            else {
-              const c = document.querySelector('canvas');
-              if (c) c.click();
-            }
           });
           await new Promise(r => setTimeout(r, 2000));
+          await this.captureQR();
+          return;
+        }
+
+        // If QR expired, click the real reload control — with a cooldown so we
+        // do not rotate the code while the user is mid-scan. Never click the
+        // canvas as a fallback (that used to force a useless refresh loop).
+        if (state.expired) {
+          const since = Date.now() - (this.lastQrRefreshClickAt || 0);
+          if (since < 25000) {
+            if (state.qr) await this.captureQR();
+            return;
+          }
+          this.lastQrRefreshClickAt = Date.now();
+          this.log('info', 'QR expired on screen — clicking to refresh...');
+          const clicked = await this.page.evaluate(() => {
+            const btn = Array.from(document.querySelectorAll('button, [role="button"], span'))
+              .find(el => {
+                if (!el || el.offsetParent === null) return false;
+                const txt = (el.innerText || el.getAttribute('aria-label') || '').trim();
+                if (!txt || txt.length > 64) return false;
+                return /^(?:click|select|tap)\s+to\s+reload(?:\s+qr(?:\s*code)?)?$|^reload\s*qr(?:\s*code)?$|^refresh\s*qr(?:\s*code)?$|^qr\s*code\s*expired$/i.test(txt);
+              });
+            if (btn) { (btn.closest('button,[role="button"]') || btn).click(); return true; }
+            return false;
+          });
+          if (!clicked) {
+            this.log('warn', 'QR looked expired but no reload control was found — leaving canvas alone');
+          }
+          await new Promise(r => setTimeout(r, 2000));
+          await this.captureQR();
           return;
         }
 
@@ -912,13 +1117,22 @@ class WhatsAppBridge extends EventEmitter {
         if (state.linkError && state.linkError !== this.lastLinkError) {
           this.lastLinkError = state.linkError;
           this.log('warn', 'WhatsApp says: ' + state.linkError);
+          // Dismiss "something went wrong" dialog if present
+          if (/something went wrong/i.test(state.linkError)) {
+            await this.page.evaluate(() => {
+              const okBtn = Array.from(document.querySelectorAll('button, [role="button"]'))
+                .find(el => /^(?:ok|close|dismiss)$/i.test((el.innerText || '').trim()));
+              if (okBtn) okBtn.click();
+            });
+            await new Promise(r => setTimeout(r, 1000));
+          }
         }
 
         // 2) A QR is on screen. Keep it fresh, but NEVER reload while one is
         //    visible — reloading aborts an in-progress scan handshake.
         if (state.qr) {
           this.linkingSince = null;
-          if (state.qr !== this.lastQRBase64 || Date.now() - (this.lastQrCaptureAt || 0) > 30000) {
+          if (state.qr !== this.lastQRBase64 || Date.now() - (this.lastQrCaptureAt || 0) > 25000) {
             this.lastQRBase64 = state.qr;
             await this.captureQR();
           }
@@ -962,6 +1176,10 @@ class WhatsAppBridge extends EventEmitter {
     this.isConnected = true;
     this.reconnectAttempts = 0;
     this.connectedAt = this.connectedAt || new Date().toISOString();
+    this.didInitialListPass = false;
+    this.chatListPrimed = false;
+    this.listBackfill = [];
+    this.rowOpenFail = new Map();
     
     // Get phone number and device info
     const info = await this.page.evaluate(() => {
@@ -1027,7 +1245,8 @@ class WhatsAppBridge extends EventEmitter {
     // Remember recent sends so a reply in that chat is scraped even with no unread badge.
     await this.seedOutboundWatch();
 
-    // Immediately flush anything that was queued while we were offline
+    // Send-on-press: drain only fresh user-pressed rows. Stale ones are
+    // marked failed by the queue API (user presses Retry). Do not flush backlog.
     this.processOutboundQueue().catch(() => {});
     
     // Remember that this profile is linked, so future launches can run headless
@@ -1151,12 +1370,27 @@ class WhatsAppBridge extends EventEmitter {
     
     this.log('info', `Starting message polling (interval: ${this.config.pollInterval}ms)`);
     
+    this._selfPollTick = 0;
+    this.pollTickRunning = false;
     this.pollInterval = setInterval(async () => {
+      // One tick at a time. Overlapping ticks could click/type into the page concurrently.
+      if (this.pollTickRunning) return;
+      this.pollTickRunning = true;
       try {
+        // Drain outbound first so hub sends are not stuck behind chat-list scraping.
+        await this.processOutboundQueue();
         await this.pollMessages();
+        this._selfPollTick = (this._selfPollTick || 0) + 1;
+        // Every ~5th cycle (~15s at 3s poll) re-open Message yourself so phone-typed
+        // notes are ingested even when WhatsApp shows no unread badge.
+        if (this._selfPollTick % 5 === 0) {
+          await this.pollSelfChat();
+        }
         await this.checkCommandFlags();
       } catch (e) {
         this.log('error', 'Polling error', e.message);
+      } finally {
+        this.pollTickRunning = false;
       }
     }, this.config.pollInterval);
   }
@@ -1257,7 +1491,9 @@ class WhatsAppBridge extends EventEmitter {
     return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}:${part('second')}`;
   }
 
-  // @c.us / @s.whatsapp.net become 91xxxxxxxxxx@c.us. @lid is not a phone.
+  // @c.us / @s.whatsapp.net become 91xxxxxxxxxx@c.us.
+  // @lid is not a phone, but it IS a stable chat id — keep it so we can show
+  // and reply to chats that have no phone number yet.
   jidToWaChatId(jid) {
     const raw = String(jid || '').trim().toLowerCase();
     if (!raw) return '';
@@ -1266,8 +1502,12 @@ class WhatsAppBridge extends EventEmitter {
       return group ? group[1] : raw;
     }
     if (raw.includes('broadcast') || raw.includes('newsletter')) return raw;
-    if (raw.endsWith('@lid')) return '';
-    const digits = this.normalizePhoneDigits(raw.split('@')[0]);
+    if (raw.includes('@lid')) {
+      // Message data-ids look like true_<lid>@lid_<msgid> — keep only digits@lid
+      const lid = raw.match(/(\d+)@lid/);
+      return lid ? (lid[1] + '@lid') : '';
+    }
+    const digits = waListRules.phoneDigitsFromJid(raw);
     return digits ? digits + '@c.us' : '';
   }
 
@@ -1282,14 +1522,7 @@ class WhatsAppBridge extends EventEmitter {
 
   // Match waValidateWhatsAppPhone: 10-digit Indian mobiles are stored as 91 + digits.
   normalizePhoneDigits(digits) {
-    let d = String(digits || '').replace(/\D/g, '');
-    if (d.startsWith('00')) d = d.slice(2);
-    d = d.replace(/^0+/, '');
-    if (d.length === 10 && /^[6-9]/.test(d)) d = '91' + d;
-    if (d.length < 8 || d.length > 15 || d[0] === '0') return '';
-    if (/^(\d)\1+$/.test(d)) return '';
-    if (d.startsWith('91') && d.length === 12 && !/^91[6-9]\d{9}$/.test(d)) return '';
-    return d;
+    return waListRules.normalizePhoneDigits(digits);
   }
 
   saneTimestamp(value) {
@@ -1355,6 +1588,263 @@ class WhatsAppBridge extends EventEmitter {
     } catch (e) {}
   }
 
+  noteParentIngest() {
+    this.lastIngestAt = new Date().toISOString();
+    this.lastSkipNote = '';
+  }
+
+  noteSkip(note) {
+    this.lastSkipNote = String(note || '').slice(0, 240);
+  }
+
+  // The open thread often has only a @lid. The contact drawer is where WhatsApp
+  // still shows the real number. Never treat the linked school number as the parent.
+  async readPhoneFromContactDrawer() {
+    if (!this.page) return '';
+    const own = this.normalizePhoneDigits(this.phoneNumber || '');
+    try {
+      const opened = await this.page.evaluate(() => {
+        const header = document.querySelector('#main header');
+        if (!header) return false;
+        const target = header.querySelector(
+          '[data-testid="conversation-info-header-chat-title"], [data-testid="conversation-info-header"], [role="button"]'
+        ) || header;
+        target.click();
+        return true;
+      });
+      if (!opened) return '';
+      await new Promise(r => setTimeout(r, 800));
+      const rawNumbers = await this.page.evaluate(() => {
+        const drawer = document.querySelector(
+          '[data-testid="chat-info-drawer"], [data-testid="contact-info-drawer"], [data-testid="drawer-right"], section[data-testid="drawer-right"]'
+        );
+        if (!drawer) return [];
+        return (drawer.innerText || '').match(/\+?\d[\d\s\-()]{8,16}\d/g) || [];
+      });
+      await this.page.keyboard.press('Escape').catch(() => {});
+      await new Promise(r => setTimeout(r, 200));
+      for (const raw of rawNumbers) {
+        const digits = this.normalizePhoneDigits(String(raw).replace(/\D/g, ''));
+        if (digits && digits !== own) return digits;
+      }
+    } catch (e) {
+      this.log('debug', 'Contact drawer phone read failed', e.message);
+    }
+    return '';
+  }
+
+  // Mask long digit runs (phone numbers) before they reach the log.
+  maskForLog(value) {
+    return String(value || '').replace(/\d{6,}/g, (m) => '***' + m.slice(-4));
+  }
+
+  /**
+   * Incoming capture from the sidebar (2026-11-06). Opens chats ONLY by clicking the
+   * row (or the guarded name search). Never types a phone number, never presses Enter,
+   * never sends. A chat that cannot be opened keeps its list preview instead.
+   */
+  async ingestVisibleChats(limit = 3) {
+    if (this.sending || !this.page || !this.hasBridgeSecret()) return;
+    // New activity appears at the TOP of the list. Clicking a lower row scrolls the
+    // pane and WhatsApp only renders rows near the viewport, so go back to the top.
+    try {
+      await this.page.evaluate(() => {
+        const pane = document.querySelector('#pane-side');
+        if (pane && pane.scrollTop > 0) pane.scrollTop = 0;
+      });
+    } catch (e) {}
+
+    let rows = [];
+    try {
+      rows = await this.page.evaluate(() => {
+        if (!window.WABridge || !window.WABridge.getChatListRows) return [];
+        return window.WABridge.getChatListRows();
+      });
+    } catch (e) {
+      this.log('debug', 'Chat list scrape failed', e.message);
+      return;
+    }
+
+    const chats = (rows || []).filter(row => row && row.title && !waListRules.isSystemChatTitle(row.title));
+    const withPhone = chats.filter(row => this.normalizePhoneDigits(row.phone || '')).length;
+    const unreadCount = chats.filter(row => row.unread).length;
+    const summary = `Chat list: ${chats.length} rows, ${withPhone} with a phone, ${unreadCount} unread`;
+    if (summary !== this.lastChatListSummary) {
+      this.lastChatListSummary = summary;
+      this.log('info', summary);
+    } else {
+      this.noticeOnce('chat-list-summary', 'info', summary, 60000);
+    }
+
+    if (!this.didInitialListPass && this.page) {
+      try {
+        const probe = await this.page.evaluate(() => (window.WABridge && window.WABridge.probeChatList) ? window.WABridge.probeChatList() : null);
+        if (probe) this.log('info', 'Chat-list probe (structure only): ' + this.maskForLog(JSON.stringify(probe)).slice(0, 1500));
+      } catch (e) {}
+    }
+
+    try {
+      await this.ingestOpenChat();
+    } catch (e) {
+      this.log('debug', 'Open-chat ingest failed', e.message);
+    }
+
+    if (!this.chatSigByTitle) this.chatSigByTitle = new Map();
+    if (!this.rowOpenFail) this.rowOpenFail = new Map();
+    if (!this.didInitialListPass) {
+      // After login, walk the top of the list a few rows per cycle so messages that
+      // arrived while the bridge was offline (already read on the phone) still land.
+      const keys = [];
+      for (const row of chats) {
+        const key = waListRules.titleKey(row.title);
+        if (!keys.includes(key)) keys.push(key);
+        if (keys.length >= 12) break;
+      }
+      this.listBackfill = keys;
+      this.didInitialListPass = true;
+    }
+
+    // Opening a chat clears its badge, which changes the row. That is our own doing,
+    // not a new message: absorb it for 20s. The open chat itself is re-read every cycle.
+    if (!this.recentlyOpened) this.recentlyOpened = new Map();
+    for (const row of chats) {
+      const key = waListRules.titleKey(row.title);
+      const at = this.recentlyOpened.get(key) || 0;
+      if (!at || Date.now() - at > 20000 || row.unread) continue;
+      const sig = waListRules.rowSignature(row);
+      if (sig !== null) this.chatSigByTitle.set(key, sig);
+    }
+
+    const failUntil = new Map();
+    for (const [key, info] of this.rowOpenFail) failUntil.set(key, info.until || 0);
+    const plan = waListRules.planListActions(chats, {
+      prevSigs: this.chatSigByTitle,
+      primed: this.chatListPrimed,
+      backfill: this.listBackfill || [],
+      failUntil
+    }, { now: Date.now(), limit });
+
+    // Remember signatures for rows we are not acting on; acted-on rows are only
+    // remembered once their content is stored (so a failure is retried later).
+    const pendingKeys = new Set([...plan.toOpen, ...plan.deferred].map(item => item.key));
+    for (const [key, sig] of plan.sigs) {
+      if (sig === null) continue;
+      if (!pendingKeys.has(key)) this.chatSigByTitle.set(key, sig);
+    }
+    this.chatListPrimed = true;
+
+    for (const item of plan.deferred) {
+      if (!item.backoff || item.reason === 'backfill') continue;
+      // Still capture what the list shows while the open is backing off.
+      const stored = await this.ingestRowPreview(item.row, item.reason);
+      if (stored) this.chatSigByTitle.set(item.key, item.sig);
+    }
+
+    for (const item of plan.toOpen) {
+      if (this.sending) break;
+      const { row, reason, key } = item;
+      if (reason === 'backfill' && Array.isArray(this.listBackfill)) {
+        this.listBackfill = this.listBackfill.filter(k => k !== key);
+      }
+      const phone = this.normalizePhoneDigits(row.phone || '') || this.phoneDigitsFromLabel(row.title);
+      let openedOk = false;
+      let how = '';
+      if (Number.isInteger(row.index)) {
+        openedOk = await this.openUnreadRow(row.index, row.title);
+        if (openedOk) how = 'row click';
+      }
+      if (!openedOk && !this.sending) {
+        openedOk = await this.openChatByTitle(row.title);
+        if (openedOk) how = 'name search';
+      }
+      if (!openedOk && phone && !this.sending) {
+        openedOk = await this.openChat(phone + '@c.us');
+        if (openedOk) how = 'deep link';
+      }
+      if (this.sending) break;
+      const label = this.maskForLog(row.title);
+      if (!openedOk) {
+        const prev = this.rowOpenFail.get(key) || { count: 0 };
+        const count = prev.count + 1;
+        this.rowOpenFail.set(key, { count, until: Date.now() + waListRules.nextBackoffMs(count) });
+        if (reason === 'backfill') continue;
+        const stored = await this.ingestRowPreview(row, reason);
+        if (stored) this.chatSigByTitle.set(key, item.sig);
+        this.noticeOnce('open-fail:' + key, 'warn',
+          `Could not open chat "${label}" (${reason}) — ${stored ? 'stored the list preview instead' : 'list preview not stored (no number for this chat)'}`, 60000);
+        continue;
+      }
+      this.rowOpenFail.delete(key);
+      this.recentlyOpened.set(key, Date.now());
+      let result = null;
+      try {
+        result = await this.ingestOpenChat(phone ? phone + '@c.us' : '');
+      } catch (e) {
+        this.log('debug', 'Row ingest failed', e.message);
+      }
+      if (item.sig !== null && item.sig !== undefined) this.chatSigByTitle.set(key, item.sig);
+      if (reason !== 'backfill') {
+        const n = result && Number.isFinite(result.incoming) ? result.incoming : 0;
+        const why = result && result.reason ? `, ${result.reason}` : '';
+        this.noticeOnce('open-ok:' + key + ':' + reason, 'info',
+          `Opened "${label}" (${reason}, ${how}): ${n} new incoming${why}`, 20000);
+      }
+    }
+  }
+
+  // Store the last incoming line the chat list shows, for a chat we could not open.
+  // Only when the row maps to a real chat id (phone, @lid, or a roster name).
+  async ingestRowPreview(row, reason = '') {
+    if (!row || !this.page || !this.hasBridgeSecret()) return 0;
+    const preview = String(row.preview || '').trim();
+    if (!preview || row.outgoing || waListRules.isTransientPreview(preview)) return 0;
+    const key = waListRules.titleKey(row.title);
+    let waChatId = '';
+    const phone = this.normalizePhoneDigits(row.phone || '') || this.phoneDigitsFromLabel(row.title);
+    if (phone) waChatId = phone + '@c.us';
+    else if (row.wa_chat_id && /^\d+@lid$/i.test(row.wa_chat_id)) waChatId = String(row.wa_chat_id).toLowerCase();
+    else if (this.privacyFilter.nameToJidMap && this.privacyFilter.nameToJidMap.has(key)) waChatId = this.privacyFilter.nameToJidMap.get(key);
+    if (!waChatId) return 0;
+    const own = this.normalizePhoneDigits(this.phoneNumber || '');
+    if (own && waChatId.startsWith(own + '@')) return 0;
+    if (row.groupHint && !waChatId.includes('@g.us')) return 0;
+    const id = waListRules.previewMsgId(waChatId, row);
+    if (this.ingestedMsgIds.has(id)) return 0;
+    const chatType = waChatId.includes('@g.us') ? 'group' : 'individual';
+    const msg = {
+      wa_msg_id: id,
+      wa_chat_id: waChatId,
+      from_me: false,
+      msg_type: 'text',
+      body: preview,
+      media_url: '',
+      timestamp: Math.floor(Date.now() / 1000),
+      timestamp_parsed: false,
+      quoted_wa_msg_id: '',
+      status: 'delivered',
+      chat_name: row.title || '',
+      chat_avatar: '',
+      sender_wa_id: waChatId,
+      sender_name: row.title || '',
+      sender_avatar: '',
+      chat_type: chatType
+    };
+    const allowed = this.isMessageAllowed(msg, { wa_chat_id: waChatId, chat_name: row.title || '', chat_type: chatType });
+    if (!allowed.allowed) return 0;
+    msg.metadata = { preview_only: true, source: 'chat_list', reason, list_time: row.time || '', filter_reason: allowed.reason };
+    let result = null;
+    try {
+      result = await this.apiPost('api_whatsapp_ingest.php', [msg]);
+    } catch (e) {
+      return 0;
+    }
+    if (!result || result.success === false) return 0;
+    this.rememberIngested(id);
+    this.noteParentIngest();
+    this.log('info', `Stored list preview for ${this.maskForLog(waChatId)} (${reason}; chat not opened)`);
+    return 1;
+  }
+
   async ingestOpenChat(knownWaChatId = '') {
     if (!this.page || !this.hasBridgeSecret()) return;
     await this.scrollOpenChatToEnd();
@@ -1390,17 +1880,55 @@ class WhatsAppBridge extends EventEmitter {
       }
     }
 
-    const waChatId = String(
+    let waChatId = String(
       this.jidToWaChatId(knownWaChatId) || this.resolveWaChatId(chatInfo, messageJid) || ''
     ).trim().toLowerCase();
+    const incomingOnScreen = messages.filter(msg => msg && msg.wa_msg_id && !msg.from_me).length;
+    if (!waChatId && incomingOnScreen) {
+      const titleKey = (chatInfo && chatInfo.name) || messageJid || 'open';
+      const drawerKey = 'drawer:' + titleKey;
+      const lastDrawer = this.ingestNotices.get(drawerKey) || 0;
+      if (Date.now() - lastDrawer > 60000) {
+        this.ingestNotices.set(drawerKey, Date.now());
+        const fromDrawer = await this.readPhoneFromContactDrawer();
+        if (fromDrawer) waChatId = fromDrawer + '@c.us';
+      }
+    }
+    // Last resort for Linked-ID chats: scrape any @lid from the open conversation DOM
+    // so we can still show + reply by chat id when WhatsApp hides the phone.
+    if (!waChatId && this.page) {
+      try {
+        const scrapedLid = await this.page.evaluate(() => {
+          const root = document.querySelector('#main') || document.body;
+          if (!root) return '';
+          const blob = [
+            root.getAttribute('data-id') || '',
+            ...Array.from(root.querySelectorAll('[data-id]')).slice(0, 80).map(n => n.getAttribute('data-id') || '')
+          ].join(' ');
+          const m = blob.match(/(\d+)@lid/i);
+          return m ? (m[1] + '@lid') : '';
+        });
+        if (scrapedLid) waChatId = String(scrapedLid).toLowerCase();
+      } catch (e) {}
+    }
+    // Stable synthetic id from title only when we still have nothing — keeps hub replyable.
+    if (!waChatId && incomingOnScreen && chatInfo && chatInfo.name) {
+      const slug = String(chatInfo.name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48);
+      if (slug) {
+        waChatId = 'title:' + slug + '@lid';
+        this.log('info', `Using title-based @lid for chat without phone: ${waChatId}`);
+      }
+    }
     if (!waChatId) {
-      const incomingOnScreen = messages.filter(msg => msg && msg.wa_msg_id && !msg.from_me).length;
       if (incomingOnScreen) {
-        this.noticeOnce('no-jid', 'info', `Open chat has ${incomingOnScreen} incoming message(s) but no WhatsApp number — not stored`);
+        const title = (chatInfo && chatInfo.name) || 'this chat';
+        const note = `Chat "${title}" has incoming text but no WhatsApp number — not stored`;
+        this.noteSkip(note);
+        this.noticeOnce('no-jid:' + title, 'info', note);
       } else {
         this.log('debug', 'Skipping ingest: empty wa_chat_id');
       }
-      return;
+      return { waChatId: '', incoming: 0, reason: incomingOnScreen ? 'no WhatsApp number for this chat' : 'no messages read' };
     }
 
     const fresh = [];
@@ -1434,7 +1962,7 @@ class WhatsAppBridge extends EventEmitter {
       }
       fresh.push(msg);
     }
-    if (!fresh.length) return;
+    if (!fresh.length) return { waChatId, incoming: 0, reason: messages.length ? 'nothing new on screen' : 'no messages read' };
 
     const allowedMessages = [];
     let filteredMessages = 0;
@@ -1473,7 +2001,7 @@ class WhatsAppBridge extends EventEmitter {
       if (filteredMessages) {
         this.noticeOnce('filtered:' + waChatId, 'info', `Dropped ${filteredMessages} incoming message(s) for ${waChatId} (not on the school roster)`);
       }
-      return;
+      return { waChatId, incoming: 0, reason: 'dropped by privacy filter' };
     }
 
     const result = await this.apiPost('api_whatsapp_ingest.php', allowedMessages);
@@ -1482,8 +2010,12 @@ class WhatsAppBridge extends EventEmitter {
     const incomingCount = allowedMessages.filter(msg => !msg.from_me).length;
     const phoneSentCount = allowedMessages.length - incomingCount;
     const inserted = result && result.inserted != null ? ` (stored ${result.inserted})` : '';
-    if (incomingCount) this.log('info', `Ingested ${incomingCount} incoming message(s) for ${waChatId}${inserted}`);
+    if (incomingCount) {
+      this.noteParentIngest();
+      this.log('info', `Ingested ${incomingCount} incoming message(s) for ${waChatId}${inserted}`);
+    }
     if (phoneSentCount) this.log('info', `Stored ${phoneSentCount} message(s) typed on the phone for ${waChatId}${inserted}`);
+    return { waChatId, incoming: incomingCount, stored: result && result.inserted != null ? result.inserted : null };
   }
 
   async ingestVisibleUnread(limit = 5) {
@@ -1510,10 +2042,8 @@ class WhatsAppBridge extends EventEmitter {
       seen.add(String((row.phone || row.title) || '') + ':' + row.index);
 
       const phone = this.phoneDigitsFromLabel(row.phone || row.title);
-      const title = String(row.title || '').trim().toLowerCase();
-      const knownByName = !phone && title && this.privacyFilter.rosterNames && this.privacyFilter.rosterNames.has(title);
-      if (!phone && !knownByName) {
-        if (title) this.noticeOnce('unread-skip:' + title, 'info', `Left unread chat "${String(row.title).slice(0, 40)}" closed — it is not a school contact`);
+      const title = String(row.title || '').trim();
+      if (waListRules.isSystemChatTitle(title)) {
         continue;
       }
 
@@ -1545,20 +2075,111 @@ class WhatsAppBridge extends EventEmitter {
     }
   }
 
-  async openUnreadRow(index) {
+  async headerTitle() {
+    if (!this.page) return '';
+    try {
+      return await this.page.evaluate(() => {
+        const header = document.querySelector('#main header');
+        if (!header) return '';
+        const nameEl = header.querySelector('[data-testid="conversation-info-header-chat-title"], span[title], span[dir="auto"]');
+        return (nameEl?.getAttribute('title') || nameEl?.textContent || '').trim();
+      });
+    } catch (e) {
+      return '';
+    }
+  }
+
+  async waitForHeaderTitle(expectedTitle, timeout = 6000) {
+    const wanted = String(expectedTitle || '').trim().toLowerCase();
+    if (!wanted) return false;
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      const title = (await this.headerTitle()).toLowerCase();
+      if (title && (title === wanted || title.includes(wanted) || wanted.includes(title))) return true;
+      await new Promise(r => setTimeout(r, 300));
+    }
+    return false;
+  }
+
+  async openUnreadRow(index, expectedTitle = '') {
     if (!this.page) return false;
-    const clicked = await this.page.evaluate((idx) => {
+    const point = await this.page.evaluate((idx) => {
       const root = document.querySelector('#pane-side') || document.querySelector('[data-testid="chat-list"]');
-      if (!root) return false;
+      if (!root) return null;
       const rows = root.querySelectorAll('[role="listitem"], [role="row"], [data-testid="cell-frame-container"]');
       const el = rows[idx];
-      if (!el) return false;
+      if (!el) return null;
+      el.scrollIntoView({ block: 'center' });
       const target = el.querySelector('[role="gridcell"]') || el;
-      target.click();
-      return true;
+      const rect = target.getBoundingClientRect();
+      if (rect.width < 8 || rect.height < 8) return null;
+      return { x: rect.x + rect.width / 2, y: rect.y + Math.min(24, rect.height / 2) };
     }, index);
-    if (!clicked) return false;
-    return await this.waitForComposer(12000);
+    if (!point) return false;
+    await this.page.mouse.click(point.x, point.y);
+    if (expectedTitle) {
+      const named = await this.waitForHeaderTitle(expectedTitle, 5000);
+      if (!named) return false;
+    }
+    return await this.waitForComposer(8000);
+  }
+
+  async openChatByTitle(title) {
+    const wanted = String(title || '').trim();
+    if (!this.page || wanted.length < 2 || waListRules.isSystemChatTitle(wanted)) return false;
+    try {
+      const focused = await this.page.evaluate(() => {
+        const box = document.querySelector('[aria-label="Search input textbox"], [aria-label="Search"], [data-testid="chat-list-search"], div[contenteditable="true"][data-tab="3"]');
+        if (!box) return false;
+        // Never treat a message composer as the search box.
+        if (box.closest('footer') || box.closest('#main')) return false;
+        box.focus();
+        box.click();
+        const active = document.activeElement;
+        if (!active) return false;
+        if (active.closest('footer') || active.closest('#main')) return false;
+        return active === box || box.contains(active);
+      });
+      if (!focused) return false;
+      await this.page.keyboard.down(process.platform === 'darwin' ? 'Meta' : 'Control');
+      await this.page.keyboard.press('KeyA');
+      await this.page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control');
+      await this.page.keyboard.press('Backspace');
+      await this.page.keyboard.type(wanted.slice(0, 40), { delay: 15 });
+      await new Promise(r => setTimeout(r, 900));
+      const point = await this.page.evaluate((name) => {
+        const root = document.querySelector('#pane-side') || document.body;
+        const needle = String(name || '').trim().toLowerCase();
+        const rows = root.querySelectorAll('[role="listitem"], [role="row"], [data-testid="cell-frame-container"]');
+        for (const row of rows) {
+          const text = (row.innerText || '').trim().toLowerCase();
+          if (!text || !text.includes(needle)) continue;
+          const cell = row.querySelector('[role="gridcell"]') || row;
+          const rect = cell.getBoundingClientRect();
+          if (rect.width < 8 || rect.height < 8) continue;
+          return { x: rect.x + rect.width / 2, y: rect.y + Math.min(24, rect.height / 2) };
+        }
+        return null;
+      }, wanted);
+      if (!point) {
+        await this.page.keyboard.press('Escape').catch(() => {});
+        return false;
+      }
+      await this.page.mouse.click(point.x, point.y);
+      const named = await this.waitForHeaderTitle(wanted, 8000);
+      if (!named) {
+        await this.page.keyboard.press('Escape').catch(() => {});
+        return false;
+      }
+      await this.page.evaluate(() => {
+        const clear = document.querySelector('[aria-label="Clear search"], [aria-label="Cancel search"], [data-testid="x-alt"]');
+        if (clear) clear.click();
+      }).catch(() => {});
+      return await this.waitForComposer(8000);
+    } catch (e) {
+      this.log('debug', 'Title search failed', e.message);
+      return false;
+    }
   }
 
   async revisitRecentOutbound() {
@@ -1612,8 +2233,23 @@ class WhatsAppBridge extends EventEmitter {
     this.startSessionWatcher();
   }
 
+  async pollSelfChat() {
+    if (this.sending || !this.page || !this.phoneNumber) return;
+    const selfJid = this.normalizePhoneDigits(String(this.phoneNumber)) + '@c.us';
+    try {
+      // Prefer title open — Message yourself is not always deep-linkable the same way
+      // Title open only. The old fallback openChat(selfJid) searched by the LINKED NUMBER
+      // and could type it into whichever chat was open (removed 2026-11-06).
+      const opened = await this.openChatByTitle('Message yourself');
+      if (!opened) return;
+      await this.ingestOpenChat(selfJid);
+    } catch (e) {
+      this.log('debug', 'Self-chat poll failed', e.message);
+    }
+  }
+
   async pollMessages() {
-    if (!this.isConnected || !this.page || this.pollingNow) return;
+    if (this.loggingOut || !this.isConnected || !this.page || this.pollingNow) return;
     this.pollingNow = true;
     try {
       const state = await this.pageSessionState();
@@ -1637,14 +2273,9 @@ class WhatsAppBridge extends EventEmitter {
       // Do not navigate away while a send owns the open chat.
       if (!this.sending) {
         try {
-          await this.ingestOpenChat();
+          await this.ingestVisibleChats(3);
         } catch (e) {
-          this.log('debug', 'Open-chat ingest failed', e.message);
-        }
-        try {
-          await this.ingestVisibleUnread(5);
-        } catch (e) {
-          this.log('debug', 'Unread ingest failed', e.message);
+          this.log('debug', 'Chat-list ingest failed', e.message);
         }
         try {
           await this.revisitRecentOutbound();
@@ -1653,13 +2284,35 @@ class WhatsAppBridge extends EventEmitter {
         }
       }
 
-      await this.apiPost('api_whatsapp_session.php?action=poll', { last_poll_at: new Date().toISOString() });
+      await this.apiPost('api_whatsapp_session.php?action=poll', {
+        last_poll_at: new Date().toISOString(),
+        last_ingest_at: this.lastIngestAt,
+        last_skip_note: this.lastSkipNote || ''
+      });
     } finally {
       this.pollingNow = false;
     }
   }
   
   async checkCommandFlags() {
+    if (this.loggingOut) return;
+
+    const logoutFlags = [
+      path.join(this.config.ipcDir, `whatsapp_logout_${this.config.sessionName}`),
+      path.join(this.config.ipcDir, 'whatsapp_logout_default')
+    ];
+    let logoutTriggered = false;
+    for (const f of logoutFlags) {
+      if (fs.existsSync(f)) {
+        try { fs.unlinkSync(f); } catch (e) {}
+        logoutTriggered = true;
+      }
+    }
+    if (logoutTriggered) {
+      await this.logout();
+      return;
+    }
+
     const qrFlags = [
       path.join(this.config.ipcDir, `whatsapp_qr_refresh_${this.config.sessionName}`),
       path.join(this.config.ipcDir, 'whatsapp_qr_refresh_default')
@@ -1674,21 +2327,53 @@ class WhatsAppBridge extends EventEmitter {
     if (refreshTriggered) {
       await this.refreshQR();
     }
-    
-    // Check for logout request
-    const logoutFlags = [
-      path.join(this.config.ipcDir, `whatsapp_logout_${this.config.sessionName}`),
-      path.join(this.config.ipcDir, 'whatsapp_logout_default')
+
+    const dumpFlags = [
+      path.join(this.config.ipcDir, `whatsapp_dump_ids_${this.config.sessionName}`),
+      path.join(this.config.ipcDir, 'whatsapp_dump_ids_default')
     ];
-    let logoutTriggered = false;
-    for (const f of logoutFlags) {
-      if (fs.existsSync(f)) {
-        try { fs.unlinkSync(f); } catch (e) {}
-        logoutTriggered = true;
+    for (const f of dumpFlags) {
+      if (!fs.existsSync(f)) continue;
+      try { fs.unlinkSync(f); } catch (e) {}
+      try {
+        if (!this.page) continue;
+        const dump = await this.page.evaluate(() => {
+          const out = [];
+          document.querySelectorAll('#main [data-id]').forEach((el) => {
+            const id = el.getAttribute('data-id') || '';
+            const text = (el.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+            out.push({ id, text });
+          });
+          return out.slice(-20);
+        });
+        const dest = path.join(this.config.ipcDir, 'hcc-bridge-msg-ids.json');
+        fs.writeFileSync(dest, JSON.stringify(dump, null, 2));
+        this.log('info', 'Dumped ' + dump.length + ' message ids to ' + dest);
+      } catch (e) {
+        this.log('warn', 'dump ids failed', e.message);
       }
     }
-    if (logoutTriggered) {
-      await this.logout();
+
+    const shotFlags = [
+      path.join(this.config.ipcDir, `whatsapp_screenshot_${this.config.sessionName}`),
+      path.join(this.config.ipcDir, 'whatsapp_screenshot_default')
+    ];
+    for (const f of shotFlags) {
+      if (!fs.existsSync(f)) continue;
+      let dest = path.join(this.config.ipcDir, 'hcc-bridge-page.png');
+      try {
+        const raw = fs.readFileSync(f, 'utf8').trim();
+        if (raw) dest = raw;
+      } catch (e) {}
+      try { fs.unlinkSync(f); } catch (e) {}
+      try {
+        if (this.page) {
+          await this.page.screenshot({ path: dest, fullPage: false });
+          this.log('info', 'Saved bridge page screenshot to ' + dest);
+        }
+      } catch (e) {
+        this.log('warn', 'Bridge screenshot failed', e.message);
+      }
     }
   }
   
@@ -1707,14 +2392,41 @@ class WhatsAppBridge extends EventEmitter {
   }
 
   async refreshQR() {
+    if (this.loggingOut || this.isConnected) return;
+    const since = Date.now() - (this.lastQrRefreshClickAt || 0);
+    if (since < 15000) {
+      this.log('debug', 'Ignoring QR refresh request (cooldown)');
+      return;
+    }
+    this.lastQrRefreshClickAt = Date.now();
     this.log('info', 'Refreshing QR code...');
     try {
-      // Click "Link a device" or refresh QR
-      await this.page.evaluate(() => {
-        const btn = document.querySelector('[data-testid="link-device-btn"], [aria-label="Link a device"]');
-        if (btn) btn.click();
+      if (!this.page) return;
+      const state = await this.pageSessionState();
+      if (state.logged) return;
+      const clicked = await this.page.evaluate(() => {
+        const qrLoginBtn = Array.from(document.querySelectorAll('button, [role="button"], span, div'))
+          .find(el => /^(?:log\s*in|link)\s+with\s+qr(?:\s*code)?$/i.test((el.innerText || el.getAttribute('aria-label') || '').trim()));
+        if (qrLoginBtn) { qrLoginBtn.click(); return 'qr_login'; }
+
+        const reloadBtn = Array.from(document.querySelectorAll('button, [role="button"], span, div'))
+          .find(el => /(?:click|select|tap)\s+to\s+reload|reload\s*qr|refresh\s*qr|qr\s*code\s*expired/i.test((el.innerText || el.getAttribute('aria-label') || '').trim()));
+        if (reloadBtn) { reloadBtn.click(); return 'reload'; }
+
+        // Do not click a random canvas — that rotates a still-valid QR.
+        return 'none';
+
+        return false;
       });
-      await new Promise(r => setTimeout(r, 2000));
+
+      if (!clicked || clicked === 'none') {
+        // Prefer capturing an on-screen QR over a full page reload (reload aborts scans).
+        this.log('info', 'No QR reload control found — capturing current QR without page reload');
+        await this.captureQR();
+        return;
+      }
+
+      await new Promise(r => setTimeout(r, 3000));
       await this.captureQR();
     } catch (e) {
       this.log('error', 'Failed to refresh QR', e.message);
@@ -1733,7 +2445,7 @@ class WhatsAppBridge extends EventEmitter {
     dbg('start ' + digits);
 
     // Ensure we are on the login screen
-    await this.page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
+    await this.safeGoto(waSafety.resolveWhatsAppEntryUrl(), { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
     await new Promise(r => setTimeout(r, 4000));
     dbg('navigated url=' + this.page.url());
 
@@ -1805,9 +2517,10 @@ class WhatsAppBridge extends EventEmitter {
     // Type with real keystrokes (WhatsApp's field is React-controlled)
     await input.click();
     await new Promise(r => setTimeout(r, 250));
-    await this.page.keyboard.down('Meta');
+    const modKey = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await this.page.keyboard.down(modKey);
     await this.page.keyboard.press('KeyA');
-    await this.page.keyboard.up('Meta');
+    await this.page.keyboard.up(modKey);
     await this.page.keyboard.press('Backspace');
     await this.page.keyboard.type(String(national), { delay: 80 });
     await new Promise(r => setTimeout(r, 700));
@@ -1920,29 +2633,212 @@ class WhatsAppBridge extends EventEmitter {
     }, 3000);
   }
 
-  async logout() {
-    this.log('info', 'Logging out...');
-    try {
-      await this.page.evaluate(() => {
-        const menuBtn = document.querySelector('[data-testid="menu"], [aria-label="Menu"]');
-        if (menuBtn) menuBtn.click();
-        setTimeout(() => {
-          const logoutBtn = document.querySelector('[data-testid="mi-logout"], [aria-label="Log out"]');
-          if (logoutBtn) logoutBtn.click();
-        }, 500);
+  async clickPaneMenu() {
+    if (!this.page) return false;
+    const point = await this.page.evaluate(() => {
+      const side = document.querySelector('#pane-side');
+      const header = side
+        ? (side.previousElementSibling || (side.parentElement && side.parentElement.querySelector('header')) || side.parentElement)
+        : document.querySelector('header');
+      const root = header || document;
+      const nodes = Array.from(root.querySelectorAll('button, [role="button"], span[data-icon]'));
+      const el = nodes.find(node => {
+        const label = (node.getAttribute('aria-label') || node.getAttribute('title') || '').trim();
+        const icon = node.getAttribute('data-icon') || '';
+        return /^menu$/i.test(label) || icon === 'menu';
       });
-      await new Promise(r => setTimeout(r, 2000));
-      
-      this.isConnected = false;
-      this.currentQR = null;
-      try { fs.unlinkSync(path.join(this.config.userDataDir, '.linked')); } catch (e) {}
-      this.stopPolling();
-      this.stopFilterRefreshTimer();
-      await this.saveSessionToAPI();
-      this.emit('disconnected');
-    } catch (e) {
-      this.log('error', 'Logout failed', e.message);
+      if (!el) return null;
+      const target = el.closest('button, [role="button"]') || el;
+      const r = target.getBoundingClientRect();
+      if (r.width < 4 || r.height < 4) return null;
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    if (!point) return false;
+    await this.page.mouse.click(point.x, point.y);
+    return true;
+  }
+
+  async clickExactLabel(patternSource) {
+    if (!this.page) return false;
+    const point = await this.page.evaluate((source) => {
+      const re = new RegExp(source, 'i');
+      const nodes = Array.from(document.querySelectorAll('button, [role="button"], [role="menuitem"], li, span, div'));
+      const hits = [];
+      for (const node of nodes) {
+        const raw = (node.getAttribute('aria-label') || node.innerText || '').replace(/\s+/g, ' ').trim();
+        if (!raw || raw.length > 32 || !re.test(raw)) continue;
+        const r = node.getBoundingClientRect();
+        if (r.width < 8 || r.height < 8 || r.bottom < 0 || r.top > window.innerHeight) continue;
+        hits.push({ area: r.width * r.height, x: r.x + r.width / 2, y: r.y + r.height / 2 });
+      }
+      hits.sort((a, b) => a.area - b.area);
+      return hits.length ? { x: hits[0].x, y: hits[0].y } : null;
+    }, patternSource);
+    if (!point) return false;
+    await this.page.mouse.click(point.x, point.y);
+    return true;
+  }
+
+  async confirmLogoutDialog() {
+    if (!this.page) return false;
+    const point = await this.page.evaluate(() => {
+      const dialog = document.querySelector('[role="dialog"], [data-animate-modal-body]');
+      const root = dialog || document.body;
+      const nodes = Array.from(root.querySelectorAll('button, [role="button"]'));
+      const el = nodes.find(node => /^log\s*out$/i.test((node.innerText || node.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim()));
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) return null;
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    if (!point) return false;
+    await this.page.mouse.click(point.x, point.y);
+    return true;
+  }
+
+  async unlinkWhatsAppWeb() {
+    if (!this.page) return false;
+    const opened = await this.clickPaneMenu();
+    if (!opened) this.log('warn', 'WhatsApp menu button was not found');
+    await new Promise(r => setTimeout(r, 700));
+    let clicked = await this.clickExactLabel('^log\\s*out$');
+    if (!clicked) {
+      const openedSettings = await this.clickExactLabel('^settings$');
+      if (openedSettings) {
+        await new Promise(r => setTimeout(r, 800));
+        clicked = await this.clickExactLabel('^log\\s*out$');
+      }
     }
+    if (!clicked) return false;
+    await new Promise(r => setTimeout(r, 700));
+    await this.confirmLogoutDialog();
+    for (let i = 0; i < 15; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      const state = await this.pageSessionState();
+      if (state.qr) return true;
+      const onLoginScreen = await this.page.evaluate(() => {
+        const text = (document.body && document.body.innerText) || '';
+        return /link with phone number|log in with qr|scan (?:this|the) qr|use whatsapp on this computer/i.test(text);
+      }).catch(() => false);
+      if (!state.logged && onLoginScreen) return true;
+    }
+    return false;
+  }
+
+  async clearWhatsAppWebStorage() {
+    if (!this.page) return false;
+    this.log('warn', 'Menu logout did not unlink. Clearing the WhatsApp Web session in this browser.');
+    try {
+      await this.page.evaluate(async () => {
+        try { localStorage.clear(); } catch (e) {}
+        try { sessionStorage.clear(); } catch (e) {}
+        try {
+          if (indexedDB.databases) {
+            const dbs = await indexedDB.databases();
+            await Promise.all((dbs || []).map(db => {
+              if (!db || !db.name) return Promise.resolve();
+              return new Promise(resolve => {
+                const req = indexedDB.deleteDatabase(db.name);
+                req.onsuccess = () => resolve();
+                req.onerror = () => resolve();
+                req.onblocked = () => resolve();
+              });
+            }));
+          }
+        } catch (e) {}
+      });
+    } catch (e) {
+      this.log('debug', 'In-page storage clear failed', e.message);
+    }
+
+    let client = null;
+    try {
+      if (typeof this.page.createCDPSession === 'function') {
+        client = await this.page.createCDPSession();
+      } else if (this.page.target && typeof this.page.target().createCDPSession === 'function') {
+        client = await this.page.target().createCDPSession();
+      }
+      if (client) {
+        await client.send('Network.clearBrowserCookies').catch(() => {});
+        await client.send('Storage.clearDataForOrigin', {
+          origin: 'https://web.whatsapp.com',
+          storageTypes: 'all'
+        }).catch((err) => {
+          this.log('warn', 'Could not clear WhatsApp origin storage', err && err.message ? err.message : '');
+        });
+      }
+    } catch (e) {
+      this.log('warn', 'Browser storage clear failed', e.message);
+    } finally {
+      if (client) {
+        try { await client.detach(); } catch (e) {}
+      }
+    }
+
+    await this.safeGoto(waSafety.resolveWhatsAppEntryUrl(), { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
+    for (let i = 0; i < 12; i++) {
+      await new Promise(r => setTimeout(r, 1000));
+      const state = await this.pageSessionState();
+      if (state.logged) return false;
+      if (state.qr) return true;
+      const onLoginScreen = await this.page.evaluate(() => {
+        const text = (document.body && document.body.innerText) || '';
+        return /link with phone number|log in with qr|scan (?:this|the) qr|use whatsapp on this computer/i.test(text);
+      }).catch(() => false);
+      if (onLoginScreen) return true;
+    }
+    return false;
+  }
+
+  async logout() {
+    if (this.loggingOut) return;
+    this.loggingOut = true;
+    this.log('info', 'Logging out of WhatsApp...');
+    this.isConnected = false;
+    this.currentQR = null;
+    this.qrExpiresAt = null;
+    this.stopPolling();
+    this.stopFilterRefreshTimer();
+    if (this.sessionSyncTimer) {
+      clearInterval(this.sessionSyncTimer);
+      this.sessionSyncTimer = null;
+    }
+    if (this.sessionWatchTimer) {
+      clearInterval(this.sessionWatchTimer);
+      this.sessionWatchTimer = null;
+    }
+
+    try {
+      await this.saveSessionToAPI();
+    } catch (e) {}
+
+    let unlinked = false;
+    try {
+      unlinked = await this.unlinkWhatsAppWeb();
+    } catch (e) {
+      this.log('warn', 'Menu logout failed', e.message);
+    }
+    if (!unlinked) {
+      try {
+        unlinked = await this.clearWhatsAppWebStorage();
+      } catch (e) {
+        this.log('error', 'Could not clear the WhatsApp session', e.message);
+      }
+    }
+
+    if (unlinked) {
+      this.log('info', 'WhatsApp logged out. Waiting for a new QR.');
+    } else {
+      this.log('error', 'WhatsApp is still logged in after logout.');
+    }
+
+    // Keep the .linked marker so the next launch stays headless.
+    // This browser is already open and will show the new QR itself.
+    this.emit('disconnected');
+    this.linkingSince = null;
+    this.lastQRBase64 = null;
+    this.loggingOut = false;
+    this.startSessionWatcher();
   }
   
   cleanStaleProfileLock() {
@@ -2029,6 +2925,10 @@ class WhatsAppBridge extends EventEmitter {
     this.browser = null;
     this.page = null;
 
+    if (this.shuttingDown || waSafety.isTestMode()) {
+      this.log('info', 'Skipping reconnect (shutdown or WA_TEST_MODE)');
+      return;
+    }
     this.reconnect();
   }
 
@@ -2057,8 +2957,31 @@ class WhatsAppBridge extends EventEmitter {
 
   // ============ OUTBOUND MESSAGING ============
   
+  /**
+   * Navigate only through the safety guard. In WA_TEST_MODE, web.whatsapp.com is refused.
+   */
+  async safeGoto(url, options = {}) {
+    const check = waSafety.assertNavigationAllowed(url);
+    if (!check.ok) {
+      this.log('error', check.error);
+      throw new Error(check.error);
+    }
+    return this.page.goto(check.url, options);
+  }
+
+  assertFixtureChatOrThrow(waChatId) {
+    const check = waSafety.assertChatAllowed(waChatId);
+    if (!check.ok) {
+      this.log('error', check.error);
+      throw new Error(check.error);
+    }
+    return check.waChatId;
+  }
+
   async processOutboundQueue() {
-    if (!this.isConnected || this.sending || this.pollingNow) return;
+    // Do NOT gate on pollingNow — ingestVisibleChats can run 20–40s and was
+    // starving the outbound queue so hub sends sat forever as "queued".
+    if (!this.isConnected || this.sending) return;
     this.sending = true;
     try {
       const response = await this.apiGet('api_whatsapp_outbound_queue.php', {
@@ -2081,7 +3004,8 @@ class WhatsAppBridge extends EventEmitter {
   async sendQueuedMessage(item) {
     const queueId = item.id;
     this.log('info', `Sending queued message ${queueId} to chat ${item.chat_id}`);
-    
+
+    // Queue API already filters to fresh user-pressed rows. Send exactly once.
     try {
       // Update status to processing
       await this.apiPost('api_whatsapp_outbound_update.php', {
@@ -2099,6 +3023,7 @@ class WhatsAppBridge extends EventEmitter {
         }
         waChatId = chatResponse.data.wa_chat_id;
       }
+      waChatId = this.assertFixtureChatOrThrow(waChatId);
       
       let result;
       switch (item.msg_type) {
@@ -2117,6 +3042,9 @@ class WhatsAppBridge extends EventEmitter {
         case 'contact':
           result = await this.sendContact(waChatId, item.body); // body contains vcard
           break;
+        case 'revoke':
+          result = await this.revokeForEveryone(waChatId, item.body);
+          break;
         default:
           throw new Error(`Unknown message type: ${item.msg_type}`);
       }
@@ -2124,8 +3052,11 @@ class WhatsAppBridge extends EventEmitter {
       if (result && result.success) {
         // Remember the text before the status write. A failed clock update must
         // not make the next scrape store this same bubble a second time.
-        this.rememberOutboundBody(waChatId, item.body);
-        // Update queue status only after the bridge actually sent
+        // Revoke jobs carry JSON metadata, not chat text — do not echo-filter them.
+        if (item.msg_type !== 'revoke') {
+          this.rememberOutboundBody(waChatId, item.body);
+        }
+        // Update queue status only after the bridge actually sent / revoked
         await this.apiPost('api_whatsapp_outbound_update.php', {
           id: queueId,
           status: 'sent',
@@ -2159,40 +3090,26 @@ class WhatsAppBridge extends EventEmitter {
     } catch (error) {
       this.log('error', `Failed to send message ${queueId}`, error.message);
       
-      const newAttempts = item.attempts + 1;
-      const maxAttempts = item.max_attempts || 3;
-      
-      if (newAttempts >= maxAttempts) {
+      // No auto-retry. Failed stays failed until the user presses Retry in the hub.
+      const newAttempts = (item.attempts || 0) + 1;
+      try {
+        await this.apiPost('api_whatsapp_outbound_update.php', {
+          id: queueId,
+          status: 'failed',
+          attempts: newAttempts,
+          error_message: error.message
+        });
+      } catch (e) {
+        this.log('error', `Could not mark queue ${queueId} failed`, e.message);
+      }
+      if (item.temp_msg_id) {
         try {
-          await this.apiPost('api_whatsapp_outbound_update.php', {
-            id: queueId,
-            status: 'failed',
-            attempts: newAttempts,
-            error_message: error.message
+          await this.apiPost('api_whatsapp_update_temp_msg.php', {
+            temp_msg_id: item.temp_msg_id,
+            status: 'failed'
           });
         } catch (e) {
-          this.log('error', `Could not mark queue ${queueId} failed`, e.message);
-        }
-        if (item.temp_msg_id) {
-          try {
-            await this.apiPost('api_whatsapp_update_temp_msg.php', {
-              temp_msg_id: item.temp_msg_id,
-              status: 'failed'
-            });
-          } catch (e) {
-            this.log('debug', `temp msg update skipped for queue ${queueId}`, e.message);
-          }
-        }
-      } else {
-        try {
-          await this.apiPost('api_whatsapp_outbound_update.php', {
-            id: queueId,
-            status: 'queued',
-            attempts: newAttempts,
-            error_message: error.message
-          });
-        } catch (e) {
-          this.log('error', `Could not requeue ${queueId}`, e.message);
+          this.log('debug', `temp msg update skipped for queue ${queueId}`, e.message);
         }
       }
     }
@@ -2215,6 +3132,15 @@ class WhatsAppBridge extends EventEmitter {
     const raw = String(waChatId || '');
     const digits = raw.split('@')[0].replace(/\D/g, '');
     const isGroup = raw.includes('@g.us');
+    const isLid = /@lid/i.test(raw);
+    const isTitleLid = /^title:.+@lid$/i.test(raw);
+    // title-based ids cannot be deep-linked; if composer is already open (sendQueuedMessage
+    // called openChatByTitle), treat as success. Otherwise refuse rather than phone-search.
+    if (isTitleLid) {
+      if (await this.waitForComposer(2000)) return true;
+      this.log('warn', 'title-based @lid chat is not open; openChatByTitle must run first');
+      return false;
+    }
 
     // 1. Try finding and clicking in sidebar without navigating!
     try {
@@ -2241,37 +3167,33 @@ class WhatsAppBridge extends EventEmitter {
       if (clicked && await this.waitForComposer(5000)) return true;
     } catch (e) {}
 
-    // 2. Individuals: deep-link straight to the conversation ONLY if allowed
-    if (allowDeepLink && !isGroup && digits.length >= 6) {
-      const target = `https://web.whatsapp.com/send?phone=${digits}`;
+    // 2. Individuals: deep-link straight to the conversation ONLY if allowed.
+    // Never deep-link @lid — those digits are not a phone number.
+    if (allowDeepLink && !isGroup && !isLid && digits.length >= 6) {
+      let target = `https://web.whatsapp.com/send?phone=${digits}`;
+      if (waSafety.isTestMode()) {
+        // Stay on mock; deep-link to real WA is forbidden.
+        target = waSafety.resolveWhatsAppEntryUrl();
+      }
       let currentUrl = '';
       try { currentUrl = this.page.url(); } catch (e) {}
       if (!currentUrl.includes(`phone=${digits}`)) {
         this.log('debug', 'Opening chat via send link: ' + digits);
-        await this.page.goto(target, { waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {});
+        await this.safeGoto(target, { waitUntil: 'domcontentloaded', timeout: 90000 }).catch(() => {});
       }
       if (await this.waitForComposer(30000)) return true;
-      this.log('warn', 'Composer not ready after deep link, falling back to search');
-    }
-
-    // 3. Fallback: in-app search
-    try {
-      if (!this.page.url().startsWith('https://web.whatsapp.com')) {
-        await this.page.goto('https://web.whatsapp.com', { waitUntil: 'domcontentloaded' }).catch(() => {});
-      }
-      await this.page.evaluate(() => {
-        const s = document.querySelector('[aria-label="Search"], [data-testid="chat-list-search"], div[contenteditable="true"][data-tab="3"]');
-        if (s) { s.click(); if (s.focus) s.focus(); }
-      });
-      await new Promise(r => setTimeout(r, 600));
-      await this.page.keyboard.type(digits || raw, { delay: 50 });
-      await new Promise(r => setTimeout(r, 1500));
-      await this.page.keyboard.press('Enter');
-      return await this.waitForComposer(10000);
-    } catch (e) {
-      this.log('warn', 'openChat fallback failed', e.message);
+      this.log('warn', 'Composer not ready after deep link');
       return false;
     }
+
+    // 3. REMOVED (2026-11-06): the old in-app search fallback typed the target number
+    //    and pressed Enter WITHOUT verifying the search box had focus. When WhatsApp Web's
+    //    search selector did not match, keystrokes landed in the OPEN CHAT's composer and
+    //    Enter SENT the number as a message (e.g. the linked number went to "JioMart Offers").
+    //    Opening a chat now only uses verified paths: sidebar row match or deep link.
+    //    Nothing in openChat types into the page.
+    this.log('warn', 'openChat: could not open chat via sidebar/deep link (no search typing fallback): ' + (isGroup ? raw : (digits ? digits.slice(0, 2) + '…' + digits.slice(-4) : raw)));
+    return false;
   }
 
   async sendText(waChatId, text) {
@@ -2286,10 +3208,11 @@ class WhatsAppBridge extends EventEmitter {
     await box.click();
     await new Promise(r => setTimeout(r, 250));
 
-    // Clear anything already in the composer
-    await this.page.keyboard.down('Meta');
+    // Clear anything already in the composer (Ctrl on Win/Linux, Meta on macOS)
+    const modKey = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await this.page.keyboard.down(modKey);
     await this.page.keyboard.press('KeyA');
-    await this.page.keyboard.up('Meta');
+    await this.page.keyboard.up(modKey);
     await this.page.keyboard.press('Backspace');
 
     // Type with real keystrokes so React's editor registers the input
@@ -2329,8 +3252,13 @@ class WhatsAppBridge extends EventEmitter {
       if (await readBox(boxSel)) return { success: false, error: 'Message not sent (composer still filled)' };
     }
 
-    const msgId = await this.getLastSentMessageId(waChatId);
-    return { success: true, wa_msg_id: msgId };
+    let msgId = await this.getLastSentMessageId(waChatId);
+    if (!msgId) {
+      await new Promise(r => setTimeout(r, 800));
+      msgId = await this.getLastSentMessageId(waChatId);
+    }
+    if (!msgId) msgId = await this.findOutgoingIdByBody(text);
+    return { success: true, wa_msg_id: msgId || '' };
   }
   
   async sendMedia(waChatId, filePath, mediaType, caption) {
@@ -2443,19 +3371,163 @@ class WhatsAppBridge extends EventEmitter {
     return { success: false, error: 'Contact sending not yet implemented' };
   }
   
+
+  /**
+   * Delete a from-me message for everyone in WhatsApp Web.
+   * body: JSON { wa_msg_id, msg_db_id, timestamp }
+   */
+  async revokeForEveryone(waChatId, body) {
+    const parsed = waRevokeRules.parseRevokeQueueBody(body);
+    if (!parsed) {
+      return { success: false, error: 'Invalid revoke payload (need wa_msg_id)' };
+    }
+    const windowCheck = waRevokeRules.canRevokeForEveryone(parsed.timestamp);
+    if (!windowCheck.ok) {
+      return { success: false, error: windowCheck.reason || 'Outside delete-for-everyone window' };
+    }
+    if (!this.page) return { success: false, error: 'Browser page not ready' };
+
+    const opened = await this.openChat(waChatId);
+    if (!opened) return { success: false, error: 'Could not open chat for revoke' };
+    await new Promise(r => setTimeout(r, 700));
+
+    const waMsgId = parsed.wa_msg_id;
+    this.log('info', `Revoking message ${waMsgId} in ${waChatId}`);
+
+    // Locate the bubble. Prefer exact data-id; fall back to suffix match.
+    const found = await this.page.evaluate((targetId) => {
+      const nodes = Array.from(document.querySelectorAll('#main [data-id], [data-testid="msg-container"][data-id], .message-out[data-id]'));
+      let el = nodes.find(n => (n.getAttribute('data-id') || '') === targetId);
+      if (!el) {
+        const short = targetId.includes('_') ? targetId.split('_').pop() : targetId;
+        el = nodes.find(n => {
+          const id = n.getAttribute('data-id') || '';
+          return id === targetId || id.endsWith('_' + short) || id.endsWith(short);
+        });
+      }
+      if (!el) return { ok: false, reason: 'Message bubble not found in open chat' };
+      el.scrollIntoView({ block: 'center', inline: 'nearest' });
+      return { ok: true, id: el.getAttribute('data-id') || targetId };
+    }, waMsgId);
+
+    if (!found || !found.ok) {
+      return { success: false, error: (found && found.reason) || 'Message not found on screen' };
+    }
+
+    // Hover to reveal the message menu caret, then open it.
+    const menuOpened = await this.page.evaluate((targetId) => {
+      const nodes = Array.from(document.querySelectorAll('#main [data-id]'));
+      const el = nodes.find(n => (n.getAttribute('data-id') || '') === targetId)
+        || nodes.find(n => (n.getAttribute('data-id') || '').endsWith(targetId.split('_').pop()));
+      if (!el) return false;
+      el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      const root = el.closest('[data-id]') || el;
+      const btn = root.querySelector('[data-testid="down-context"], [data-icon="down-context"], span[data-icon="down-context"], div[aria-label*="Context" i], div[aria-label*="Menu" i], button[aria-label*="Menu" i]');
+      if (btn) {
+        (btn.closest('button') || btn).click();
+        return true;
+      }
+      // Right-click fallback
+      const rect = root.getBoundingClientRect();
+      const x = rect.left + Math.min(rect.width - 8, Math.max(8, rect.width * 0.85));
+      const y = rect.top + rect.height / 2;
+      root.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: x, clientY: y, button: 2 }));
+      return true;
+    }, found.id);
+    await new Promise(r => setTimeout(r, 500));
+
+    // Click "Delete" / "Delete message"
+    const clickedDelete = await this.page.evaluate(() => {
+      const items = Array.from(document.querySelectorAll('[role="button"], [role="menuitem"], li, div, span, button'));
+      const del = items.find(el => /^(delete(?:\s+message)?)$/i.test((el.innerText || el.getAttribute('aria-label') || '').trim()));
+      if (!del) return false;
+      (del.closest('[role="button"], [role="menuitem"], button, li') || del).click();
+      return true;
+    });
+    if (!clickedDelete) {
+      return { success: false, error: 'Delete menu item not found (UI may have changed)' };
+    }
+    await new Promise(r => setTimeout(r, 600));
+
+    // Confirm "Delete for everyone"
+    const clickedEveryone = await this.page.evaluate(() => {
+      const items = Array.from(document.querySelectorAll('button, [role="button"], div[role="button"], span'));
+      const everyone = items.find(el => /delete\s+for\s+everyone/i.test((el.innerText || el.getAttribute('aria-label') || '').trim()));
+      if (!everyone) return false;
+      (everyone.closest('button, [role="button"]') || everyone).click();
+      return true;
+    });
+    if (!clickedEveryone) {
+      // Dismiss any "Delete for me" only dialog — treat missing option as failure
+      await this.page.evaluate(() => {
+        const cancel = Array.from(document.querySelectorAll('button, [role="button"]'))
+          .find(el => /^(cancel|close)$/i.test((el.innerText || '').trim()));
+        if (cancel) cancel.click();
+      });
+      return { success: false, error: 'Delete for everyone is not available for this message (window expired or WhatsApp hid the option)' };
+    }
+    await new Promise(r => setTimeout(r, 1200));
+
+    // Verify: bubble gone, or shows revoked / "You deleted this message"
+    const verified = await this.page.evaluate((targetId) => {
+      const nodes = Array.from(document.querySelectorAll('#main [data-id]'));
+      const el = nodes.find(n => (n.getAttribute('data-id') || '') === targetId);
+      if (!el) return { ok: true, how: 'removed' };
+      const txt = (el.innerText || '').toLowerCase();
+      if (/you deleted this message|this message was deleted|message deleted/.test(txt)) {
+        return { ok: true, how: 'placeholder' };
+      }
+      // Still present with original text — not revoked
+      return { ok: false, how: 'still_present' };
+    }, found.id);
+
+    if (!verified || !verified.ok) {
+      return { success: false, error: 'WhatsApp did not confirm the revoke (message still visible)' };
+    }
+    this.log('info', `Revoke confirmed for ${waMsgId} (${verified.how})`);
+    return { success: true, wa_msg_id: waMsgId, revoke: verified.how };
+  }
+
+  async findOutgoingIdByBody(body) {
+    const needle = String(body || '').trim();
+    if (!needle || !this.page) return '';
+    return await this.page.evaluate((text) => {
+      const nodes = Array.from(document.querySelectorAll('#main [data-id]'));
+      for (let i = nodes.length - 1; i >= 0; i--) {
+        const el = nodes[i];
+        const id = (el.getAttribute('data-id') || '').trim();
+        if (!id || /^false_/i.test(id)) continue;
+        const txt = (el.innerText || '').trim();
+        if (txt.includes(text)) return id;
+      }
+      return '';
+    }, needle.slice(0, 120));
+  }
+
   async getLastSentMessageId(waChatId) {
-    // Real WhatsApp id only. An invented id would detach the pending bubble
-    // from the row the replica already stored.
+    // Real WhatsApp id only. Modern WA Web often uses short data-ids (no true_jid_ prefix).
     return await this.page.evaluate(() => {
-      const msgs = document.querySelectorAll('#main [data-id^="true_"], [data-testid="msg-container"].message-out, .message-out');
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        const id = msgs[i].getAttribute('data-id') || '';
-        if (id.startsWith('true_')) return id;
+      const nodes = Array.from(document.querySelectorAll(
+        '#main [data-id], #main [data-testid^="conv-msg-"], #main .message-out, #main [data-testid="msg-container"]'
+      ));
+      for (let i = nodes.length - 1; i >= 0; i--) {
+        const el = nodes[i].closest('[data-id]') || nodes[i];
+        const id = (el.getAttribute('data-id') || '').trim();
+        if (!id || /^false_/i.test(id)) continue;
+        const icons = Array.from(el.querySelectorAll('[data-icon]')).map(n => n.getAttribute('data-icon') || '').join(' ');
+        const labels = Array.from(el.querySelectorAll('[aria-label]')).map(n => (n.getAttribute('aria-label') || '')).join(' ');
+        const outgoing = /^true_/i.test(id)
+          || /tail-out|msg-check|msg-dblcheck/i.test(icons)
+          || /^(you:|read|delivered|sent)$/i.test(labels)
+          || el.classList.contains('message-out')
+          || !!el.closest('.message-out');
+        if (outgoing) return id;
       }
       return '';
     });
   }
-  
+
   // ============ MEDIA DOWNLOAD ============
   
   async downloadMedia(msg) {
@@ -2469,7 +3541,11 @@ class WhatsAppBridge extends EventEmitter {
         url: msg.media_url,
         responseType: 'stream',
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+          'User-Agent': process.platform === 'win32'
+            ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            : process.platform === 'darwin'
+              ? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+              : 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
         },
         timeout: 60000
       });
@@ -2536,7 +3612,7 @@ class WhatsAppBridge extends EventEmitter {
       headers: {
         'Content-Type': 'application/json',
         'X-WA-Signature': signature,
-        'X-Admin-Test': '1'
+        'X-Bridge-Secret': this.config.bridgeSecret
       },
       transformRequest: [(body) => body],
       timeout: 30000
@@ -2549,7 +3625,7 @@ class WhatsAppBridge extends EventEmitter {
   async apiGet(endpoint, params = {}) {
     return axios.get(`${this.config.apiBaseUrl}/${endpoint}`, {
       params,
-      headers: { 'X-Admin-Test': '1' },
+      headers: { 'X-Bridge-Secret': this.config.bridgeSecret },
       timeout: 30000
     }).then(r => r.data).catch(e => {
       this.log('error', `API GET ${endpoint} failed`, e.message);
@@ -2567,6 +3643,7 @@ class WhatsAppBridge extends EventEmitter {
   // ============ GRACEFUL SHUTDOWN ============
   
   async shutdown() {
+    this.shuttingDown = true;
     this.log('info', 'Shutting down bridge...');
     this.stopPolling();
     if (this.sessionWatchTimer) {
