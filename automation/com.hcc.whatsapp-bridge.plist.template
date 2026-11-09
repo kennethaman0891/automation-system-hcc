@@ -15,6 +15,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>__HCC_AUTOMATION_DIR__/start-bridge.sh</string>
+        <string>--foreground</string>
     </array>
 
     <key>WorkingDirectory</key>

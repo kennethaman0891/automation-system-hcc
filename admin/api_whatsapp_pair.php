@@ -42,7 +42,7 @@ switch ($action) {
         $stmt->execute();
         $sess = $stmt->fetch(PDO::FETCH_ASSOC);
         $lastPollTs = !empty($sess['last_poll_at']) ? strtotime($sess['last_poll_at']) : 0;
-        if ((time() - $lastPollTs) >= 45) {
+        if ((time() - $lastPollTs) >= 90) {
             waJsonResponse(['success' => false, 'error' => 'WhatsApp bridge is not running. Start the bridge first.'], 503);
         }
 

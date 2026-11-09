@@ -8,6 +8,7 @@ require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../includes/google_drive.php';
 require_once __DIR__ . '/auth_check.php';
 
+$adminPage  = 'change_password';
 $settings   = getAllSettings();
 $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High School & Junior College';
 $schoolLogo = $settings['logo'] ?? 'assets/images/hcclogo.jpg';

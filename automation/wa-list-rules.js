@@ -43,7 +43,7 @@ function isClockTime(value) {
 }
 
 function titleKey(title) {
-  return String(title || '').trim().toLowerCase();
+  return String(title || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '').trim().toLowerCase();
 }
 
 function titleSlug(title) {
@@ -55,6 +55,7 @@ function titleSlug(title) {
 function rowSignature(row) {
   if (!row) return null;
   const text = String(row.rowText || [row.time, row.preview].filter(Boolean).join(' ') || '')
+    .replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '')
     .replace(/\s+/g, ' ').trim();
   if (!text || isTransientPreview(text) || isTransientPreview(row.preview)) return null;
   return [text.slice(0, 400), Number(row.unreadCount) || 0, row.unread ? 1 : 0].join('|');

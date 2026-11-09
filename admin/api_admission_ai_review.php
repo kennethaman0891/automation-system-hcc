@@ -98,11 +98,13 @@ switch ($action) {
 case 'health':
     $disc = airDiscoverLocalAi();
     $inbound = (int)$db->query('SELECT COUNT(*) FROM whatsapp_messages WHERE from_me = 0')->fetchColumn();
+    $latestTs = (int)$db->query('SELECT MAX(timestamp) FROM whatsapp_messages WHERE from_me = 0')->fetchColumn();
     airJson([
         'success' => true,
         'ai' => $disc,
         'engine_settings' => airGetEngineSettings(),
         'inbound_message_count' => $inbound,
+        'latest_inbound_ts' => $latestTs,
         'bridge_connected' => airIsBridgeConnected($db),
         'csrf_token' => generateCSRFToken(),
     ]);
@@ -196,16 +198,24 @@ case 'list_chats':
     $limit = min(100, max(1, (int)($input['limit'] ?? 50)));
     $sql = "
         SELECT c.id, c.wa_chat_id, c.name, c.chat_type, c.last_activity_at,
+               c.is_admission_enquiry,
                COUNT(m.id) AS inbound_count,
                MAX(m.timestamp) AS last_inbound_ts,
-               SUBSTRING(MAX(CONCAT(LPAD(m.timestamp,20,'0'), m.body)), 21, 160) AS last_snippet
+               SUBSTRING(MAX(CONCAT(LPAD(m.timestamp,20,'0'),
+                   CASE
+                       WHEN COALESCE(m.body,'') != '' THEN m.body
+                       WHEN m.msg_type = 'image' THEN '📷 [Photo]'
+                       WHEN m.msg_type = 'audio' THEN '🎤 [Voice message]'
+                       WHEN m.msg_type = 'video' THEN '🎥 [Video]'
+                       WHEN m.msg_type = 'document' THEN '📄 [Document]'
+                       ELSE '[Attachment]'
+                   END
+               )), 21, 160) AS last_snippet
         FROM whatsapp_chats c
         INNER JOIN whatsapp_messages m ON m.chat_id = c.id AND m.from_me = 0
-          AND m.msg_type IN ('text','image','video','audio','document','')
-          AND COALESCE(m.body,'') != ''
         WHERE c.chat_type = 'individual'
         GROUP BY c.id
-        ORDER BY last_inbound_ts DESC
+        ORDER BY last_inbound_ts DESC, c.last_activity_at DESC
         LIMIT {$limit}
     ";
     $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
@@ -219,6 +229,7 @@ case 'list_chats':
             'wa_chat_id' => $r['wa_chat_id'],
             'phone_masked' => airMaskPhone($phoneInfo['phone'] ?? $r['wa_chat_id']),
             'phone_known' => $phoneInfo['source'] === 'chat_identity',
+            'is_admission_enquiry' => (bool)$r['is_admission_enquiry'],
             'inbound_count' => (int)$r['inbound_count'],
             'last_inbound_ts' => (int)$r['last_inbound_ts'],
             'last_snippet' => (string)$r['last_snippet'],
@@ -239,10 +250,18 @@ case 'list_messages':
     if ($chatId <= 0) airJson(['success' => false, 'error' => 'chat_id required'], 400);
     $limit = min(50, max(1, (int)($input['limit'] ?? 20)));
     $st = $db->prepare("
-        SELECT id, wa_msg_id, from_me, sender_name, msg_type, body, timestamp, status, received_at
+        SELECT id, wa_msg_id, from_me, sender_name, msg_type,
+               CASE
+                   WHEN COALESCE(body,'') != '' THEN body
+                   WHEN msg_type = 'image' THEN '📷 [Photo]'
+                   WHEN msg_type = 'audio' THEN '🎤 [Voice message]'
+                   WHEN msg_type = 'video' THEN '🎥 [Video]'
+                   WHEN msg_type = 'document' THEN '📄 [Document]'
+                   ELSE '[Attachment]'
+               END AS body,
+               timestamp, status, received_at
         FROM whatsapp_messages
         WHERE chat_id = ? AND from_me = 0
-          AND COALESCE(body,'') != ''
         ORDER BY timestamp DESC, id DESC
         LIMIT {$limit}
     ");

@@ -65,6 +65,30 @@ $search  = trim($_GET['search'] ?? '');
     <link rel="stylesheet" href="../assets/css/admin.css?v=<?= filemtime(__DIR__ . '/../assets/css/admin.css') ?>">
     <link rel="stylesheet" href="../assets/css/admission-ai-review.css?v=<?= filemtime(__DIR__ . '/../assets/css/admission-ai-review.css') ?>">
     <style>
+        /* ── Header Responsiveness & Text Truncation Fix ── */
+        .admin-header {
+            flex-wrap: wrap !important;
+            gap: 12px !important;
+            padding: 14px 20px !important;
+        }
+        .header-titles {
+            min-width: 280px !important;
+            flex: 1 1 300px !important;
+        }
+        .header-titles .page-title {
+            white-space: normal !important;
+            line-height: 1.3 !important;
+        }
+        .header-titles .page-sub {
+            white-space: normal !important;
+            line-height: 1.4 !important;
+        }
+        .header-actions {
+            flex-wrap: wrap !important;
+            gap: 8px !important;
+            align-items: center !important;
+        }
+
         /* ── Pipeline & Dashboard Styling ───────────────────────────────────── */
         .enquiry-stats-grid {
             display: grid;
@@ -444,13 +468,32 @@ $search  = trim($_GET['search'] ?? '');
             .form-col-full { grid-column: span 1; }
         }
 
-        /* ── Header action buttons ──────────────────────────────────────────
-           Clear hierarchy: primary action (New Enquiry), specialized brand capsule
-           for WhatsApp Hub, and quiet outline secondaries with pixel-perfect flex alignment. */
+        /* ── Header layout & action buttons ──────────────────────────────────
+           Clear hierarchy: title and subtitle never truncate with ellipsis;
+           compact action buttons with pixel-perfect flex alignment. */
+        .admin-header {
+            gap: 14px 20px;
+            padding: 12px 24px;
+        }
+        .header-titles {
+            flex: 1;
+            min-width: 240px;
+        }
+        .header-titles .page-title {
+            white-space: normal;
+            line-height: 1.25;
+            font-size: 1.18rem;
+        }
+        .header-titles .page-sub {
+            white-space: normal;
+            line-height: 1.35;
+        }
         .header-actions {
             display: flex;
             align-items: center;
             gap: 8px !important;
+            flex-shrink: 0;
+            flex-wrap: wrap;
         }
 
         .header-actions .btn-primary,
@@ -459,11 +502,11 @@ $search  = trim($_GET['search'] ?? '');
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            gap: 8px;
-            height: 40px;
-            padding: 0 16px;
-            border-radius: 10px;
-            font-size: 0.86rem;
+            gap: 7px;
+            height: 38px;
+            padding: 0 13px;
+            border-radius: 8px;
+            font-size: 0.83rem;
             font-weight: 700;
             letter-spacing: 0.01em;
             white-space: nowrap;
@@ -569,12 +612,17 @@ $search  = trim($_GET['search'] ?? '');
             box-shadow: 0 0 0 3px rgba(122, 34, 56, 0.18);
         }
 
-        /* Small screens: buttons stay tappable, labels shrink */
+        /* Responsive header adjustments */
+        @media (max-width: 1200px) {
+            .header-actions .btn-primary,
+            .header-actions .btn-secondary,
+            .header-actions .btn-whatsapp-hub { padding: 0 10px; font-size: 0.8rem; }
+        }
         @media (max-width: 900px) {
             .header-actions { flex-wrap: wrap; }
             .header-actions .btn-primary,
             .header-actions .btn-secondary,
-            .header-actions .btn-whatsapp-hub { padding: 0 12px; font-size: 0.8rem; }
+            .header-actions .btn-whatsapp-hub { padding: 0 10px; font-size: 0.78rem; }
         }
         @media (max-width: 560px) {
             .header-actions .btn-secondary,
@@ -1937,6 +1985,8 @@ $search  = trim($_GET['search'] ?? '');
 
         // ── Real-Time Background Polling for WhatsApp Inbound Messages ──────
         let lastKnownMaxId = 0;
+        let lastKnownTotal = 0;
+        let lastKnownSig = '';
         let lastTimelineCount = 0;
 
         async function refreshWaInboundStatus() {
@@ -1947,11 +1997,17 @@ $search  = trim($_GET['search'] ?? '');
                 const data = await res.json();
                 const sess = data && data.session ? data.session : null;
                 const running = !!(data && (data.bridge_running || (sess && sess.bridge_running)));
+                const syncing = !!(data && (data.is_syncing || (sess && sess.is_syncing)));
                 const logoutBtn = document.getElementById('waLogoutBtn');
                 const showLogout = (on) => {
                     if (!logoutBtn || logoutBtn.dataset.busy === '1') return;
                     logoutBtn.style.display = on ? 'inline-flex' : 'none';
                 };
+                if (syncing) {
+                    el.innerHTML = '<span style="color:#0284c7;font-weight:600;"><i class="fa-solid fa-spinner fa-spin"></i> WhatsApp QR scanned! Linking & syncing chats with phone…</span>';
+                    showLogout(false);
+                    return;
+                }
                 if (!running) {
                     el.textContent = 'WhatsApp bridge is not running.';
                     showLogout(false);
@@ -1992,16 +2048,24 @@ $search  = trim($_GET['search'] ?? '');
 
                 const items = data.data || [];
                 const highestId = items.length ? Math.max(...items.map(i => parseInt(i.id, 10) || 0)) : 0;
+                const totalCount = data.pagination?.total || 0;
+                const topUpdate = items.length ? `${items[0].id}:${items[0].updated_at || ''}:${items[0].message_count || 0}` : '';
+                const currentSig = `${totalCount}-${highestId}-${topUpdate}`;
 
-                if (lastKnownMaxId === 0) {
+                if (lastKnownSig === '') {
+                    lastKnownSig = currentSig;
                     lastKnownMaxId = highestId;
-                } else if (highestId > lastKnownMaxId) {
-                    const newItems = items.filter(i => (parseInt(i.id, 10) || 0) > lastKnownMaxId);
-                    lastKnownMaxId = highestId;
+                    lastKnownTotal = totalCount;
+                } else if (currentSig !== lastKnownSig) {
+                    const isNewEnquiry = highestId > lastKnownMaxId;
+                    const newItems = isNewEnquiry ? items.filter(i => (parseInt(i.id, 10) || 0) > lastKnownMaxId) : [];
+                    lastKnownSig = currentSig;
+                    lastKnownMaxId = Math.max(lastKnownMaxId, highestId);
+                    lastKnownTotal = totalCount;
                     if (!isTyping) {
                         loadEnquiries(currentPage);
                     }
-                    if (newItems.length) {
+                    if (isNewEnquiry && newItems.length) {
                         const topNew = newItems[0];
                         showToast(`New WhatsApp Enquiry from ${topNew.parent_name || 'Parent'} (${topNew.interested_class})`, 'info');
                     }
@@ -2024,7 +2088,7 @@ $search  = trim($_GET['search'] ?? '');
             } catch (ignored) {}
         }
 
-        setInterval(pollEnquiriesBackground, 12000);
+        setInterval(pollEnquiriesBackground, 4000);
         refreshWaInboundStatus();
 
         // Initial Load

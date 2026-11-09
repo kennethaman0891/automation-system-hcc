@@ -23,11 +23,13 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High Schoo
 <div class="sidebar-overlay" id="sidebarOverlay"></div>
 <aside class="admin-sidebar" id="sidebar" aria-label="Admin sidebar">
     <div class="sidebar-brand">
-        <img src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="<?= sanitize($schoolName) ?> logo">
-        <div class="sidebar-brand-text">
-            <strong><?= sanitize($schoolName) ?></strong>
-            <span><i class="fa-solid fa-shield-halved"></i> Automation System</span>
-        </div>
+        <a href="dashboard.php" class="sidebar-brand-main" title="<?= sanitize($schoolName) ?> Dashboard">
+            <img src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="<?= sanitize($schoolName) ?> logo">
+            <div class="sidebar-brand-text">
+                <strong><?= sanitize($schoolName) ?></strong>
+                <span><i class="fa-solid fa-shield-halved"></i> Automation System</span>
+            </div>
+        </a>
         <button class="sidebar-collapse js-sidebar-toggle" type="button"
                 aria-label="Collapse sidebar" aria-controls="sidebar">
             <i class="fa-solid fa-bars"></i>
@@ -91,7 +93,7 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High Schoo
             <span>Bonafide Certificate</span>
         </a>
         <a href="whatsapp_dispatch_log.php" <?= $adminPage === 'whatsapp_dispatch_log' ? 'class="active" aria-current="page"' : '' ?>>
-            <i class="fas fa-history"></i>
+            <i class="fa-solid fa-clock-rotate-left"></i>
             <span>WhatsApp Dispatch Log</span>
         </a>
         <a href="records_archive.php" <?= $adminPage === 'records_archive' ? 'class="active" aria-current="page"' : '' ?>>
@@ -106,6 +108,11 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High Schoo
             <i class="fa-brands fa-whatsapp" style="color:#25D366;"></i>
             <span>WhatsApp Hub</span>
             <span class="sidebar-badge wa">Live</span>
+        </a>
+        <a href="custom_dispatcher.php" <?= $adminPage === 'custom_dispatcher' ? 'class="active" aria-current="page"' : '' ?>>
+            <i class="fa-solid fa-paper-plane" style="color:#f59e0b;"></i>
+            <span>Custom Dispatcher</span>
+            <span class="sidebar-badge" style="background:rgba(245,158,11,0.18);color:#fbbf24;border:1px solid rgba(245,158,11,0.35);">Fast</span>
         </a>
         <a href="admission_followups.php" <?= $adminPage === 'admission_followups' ? 'class="active" aria-current="page"' : '' ?>>
             <i class="fa-solid fa-headset" style="color:#10b981;"></i>
@@ -128,7 +135,7 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High Schoo
     </nav>
 
     <div class="sidebar-footer">
-        <a href="change_password.php" class="sidebar-logout" style="margin-bottom:6px; background:rgba(255,255,255,0.06); color:#cbd5e1;" title="Account Security & Password">
+        <a href="change_password.php" class="sidebar-security<?= $adminPage === 'change_password' ? ' active' : '' ?>" title="Account Security & Password"<?= $adminPage === 'change_password' ? ' aria-current="page"' : '' ?>>
             <i class="fa-solid fa-key"></i>
             <span>Security</span>
         </a>
@@ -137,6 +144,59 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High Schoo
             <span>Log out</span>
         </a>
     </div>
+
+    <script>
+    /* ── Immediate active sidebar item auto-scroll (Zero FOUC / Zero layout shift) ── */
+    (function () {
+        window.hccScrollActiveSidebar = function (smooth) {
+            try {
+                var sb = document.getElementById('sidebar');
+                if (!sb) return;
+                var nav = sb.querySelector('.sidebar-nav');
+                if (!nav || nav.clientHeight <= 0 || nav.scrollHeight <= nav.clientHeight) return;
+
+                var active = nav.querySelector('a.active, .active, [aria-current="page"]');
+                if (active) {
+                    var p = active.parentElement;
+                    while (p && p !== nav) {
+                        if (p.tagName === 'DETAILS' && !p.open) p.open = true;
+                        p = p.parentElement;
+                    }
+                    var navRect = nav.getBoundingClientRect();
+                    var activeRect = active.getBoundingClientRect();
+                    if (activeRect.height <= 0) return;
+                    var relTop = activeRect.top - navRect.top;
+                    var targetRelTop = Math.floor((nav.clientHeight - activeRect.height) / 2);
+                    var maxScroll = nav.scrollHeight - nav.clientHeight;
+                    var targetScroll = Math.max(0, Math.min(maxScroll, Math.round(nav.scrollTop + (relTop - targetRelTop))));
+                    if (Math.abs(nav.scrollTop - targetScroll) > 2) {
+                        if (smooth && typeof nav.scrollTo === 'function') {
+                            nav.scrollTo({ top: targetScroll, behavior: 'smooth' });
+                        } else {
+                            nav.scrollTop = targetScroll;
+                        }
+                    }
+                } else {
+                    var footerActive = sb.querySelector('.sidebar-footer a.active, .sidebar-footer .active');
+                    if (footerActive && nav.scrollHeight > nav.clientHeight) {
+                        var maxScroll = nav.scrollHeight - nav.clientHeight;
+                        if (Math.abs(nav.scrollTop - maxScroll) > 2) {
+                            nav.scrollTop = maxScroll;
+                        }
+                    }
+                }
+            } catch (e) {}
+        };
+        // 1. Synchronous execution on HTML parse (before first paint)
+        window.hccScrollActiveSidebar(false);
+        // 2. Next animation frame (guarantees flexbox rendering stabilization)
+        if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(function () {
+                window.hccScrollActiveSidebar(false);
+            });
+        }
+    })();
+    </script>
 </aside>
 
 <!-- Logout Confirmation Modal (Custom CSS Popup) -->

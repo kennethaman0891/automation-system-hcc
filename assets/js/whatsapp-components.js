@@ -2049,11 +2049,24 @@ class WaChatList extends WaElement {
     if (loadMore) {
       loadMore.style.display = pagination?.has_more ? 'block' : 'none';
     }
-    // Auto-select first chat if none selected
+    // Auto-select chat from URL parameter (e.g. deep-link from admission enquiries) or first chat if none selected
     if (this.store && !this.store.activeChatId && chats && chats.length > 0) {
-      const first = chats[0];
-      if (first && first.id) {
-        this.store.setActiveChat(first.id);
+      let targetId = null;
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const qChatId = urlParams.get('chat_id');
+        if (qChatId) {
+          const matched = chats.find(c => String(c.id) === String(qChatId) || String(c.chat_id) === String(qChatId));
+          if (matched && matched.id) {
+            targetId = matched.id;
+          }
+        }
+      } catch (e) {}
+      if (!targetId && chats[0] && chats[0].id) {
+        targetId = chats[0].id;
+      }
+      if (targetId) {
+        this.store.setActiveChat(targetId);
       }
     }
   }

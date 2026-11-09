@@ -392,7 +392,8 @@ this.browser = null;
         return { allowed: true, reason: 'roster_name' };
       }
 
-      return { allowed: false, reason: 'unknown_individual' };
+      // Direct 1-to-1 chats to the school account are allowed so prospective parents and new students are received
+      return { allowed: true, reason: 'individual_direct' };
     }
 
     // Default: reject unknown chat types
@@ -546,6 +547,11 @@ this.browser = null;
       this.page.setDefaultTimeout(60000);
       this.page.setDefaultNavigationTimeout(60000);
       
+      // Mask webdriver flag so WhatsApp Web anti-bot does not reject device pairing
+      await this.page.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      });
+
       // Enable request interception for media downloads
       await this.page.setRequestInterception(true);
       this.page.on('request', this.handleRequest.bind(this));
@@ -557,6 +563,12 @@ this.browser = null;
         }
       });
       
+      // Announce bridge is alive to backend API
+      await this.apiPost('api_whatsapp_session.php?action=poll', {
+        last_poll_at: new Date().toISOString(),
+        is_syncing: 0
+      }).catch(() => {});
+
       // Navigate to WhatsApp Web
       this.log('info', 'Navigating to WhatsApp Web...');
       await this.safeGoto(waSafety.resolveWhatsAppEntryUrl(), { waitUntil: 'networkidle2', timeout: 120000 });
@@ -599,12 +611,26 @@ this.browser = null;
               const archivedEl = el.querySelector('[data-testid="cell-frame-archived"]');
               const mutedEl = el.querySelector('[data-testid="cell-frame-muted"], ._ak8m');
               
-              const waChatId = el.getAttribute('data-chat-id') || el.getAttribute('id') || '';
+              let waChatId = el.getAttribute('data-chat-id') || el.getAttribute('id') || el.getAttribute('data-id') || '';
+              if (!waChatId) {
+                const titleStr = (nameEl?.getAttribute('title') || nameEl?.textContent || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '').trim();
+                const digits = titleStr.replace(/\D/g, '');
+                if (digits.length === 10 && /^[6-9]/.test(digits)) {
+                  waChatId = '91' + digits + '@c.us';
+                } else if (digits.length >= 11 && digits.length <= 15) {
+                  waChatId = digits + '@c.us';
+                }
+              }
+              if (!waChatId) {
+                const rowHtml = el.outerHTML ? el.outerHTML.slice(0, 800) : '';
+                const mJid = rowHtml.match(/(\d{10,15})@(c\.us|s\.whatsapp\.net|g\.us|lid)/i);
+                if (mJid) waChatId = (mJid[1] + '@' + mJid[2]).toLowerCase().replace('@s.whatsapp.net', '@c.us');
+              }
               
               if (nameEl) {
                 chats.push({
                   wa_chat_id: waChatId,
-                  name: nameEl.textContent?.trim() || '',
+                  name: (nameEl.textContent?.trim() || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, ''),
                   last_message: msgEl?.textContent?.trim() || '',
                   time: timeEl?.textContent?.trim() || '',
                   unread: unreadEl ? parseInt(unreadEl.getAttribute('aria-label')?.match(/\d+/) || ['0'])[0] : 0,
@@ -632,12 +658,34 @@ this.browser = null;
           msgElements.forEach(node => {
             try {
               const el = node.closest('[data-id]') || node;
-              const msgId = el.getAttribute('data-id') || el.getAttribute('id') || '';
-              if (!msgId || seen.has(msgId)) return;
+              let msgId = el.getAttribute('data-id') || el.getAttribute('id') || '';
+              if (!msgId) {
+                const testId = el.getAttribute('data-testid') || node.getAttribute('data-testid') || '';
+                const m = testId.match(/^conv-msg-(.+)$/);
+                if (m) msgId = m[1];
+              }
+              if (!msgId) {
+                const inner = el.querySelector('[data-id]');
+                if (inner) msgId = inner.getAttribute('data-id') || '';
+              }
               const virtual = el.querySelector('[data-virtualized="true"]');
               const hasText = !!el.querySelector('.selectable-text, [data-testid="msg-text"]');
               const hasMedia = !!el.querySelector('img[src*="blob:"], video, audio');
               if (virtual && !hasText && !hasMedia) return;
+              const textNodes = el.querySelectorAll('.selectable-text, [data-testid="msg-text"]');
+              const textEl = textNodes.length ? textNodes[textNodes.length - 1] : null;
+              const body = textEl?.textContent?.trim() || '';
+              const mediaEl = el.querySelector('img[src*="blob:"], video, audio');
+              if (!body && !mediaEl) return;
+
+              if (!msgId) {
+                let h = 0;
+                const sample = body.slice(0, 40);
+                for (let si = 0; si < sample.length; si++) { h = ((h << 5) - h) + sample.charCodeAt(si); h |= 0; }
+                msgId = 'syn_' + Math.abs(h);
+              }
+              if (seen.has(msgId)) return;
+
               const idMatch = String(msgId).match(/^(true|false)_(.+?@(?:c\.us|g\.us|s\.whatsapp\.net|lid|broadcast|newsletter))_(.+)$/i);
               seen.add(msgId);
 
@@ -649,11 +697,6 @@ this.browser = null;
               else if (/tail-in/.test(iconNames)) fromMe = false;
               else if (/tail-out|msg-check|msg-dblcheck/.test(iconNames) || outgoingLabel || el.classList.contains('message-out') || !!el.closest('.message-out')) fromMe = true;
               else fromMe = false;
-              const textNodes = el.querySelectorAll('.selectable-text, [data-testid="msg-text"]');
-              const textEl = textNodes.length ? textNodes[textNodes.length - 1] : null;
-              const body = textEl?.textContent?.trim() || '';
-              const mediaEl = el.querySelector('img[src*="blob:"], video, audio');
-              if (!body && !mediaEl) return;
 
               const timeEl = el.querySelector('[data-pre-plain-text]')
                 || el.querySelector('[data-testid="msg-time"], .copyable-text');
@@ -695,15 +738,16 @@ this.browser = null;
               if (/msg-dblcheck-ack|Read/i.test(iconText)) status = 'read';
               else if (/msg-dblcheck|Delivered/i.test(iconText)) status = 'delivered';
 
+              const mediaTag = mediaEl ? mediaEl.tagName.toLowerCase() : '';
+              const mediaType = mediaTag === 'img' ? 'image' : (mediaTag === 'video' ? 'video' : (mediaTag === 'audio' ? 'audio' : 'text'));
+              const resolvedBody = body || (mediaEl ? (mediaTag === 'img' ? '📷 [Photo]' : mediaTag === 'video' ? '🎥 [Video]' : '🎤 [Voice message]') : '');
+
               messages.push({
                 wa_msg_id: msgId,
                 wa_chat_id: idMatch ? idMatch[2] : '',
                 from_me: fromMe,
-                msg_type: !body && mediaEl
-                  ? (mediaEl.tagName.toLowerCase() === 'img' ? 'image' :
-                     mediaEl.tagName.toLowerCase() === 'video' ? 'video' : 'audio')
-                  : 'text',
-                body: body,
+                msg_type: !body && mediaEl ? mediaType : 'text',
+                body: resolvedBody,
                 media_url: mediaEl?.src || '',
                 timestamp: timestamp,
                 timestamp_parsed: timestampParsed,
@@ -721,13 +765,20 @@ this.browser = null;
           const root = document.querySelector('#pane-side') || document.querySelector('[data-testid="chat-list"]');
           if (!root) return [];
           const phoneLike = (value) => {
-            const raw = String(value || '').trim();
+            const raw = String(value || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '').trim();
             if (!raw || /@lid/i.test(raw)) return '';
             const jid = raw.match(/(\d{8,15})@(?:c\.us|s\.whatsapp\.net)/i);
             if (jid) return jid[1];
-            if (/[a-z]/i.test(raw)) return '';
-            const digits = raw.replace(/\D/g, '');
-            if (digits.length >= 8 && digits.length <= 15) return digits;
+            const phoneMatch = raw.match(/(?:\+?91[\s\-]?)?[6-9]\d{4}[\s\-]?\d{5}|\+?\d{1,3}[\s\-]?\d{8,14}/);
+            if (phoneMatch) {
+              const digits = phoneMatch[0].replace(/\D/g, '');
+              if (digits.length === 10 && /^[6-9]/.test(digits)) return '91' + digits;
+              if (digits.length >= 8 && digits.length <= 15) return digits;
+            }
+            if (!/[a-z]/i.test(raw)) {
+              const digits = raw.replace(/\D/g, '');
+              if (digits.length >= 8 && digits.length <= 15) return digits;
+            }
             return '';
           };
           const ROW_SEL = '[role="listitem"], [role="row"], [data-testid="cell-frame-container"]';
@@ -742,8 +793,13 @@ this.browser = null;
             const titleEl = el.querySelector('[data-testid="cell-frame-title"]')
               || el.querySelector('span[title][dir="auto"]')
               || el.querySelector('span[dir="auto"]');
-            const title = (titleEl?.getAttribute('title') || titleEl?.textContent || '').trim();
+            let title = (titleEl?.getAttribute('title') || titleEl?.textContent || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '').trim();
             if (!title) return;
+            // Clean phone titles (e.g. +91 98765 43210Friday...) by keeping the lead phone digits
+            const leadPhone = title.match(/^(\+?\d[\d\s\-]{7,16}\d)/);
+            if (leadPhone) {
+              title = leadPhone[1].trim();
+            }
             let time = '';
             el.querySelectorAll('div, span').forEach(node => {
               if (time || node.children.length) return;
@@ -754,7 +810,7 @@ this.browser = null;
             el.querySelectorAll('span[title], span[dir="auto"], span[dir="ltr"]').forEach(span => {
               if (preview) return;
               if (titleEl && (span === titleEl || titleEl.contains(span) || span.contains(titleEl))) return;
-              const text = (span.getAttribute('title') || span.textContent || '').trim();
+              const text = (span.getAttribute('title') || span.textContent || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '').trim();
               if (!text || text === title || text === time || TIME_RE.test(text)) return;
               preview = text;
             });
@@ -769,30 +825,40 @@ this.browser = null;
               labels.push(node.getAttribute('aria-label') || '');
             });
             const labelText = labels.join(' | ');
+            const icons = Array.from(el.querySelectorAll('[data-icon]')).map(n => n.getAttribute('data-icon') || '').join(' ');
+
+            // If preview text is empty but an attachment/media icon is in the row, label it
+            if (!preview) {
+              if (icons.includes('status-image') || icons.includes('image') || /photo|image/i.test(labelText)) preview = '📷 [Photo]';
+              else if (icons.includes('audio') || icons.includes('ptt') || /voice|audio/i.test(labelText)) preview = '🎤 [Voice message]';
+              else if (icons.includes('video') || /video/i.test(labelText)) preview = '🎥 [Video]';
+              else if (icons.includes('document') || /document/i.test(labelText)) preview = '📄 [Document]';
+            }
+
             const badge = el.querySelector('[data-testid="icon-unread-count"], [data-testid="cell-frame-unread"], [data-icon*="unread" i], [data-testid*="unread" i]');
             let unreadCount = 0;
             const countMatch = labelText.match(/(\d+)\s+unread/i);
             if (countMatch) unreadCount = parseInt(countMatch[1], 10) || 0;
             else if (badge && /^\d{1,4}$/.test((badge.textContent || '').trim())) unreadCount = parseInt(badge.textContent.trim(), 10) || 0;
             const unread = !!badge || /\bunread\b/i.test(labelText) || unreadCount > 0;
-            const icons = Array.from(el.querySelectorAll('[data-icon]')).map(n => n.getAttribute('data-icon') || '').join(' ');
             // Last message was ours (tick icons or "You:"). Not an incoming preview.
             const outgoing = /status-(check|dblcheck|time)|msg-(check|dblcheck|time)|(^|\s)(check|dblcheck)(\s|$)/i.test(icons)
               || /^you:/i.test(preview)
               || labels.some(label => /^(read|delivered|sent|pending)$/i.test(String(label).trim()));
             const groupHint = /default-group|community/i.test(icons);
-            const rowText = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+            const rowText = String(el.innerText || el.textContent || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '').replace(/\s+/g, ' ').trim().slice(0, 400);
             let lidId = '';
             const lidMatch = String(dataId).match(/(\d+)@lid/i);
             if (lidMatch) lidId = (lidMatch[1] + '@lid').toLowerCase();
+            const resolvedPhone = phoneLike(dataId) || phoneLike(title) || phoneLike(labelText);
             out.push({
               index,
               title: title.slice(0, 80),
               preview: preview.slice(0, 200),
               time,
               rowText,
-              phone: phoneLike(dataId) || phoneLike(title),
-              wa_chat_id: lidId || (phoneLike(dataId) ? phoneLike(dataId) + '@c.us' : ''),
+              phone: resolvedPhone,
+              wa_chat_id: lidId || (resolvedPhone ? resolvedPhone + '@c.us' : ''),
               unread,
               unreadCount,
               outgoing,
@@ -876,13 +942,20 @@ this.browser = null;
             || document.querySelector('#main header');
           const urlPhone = (location.href.match(/[?&]phone=(\d{6,15})/) || [])[1] || '';
           const phoneLike = (value) => {
-            const raw = String(value || '').trim();
+            const raw = String(value || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '').trim();
             if (!raw) return '';
-            const jid = raw.match(/(\d{8,15})@c\.us/i);
+            const jid = raw.match(/(\d{8,15})@(?:c\.us|s\.whatsapp\.net)/i);
             if (jid) return jid[1];
-            if (/[a-z]/i.test(raw)) return '';
-            const digits = raw.replace(/\D/g, '');
-            if (digits.length >= 8 && digits.length <= 15) return digits;
+            const phoneMatch = raw.match(/(?:\+?91[\s\-]?)?[6-9]\d{4}[\s\-]?\d{5}|\+?\d{1,3}[\s\-]?\d{8,14}/);
+            if (phoneMatch) {
+              const digits = phoneMatch[0].replace(/\D/g, '');
+              if (digits.length === 10 && /^[6-9]/.test(digits)) return '91' + digits;
+              if (digits.length >= 8 && digits.length <= 15) return digits;
+            }
+            if (!/[a-z]/i.test(raw)) {
+              const digits = raw.replace(/\D/g, '');
+              if (digits.length >= 8 && digits.length <= 15) return digits;
+            }
             return '';
           };
           if (!header) {
@@ -893,27 +966,29 @@ this.browser = null;
           const nameEl = header.querySelector('[data-testid="conversation-info-header-chat-title"], [data-testid="conversation-header-name"], span[title]');
           const avatarEl = header.querySelector('img[src*="blob:"], img[src*="https://pps.whatsapp.net"]');
           const statusEl = header.querySelector('[data-testid="conversation-header-subtitle"], [data-testid="conversation-header-status"], ._amig');
-          const headerText = header.innerText || '';
-          const name = nameEl?.textContent?.trim() || '';
-          const status = statusEl?.textContent?.trim() || '';
+          const headerText = (header.innerText || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '');
+          const name = (nameEl?.getAttribute('title') || nameEl?.textContent || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '').trim();
+          const status = (statusEl?.textContent || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '').trim();
           const isSelf = /message yourself|\(you\)/i.test(headerText);
           let waChatId = '';
           if (urlPhone) waChatId = urlPhone + '@c.us';
           const headerId = header.getAttribute('data-id') || header.querySelector('[data-id]')?.getAttribute('data-id') || '';
-          const headerJid = headerId.match(/(\d{8,15})@c\.us/i);
+          const headerJid = headerId.match(/(\d{8,15})@(?:c\.us|s\.whatsapp\.net)/i);
           if (!waChatId && headerJid) waChatId = headerJid[1] + '@c.us';
           if (!waChatId) {
             const fromStatus = phoneLike(status);
             const fromName = phoneLike(name);
+            const fromHeaderText = phoneLike(headerText);
             if (fromStatus) waChatId = fromStatus + '@c.us';
             else if (fromName) waChatId = fromName + '@c.us';
+            else if (fromHeaderText) waChatId = fromHeaderText + '@c.us';
           }
           if (!waChatId) {
             // Check active sidebar row
             const activeRow = document.querySelector('#pane-side [aria-selected="true"], #pane-side .active');
             if (activeRow) {
               const rId = activeRow.getAttribute('data-id') || activeRow.getAttribute('data-chat-id') || '';
-              const rJid = rId.match(/(\d{8,15})@c\.us/i);
+              const rJid = rId.match(/(\d{8,15})@(?:c\.us|s\.whatsapp\.net)/i);
               if (rJid) waChatId = rJid[1] + '@c.us';
               if (!waChatId) {
                 const rPhone = phoneLike(activeRow.innerText);
@@ -978,11 +1053,13 @@ this.browser = null;
           return null;
         },
         
-        // Check if logged in
+        // Check if logged in — covers modern WhatsApp Web layouts, landing screen, and sidebar markers
         isLoggedIn: () => {
-          const hasChatList = !!document.querySelector('[data-testid="chat-list"], #pane-side');
-          const hasMain = !!document.querySelector('#main');
-          const hasComposer = !!document.querySelector('footer [contenteditable="true"]');
+          const hasChatList = !!document.querySelector(
+            '#pane-side, [data-testid="chat-list"], [aria-label="Chat list"], div[role="grid"][aria-label*="chat" i], div[data-testid="chatlist-header"], #side, div[data-testid="intro-title"], header [aria-label*="Profile" i], header [aria-label*="Status" i], header [aria-label*="New chat" i], header [aria-label*="Menu" i], [data-tab="3"]'
+          );
+          const hasMain = !!document.querySelector('#main, [data-testid="conversation-panel-wrapper"], [data-testid="conversation-compose-box-input"]');
+          const hasComposer = !!document.querySelector('footer [contenteditable="true"], [data-testid="conversation-compose-box-input"]');
           return hasChatList || hasMain || hasComposer;
         }
       };
@@ -1032,9 +1109,20 @@ this.browser = null;
         if (this.pairingActive) return;
 
         const state = await this.page.evaluate(() => {
-          const logged = !!(window.WABridge && window.WABridge.isLoggedIn && window.WABridge.isLoggedIn());
+          const hasChatList = !!document.querySelector(
+            '#pane-side, [data-testid="chat-list"], [aria-label="Chat list"], div[role="grid"][aria-label*="chat" i], div[data-testid="chatlist-header"], #side, div[data-testid="intro-title"], header [aria-label*="Profile" i], header [aria-label*="Status" i], header [aria-label*="New chat" i], header [aria-label*="Menu" i], [data-tab="3"]'
+          );
+          const hasMain = !!document.querySelector('#main, [data-testid="conversation-panel-wrapper"], [data-testid="conversation-compose-box-input"]');
+          const hasComposer = !!document.querySelector('footer [contenteditable="true"], [data-testid="conversation-compose-box-input"]');
+          const bridgeLogged = !!(window.WABridge && window.WABridge.isLoggedIn && window.WABridge.isLoggedIn());
+          const logged = hasChatList || hasMain || hasComposer || bridgeLogged;
+
           const qr = (window.WABridge && window.WABridge.getQR) ? window.WABridge.getQR() : null;
           const body = document.body ? (document.body.innerText || '') : '';
+
+          // Detect active sync or loading progress after scan
+          const isSyncing = !!document.querySelector('progress, [role="progressbar"], [data-testid="loading-screen"]') ||
+            /loading your chats|organizing messages|downloading messages|connecting\.\.\.|syncing/i.test(body);
 
           // Look for a SHORT, visible reload label on an expired QR — not a huge
           // container whose innerText happens to include those words.
@@ -1053,13 +1141,19 @@ this.browser = null;
               const txt = (el.innerText || el.getAttribute('aria-label') || '').trim();
               return /^(?:log\s*in|link)\s+with\s+qr(?:\s*code)?$/i.test(txt);
             });
-          const hasLogInWithQR = !!qrLoginBtn;
+          const hasLogInWithQR = !logged && !qr && !!qrLoginBtn;
 
           let linkError = '';
           const errMatch = body.match(/(couldn['’]t link[^\n]*|unable to link[^\n]*|something went wrong[^\n]*|try again later[^\n]*)/i);
           if (errMatch) linkError = errMatch[0].trim().slice(0, 160);
-          return { logged, qr, expired, hasLogInWithQR, linkError };
+          return { logged, qr, expired, hasLogInWithQR, linkError, isSyncing };
         });
+
+        // Keep bridge heartbeat alive and surface sync status during scan/handshake
+        await this.apiPost('api_whatsapp_session.php?action=poll', {
+          last_poll_at: new Date().toISOString(),
+          is_syncing: (state.isSyncing || !!this.linkingSince) ? 1 : 0
+        }).catch(() => {});
 
         // 1) Logged in — done
         if (state.logged) {
@@ -1071,15 +1165,24 @@ this.browser = null;
         }
 
         // Return to QR screen if stuck on phone pairing or error screen
-        if (!state.qr && state.hasLogInWithQR) {
-          this.log('info', 'Found "Log in with QR code" button — switching back to QR view...');
-          await this.page.evaluate(() => {
-            const btn = Array.from(document.querySelectorAll('button, [role="button"], span, div'))
-              .find(el => /^(?:log\s*in|link)\s+with\s+qr(?:\s*code)?$/i.test((el.innerText || el.getAttribute('aria-label') || '').trim()));
-            if (btn) btn.click();
-          });
-          await new Promise(r => setTimeout(r, 2000));
-          await this.captureQR();
+        if (!state.qr && state.hasLogInWithQR && !this.pairingActive) {
+          const since = Date.now() - (this.lastQrSwitchClickAt || 0);
+          if (since > 15000) {
+            this.lastQrSwitchClickAt = Date.now();
+            this.log('info', 'Found "Log in with QR code" button — switching back to QR view...');
+            const qrBtn = await this.page.$('[data-testid="link_device_phone_number_qr_link"], [data-testid="link-device-qrcode-alt-linking-tc"]');
+            if (qrBtn) {
+              await qrBtn.click().catch(() => {});
+            } else {
+              await this.page.evaluate(() => {
+                const btn = Array.from(document.querySelectorAll('button, [role="button"], span, div'))
+                  .find(el => /(?:log\s*in|link)\s+with\s+qr/i.test((el.innerText || el.getAttribute('aria-label') || '').trim()));
+                if (btn) (btn.closest('button, [role="button"], div[role="button"]') || btn).click();
+              }).catch(() => {});
+            }
+            await new Promise(r => setTimeout(r, 2000));
+            await this.captureQR();
+          }
           return;
         }
 
@@ -1139,17 +1242,32 @@ this.browser = null;
           return;
         }
 
-        // 3) No QR and not logged in — a scan may be in progress (WhatsApp shows a
-        //    loading screen). Give it up to 90s before doing anything drastic.
+        // 3) No QR and not logged in — a scan may be in progress (WhatsApp shows a loading screen)
         if (!this.linkingSince) {
           this.linkingSince = Date.now();
-          this.log('info', 'QR no longer visible — assuming a scan is in progress...');
+          this.log('info', 'QR no longer visible — scan detected, waiting for login/sync handshake...');
           return;
         }
-        if (Date.now() - this.linkingSince < 90000) return;
+
+        // If WhatsApp Web is actively syncing or downloading messages from phone, do not abort
+        if (state.isSyncing) {
+          this.log('info', 'WhatsApp is syncing messages from phone... waiting for sync to complete');
+          if (Date.now() - this.linkingSince < 300000) {
+            return;
+          }
+        }
+
+        // Allow up to 180s for handshake before reloading
+        if (Date.now() - this.linkingSince < 180000) {
+          const elapsed = Math.round((Date.now() - this.linkingSince) / 1000);
+          if (elapsed % 15 === 0) {
+            this.log('info', `Waiting for login handshake (${elapsed}s elapsed)...`);
+          }
+          return;
+        }
 
         this.linkingSince = null;
-        this.log('info', 'No QR and no login after 90s — reloading WhatsApp Web');
+        this.log('warn', 'No QR and no login after 180s — reloading WhatsApp Web');
         await this.page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
         this.lastQrCaptureAt = Date.now();
         this.lastQRBase64 = null;
@@ -1176,6 +1294,7 @@ this.browser = null;
     this.isConnected = true;
     this.reconnectAttempts = 0;
     this.connectedAt = this.connectedAt || new Date().toISOString();
+    this.linkingSince = null;
     this.didInitialListPass = false;
     this.chatListPrimed = false;
     this.listBackfill = [];
@@ -1512,12 +1631,21 @@ this.browser = null;
   }
 
   phoneDigitsFromLabel(value) {
-    const raw = String(value || '').trim();
+    const raw = String(value || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '').trim();
     if (!raw) return '';
     const jid = raw.match(/(\d{8,15})@c\.us/i);
     if (jid) return this.normalizePhoneDigits(jid[1]);
-    if (/[a-z]/i.test(raw)) return '';
-    return this.normalizePhoneDigits(raw.replace(/\D/g, ''));
+    const phoneMatch = raw.match(/(?:\+?91[\s\-]?)?[6-9]\d{4}[\s\-]?\d{5}|\+?\d{1,3}[\s\-]?\d{8,14}/);
+    if (phoneMatch) {
+      const digits = phoneMatch[0].replace(/\D/g, '');
+      if (digits.length === 10 && /^[6-9]/.test(digits)) return '91' + digits;
+      const normalized = this.normalizePhoneDigits(digits);
+      if (normalized) return normalized;
+    }
+    if (!/[a-z]/i.test(raw)) {
+      return this.normalizePhoneDigits(raw.replace(/\D/g, ''));
+    }
+    return '';
   }
 
   // Match waValidateWhatsAppPhone: 10-digit Indian mobiles are stored as 91 + digits.
@@ -1584,7 +1712,7 @@ this.browser = null;
         }
         if (best) best.scrollTop = best.scrollHeight;
       });
-      await new Promise(r => setTimeout(r, 700));
+      await new Promise(r => setTimeout(r, 100));
     } catch (e) {}
   }
 
@@ -1607,16 +1735,16 @@ this.browser = null;
         const header = document.querySelector('#main header');
         if (!header) return false;
         const target = header.querySelector(
-          '[data-testid="conversation-info-header-chat-title"], [data-testid="conversation-info-header"], [role="button"]'
+          '[data-testid="conversation-info-header-chat-title"], [data-testid="conversation-info-header"], [role="button"], img'
         ) || header;
         target.click();
         return true;
       });
       if (!opened) return '';
-      await new Promise(r => setTimeout(r, 800));
+      await new Promise(r => setTimeout(r, 600));
       const rawNumbers = await this.page.evaluate(() => {
         const drawer = document.querySelector(
-          '[data-testid="chat-info-drawer"], [data-testid="contact-info-drawer"], [data-testid="drawer-right"], section[data-testid="drawer-right"]'
+          '[data-testid="chat-info-drawer"], [data-testid="contact-info-drawer"], [data-testid="drawer-right"], section[data-testid="drawer-right"], [data-testid="contact-info"], div[role="region"]'
         );
         if (!drawer) return [];
         return (drawer.innerText || '').match(/\+?\d[\d\s\-()]{8,16}\d/g) || [];
@@ -1766,7 +1894,7 @@ this.browser = null;
       if (!openedOk) {
         const prev = this.rowOpenFail.get(key) || { count: 0 };
         const count = prev.count + 1;
-        this.rowOpenFail.set(key, { count, until: Date.now() + waListRules.nextBackoffMs(count) });
+        this.rowOpenFail.set(key, { count, until: Date.now() + Math.min(30000, waListRules.nextBackoffMs(count)) });
         if (reason === 'backfill') continue;
         const stored = await this.ingestRowPreview(row, reason);
         if (stored) this.chatSigByTitle.set(key, item.sig);
@@ -2081,47 +2209,93 @@ this.browser = null;
       return await this.page.evaluate(() => {
         const header = document.querySelector('#main header');
         if (!header) return '';
-        const nameEl = header.querySelector('[data-testid="conversation-info-header-chat-title"], span[title], span[dir="auto"]');
-        return (nameEl?.getAttribute('title') || nameEl?.textContent || '').trim();
+        const nameEl = header.querySelector('[data-testid="conversation-info-header-chat-title"], [data-testid="conversation-header-name"], span[title], span[dir="auto"]');
+        return (nameEl?.getAttribute('title') || nameEl?.textContent || header.innerText || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '').trim();
       });
     } catch (e) {
       return '';
     }
   }
 
-  async waitForHeaderTitle(expectedTitle, timeout = 6000) {
-    const wanted = String(expectedTitle || '').trim().toLowerCase();
-    if (!wanted) return false;
+  async waitForHeaderTitle(expectedTitle, timeout = 5000) {
+    const clean = (s) => String(s || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '').trim().toLowerCase();
+    const cleanDigits = (s) => {
+      const d = String(s || '').replace(/\D/g, '');
+      return d.length >= 8 ? d.slice(-10) : '';
+    };
+    const wanted = clean(expectedTitle);
+    const wantedDigits = cleanDigits(expectedTitle);
+    if (!wanted && !wantedDigits) return false;
     const start = Date.now();
     while (Date.now() - start < timeout) {
-      const title = (await this.headerTitle()).toLowerCase();
-      if (title && (title === wanted || title.includes(wanted) || wanted.includes(title))) return true;
-      await new Promise(r => setTimeout(r, 300));
+      const title = clean(await this.headerTitle());
+      const titleDigits = cleanDigits(title);
+      if (wanted && title && (title === wanted || title.includes(wanted) || wanted.includes(title))) return true;
+      if (wantedDigits && titleDigits && (wantedDigits === titleDigits || wantedDigits.includes(titleDigits) || titleDigits.includes(wantedDigits))) return true;
+      const noSpaceWanted = wanted.replace(/[\s\-\(\)\+]/g, '');
+      const noSpaceTitle = title.replace(/[\s\-\(\)\+]/g, '');
+      if (noSpaceWanted && noSpaceTitle && (noSpaceTitle.includes(noSpaceWanted) || noSpaceWanted.includes(noSpaceTitle))) return true;
+      await new Promise(r => setTimeout(r, 150));
     }
     return false;
   }
 
+  async waitForConversationReady(timeout = 4000) {
+    try {
+      await this.page.waitForFunction(() => {
+        const main = document.querySelector('#main');
+        if (!main) return false;
+        const header = main.querySelector('header');
+        const messages = main.querySelector('[data-testid="conversation-panel-messages"], .message-in, .message-out, #messages, div[role="region"]');
+        const composer = document.querySelector('footer div[contenteditable="true"], div[contenteditable="true"][data-tab="10"], [aria-label="Type a message"]');
+        return !!(header || messages || composer);
+      }, { timeout, polling: 150 });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   async openUnreadRow(index, expectedTitle = '') {
     if (!this.page) return false;
-    const point = await this.page.evaluate((idx) => {
+    const point = await this.page.evaluate((idx, expected) => {
       const root = document.querySelector('#pane-side') || document.querySelector('[data-testid="chat-list"]');
       if (!root) return null;
       const rows = root.querySelectorAll('[role="listitem"], [role="row"], [data-testid="cell-frame-container"]');
-      const el = rows[idx];
+      let el = rows[idx];
+      if (expected) {
+        const cleanStr = (s) => String(s || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '').replace(/[\s\-\(\)\+]/g, '').toLowerCase();
+        const targetKey = cleanStr(expected);
+        if (targetKey) {
+          for (const r of rows) {
+            const titleEl = r.querySelector('[data-testid="cell-frame-title"], span[title], span[dir="auto"]');
+            const rTitle = cleanStr(titleEl?.getAttribute('title') || titleEl?.textContent || r.innerText || '');
+            if (rTitle && (rTitle.includes(targetKey) || targetKey.includes(rTitle))) {
+              el = r;
+              break;
+            }
+          }
+        }
+      }
       if (!el) return null;
-      el.scrollIntoView({ block: 'center' });
+      el.scrollIntoView({ block: 'nearest' });
       const target = el.querySelector('[role="gridcell"]') || el;
+      try {
+        target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+        target.click();
+      } catch (e) {}
       const rect = target.getBoundingClientRect();
       if (rect.width < 8 || rect.height < 8) return null;
       return { x: rect.x + rect.width / 2, y: rect.y + Math.min(24, rect.height / 2) };
-    }, index);
+    }, index, expectedTitle);
     if (!point) return false;
-    await this.page.mouse.click(point.x, point.y);
+    await this.page.mouse.click(point.x, point.y).catch(() => {});
     if (expectedTitle) {
-      const named = await this.waitForHeaderTitle(expectedTitle, 5000);
+      const named = await this.waitForHeaderTitle(expectedTitle, 2200);
       if (!named) return false;
     }
-    return await this.waitForComposer(8000);
+    return await this.waitForConversationReady(2500);
   }
 
   async openChatByTitle(title) {
@@ -2166,7 +2340,7 @@ this.browser = null;
         return false;
       }
       await this.page.mouse.click(point.x, point.y);
-      const named = await this.waitForHeaderTitle(wanted, 8000);
+      const named = await this.waitForHeaderTitle(wanted, 4000);
       if (!named) {
         await this.page.keyboard.press('Escape').catch(() => {});
         return false;
@@ -2175,7 +2349,7 @@ this.browser = null;
         const clear = document.querySelector('[aria-label="Clear search"], [aria-label="Cancel search"], [data-testid="x-alt"]');
         if (clear) clear.click();
       }).catch(() => {});
-      return await this.waitForComposer(8000);
+      return await this.waitForConversationReady(4000);
     } catch (e) {
       this.log('debug', 'Title search failed', e.message);
       return false;
@@ -2205,9 +2379,11 @@ this.browser = null;
     if (!this.page) return { logged: false, qr: false };
     try {
       return await this.page.evaluate(() => {
-        const hasChatList = !!document.querySelector('[data-testid="chat-list"], #pane-side');
-        const hasMain = !!document.querySelector('#main');
-        const hasComposer = !!document.querySelector('footer [contenteditable="true"]');
+        const hasChatList = !!document.querySelector(
+          '#pane-side, [data-testid="chat-list"], [aria-label="Chat list"], div[role="grid"][aria-label*="chat" i], div[data-testid="chatlist-header"], #side, div[data-testid="intro-title"], header [aria-label*="Profile" i], header [aria-label*="Status" i], header [aria-label*="New chat" i], header [aria-label*="Menu" i], [data-tab="3"]'
+        );
+        const hasMain = !!document.querySelector('#main, [data-testid="conversation-panel-wrapper"], [data-testid="conversation-compose-box-input"]');
+        const hasComposer = !!document.querySelector('footer [contenteditable="true"], [data-testid="conversation-compose-box-input"]');
         const logged = hasChatList || hasMain || hasComposer || (window.WABridge && typeof window.WABridge.isLoggedIn === 'function' && window.WABridge.isLoggedIn());
 
         // A real QR requires an actual visible QR canvas or qrcode container
@@ -2237,9 +2413,28 @@ this.browser = null;
     if (this.sending || !this.page || !this.phoneNumber) return;
     const selfJid = this.normalizePhoneDigits(String(this.phoneNumber)) + '@c.us';
     try {
-      // Prefer title open — Message yourself is not always deep-linkable the same way
-      // Title open only. The old fallback openChat(selfJid) searched by the LINKED NUMBER
-      // and could type it into whichever chat was open (removed 2026-11-06).
+      const currentHeader = await this.headerTitle();
+      if (/message yourself|\(you\)/i.test(currentHeader)) {
+        await this.ingestOpenChat(selfJid);
+        return;
+      }
+      const visibleIndex = await this.page.evaluate(() => {
+        const root = document.querySelector('#pane-side') || document.querySelector('[data-testid="chat-list"]');
+        if (!root) return -1;
+        const rows = root.querySelectorAll('[role="listitem"], [role="row"], [data-testid="cell-frame-container"]');
+        for (let i = 0; i < Math.min(rows.length, 12); i++) {
+          const txt = (rows[i].innerText || '').replace(/[\u200E\u200F\u202A-\u202E\uFEFF]/g, '');
+          if (/message yourself|\(you\)/i.test(txt)) return i;
+        }
+        return -1;
+      });
+      if (visibleIndex >= 0) {
+        const opened = await this.openUnreadRow(visibleIndex, 'Message yourself');
+        if (opened) await this.ingestOpenChat(selfJid);
+        return;
+      }
+      if (Date.now() - (this.lastSelfSearchAt || 0) < 60000) return;
+      this.lastSelfSearchAt = Date.now();
       const opened = await this.openChatByTitle('Message yourself');
       if (!opened) return;
       await this.ingestOpenChat(selfJid);
@@ -2381,7 +2576,7 @@ this.browser = null;
     if (this.sessionSyncTimer) return;
     this.sessionSyncTimer = setInterval(() => {
       if (this.isConnected) this.saveSessionToAPI().catch(() => {});
-    }, 60000);
+    }, 15000);
   }
 
   startFlagWatcher() {
@@ -2449,15 +2644,26 @@ this.browser = null;
     await new Promise(r => setTimeout(r, 4000));
     dbg('navigated url=' + this.page.url());
 
-    // 1) Click "Link with phone number"
-    const clicked = await this.page.evaluate(() => {
-      const byTestId = document.querySelector('[data-testid="link-phone-number-btn"]');
-      if (byTestId) { byTestId.click(); return 'testid'; }
-      const candidates = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
-      const el = candidates.find(e => /link with phone number/i.test(e.textContent || ''));
-      if (el) { el.click(); return 'text'; }
+    // 1) Click "Link with phone number" / "Log in with phone number"
+    let clicked = await this.page.evaluate(() => {
+      const byTestId = document.querySelector('[data-testid="link-phone-number-btn"], [data-testid="link_device_phone_number_link"]');
+      if (byTestId) { (byTestId.closest('div[role="button"], button') || byTestId).click(); return 'testid'; }
+      const candidates = Array.from(document.querySelectorAll('button, a, div[role="button"], span'));
+      const el = candidates.find(e => /(?:link|log\s*in)\s+with\s+phone\s*number/i.test(e.textContent || ''));
+      if (el) { (el.closest('div[role="button"], button') || el).click(); return 'text'; }
       return 'none';
     });
+    if (clicked === 'none') {
+      const els = await this.page.$$('button, a, div[role="button"]');
+      for (const el of els) {
+        const txt = await el.evaluate(e => e.textContent || '').catch(() => '');
+        if (/(?:link|log\s*in)\s+with\s+phone\s*number/i.test(txt)) {
+          await el.click().catch(() => {});
+          clicked = 'handle';
+          break;
+        }
+      }
+    }
     dbg('click result=' + clicked);
     await new Promise(r => setTimeout(r, 2500));
 
@@ -3164,7 +3370,7 @@ this.browser = null;
         }
         return false;
       }, digits, raw);
-      if (clicked && await this.waitForComposer(5000)) return true;
+      if (clicked && (await this.waitForConversationReady(4000) || await this.waitForComposer(1000))) return true;
     } catch (e) {}
 
     // 2. Individuals: deep-link straight to the conversation ONLY if allowed.

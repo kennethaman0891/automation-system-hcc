@@ -49,6 +49,13 @@ fi
 # Clear stale Chrome singleton locks from a previous crash
 rm -f .whatsapp-session/SingletonLock       .whatsapp-session/SingletonSocket       .whatsapp-session/SingletonCookie       .whatsapp-session/lockfile 2>/dev/null
 
+if [[ "${1:-}" == "--foreground" ]] || [[ "${FOREGROUND:-0}" == "1" ]]; then
+  echo "[start] $(date) starting bridge (supervised foreground)" >> "$LOG"
+  echo "[start] node=$NODE_BIN ($("$NODE_BIN" --version))" >> "$LOG"
+  echo "$$" > "$LOCK"
+  exec "$NODE_BIN" whatsapp-bridge.js
+fi
+
 echo "[start] $(date) starting bridge (no auto-restart)" >> "$LOG"
 # Run in background; record pid for stop-bridge.sh
 echo "[start] node=$NODE_BIN ($("$NODE_BIN" --version))" >> "$LOG"

@@ -208,6 +208,9 @@ document.addEventListener('DOMContentLoaded', () => {
       sidebar.classList.toggle('open', open);
       if (overlay) overlay.classList.toggle('active', open);
       syncToggles(open);
+      if (open && typeof window.hccScrollActiveSidebar === 'function') {
+        window.hccScrollActiveSidebar(false);
+      }
     };
 
     sidebarToggles.forEach((btn) => {
@@ -233,6 +236,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.addEventListener('resize', () => {
       if (!isMobile() && sidebar.classList.contains('open')) closeSidebar();
+      if (typeof window.hccScrollActiveSidebar === 'function') {
+        window.hccScrollActiveSidebar(false);
+      }
+    });
+
+    // Auto-scroll active sidebar item into view upon full document/asset load
+    if (typeof window.hccScrollActiveSidebar === 'function') {
+      window.hccScrollActiveSidebar(false);
+    }
+    window.addEventListener('load', () => {
+      if (typeof window.hccScrollActiveSidebar === 'function') {
+        window.hccScrollActiveSidebar(false);
+      }
     });
 
     sidebar.querySelectorAll('.sidebar-nav a').forEach((a) => {

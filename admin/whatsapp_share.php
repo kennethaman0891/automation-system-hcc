@@ -974,9 +974,10 @@ if ($selectedRollsParam !== '') {
                     <div style="background:#fff;border-radius:16px;padding:24px;max-width:400px;width:100%;text-align:center;box-shadow:0 24px 60px rgba(0,0,0,0.35);position:relative;">
                         <button type="button" id="waLinkClose" aria-label="Close" style="position:absolute;top:10px;right:12px;background:none;border:none;font-size:1.5rem;line-height:1;color:#94a3b8;cursor:pointer;">&times;</button>
                         <h3 style="margin:0 0 6px;font-size:1.1rem;color:#0f172a;">Link your WhatsApp</h3>
-                        <p style="margin:0 0 14px;font-size:0.82rem;color:#64748b;">
-                            Phone &rarr; WhatsApp &rarr; <strong>Linked Devices</strong> &rarr; <strong>Link a Device</strong>
-                        </p>
+                        <div style="margin:0 0 14px;font-size:0.8rem;color:#64748b;line-height:1.45;">
+                            <div><strong>Option 1 (WhatsApp Scanner):</strong> WhatsApp &rarr; Linked Devices &rarr; Link a Device</div>
+                            <div style="margin-top:3px;"><strong>Option 2 (Phone Camera):</strong> Scan with Camera app &rarr; Tap link to open WhatsApp</div>
+                        </div>
                         <div style="width:260px;height:260px;margin:0 auto;display:flex;align-items:center;justify-content:center;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
                             <img id="waLinkQr" alt="WhatsApp QR code" style="width:248px;height:248px;display:none;">
                             <span id="waLinkSpin" style="color:#94a3b8;font-size:0.8rem;">Waiting for bridge QR&hellip;</span>
@@ -1053,9 +1054,17 @@ if ($selectedRollsParam !== '') {
                             if (!dismissed) overlay.style.display = 'flex';
 
                             var bridgeAlive = !!(s && (s.bridge_running || (sess && sess.bridge_running)));
+                            var isSyncing = !!((s && s.is_syncing) || (sess && sess.is_syncing));
 
                             var q = await fetch('api_whatsapp_session.php?action=qr', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return null; });
-                            if (q && q.success && q.qr_code) {
+                            if (q && q.is_syncing) isSyncing = true;
+
+                            if (isSyncing) {
+                                img.style.display = 'none';
+                                spin.style.display = 'inline';
+                                spin.innerHTML = '<span style="color:#0284c7;font-size:0.85rem;"><i class="fa-solid fa-circle-notch fa-spin"></i> Syncing with phone…</span>';
+                                statusEl.innerHTML = '<span style="color:#0284c7;font-weight:600;"><i class="fa-solid fa-spinner fa-spin"></i> QR scanned!</span> Linking device & organizing chats (keep WhatsApp open on your phone)…';
+                            } else if (q && q.success && q.qr_code) {
                                 if (q.qr_code !== lastQr) {
                                     lastQr = q.qr_code;
                                     img.src = q.qr_code;
@@ -1070,8 +1079,8 @@ if ($selectedRollsParam !== '') {
                                     spin.innerHTML = '<span style="color:#ef4444;font-size:0.85rem;"><i class="fa-solid fa-triangle-exclamation"></i> Bridge offline</span>';
                                     statusEl.innerHTML = '<span style="color:#ef4444;font-weight:600;">WhatsApp bridge is not running</span><br><span style="color:#64748b;font-size:0.75rem;">Start it to get a QR: run <code>./automation/start-bridge.sh</code> in Terminal, or double-click <code>automation/Start WhatsApp Bridge.command</code></span>';
                                 } else {
-                                    spin.innerHTML = 'Waiting for bridge QR&hellip;';
-                                    statusEl.innerHTML = '<span style="color:#f59e0b;">Waiting for bridge to generate a QR…</span>';
+                                    spin.innerHTML = '<span style="color:#0284c7;font-size:0.85rem;"><i class="fa-solid fa-circle-notch fa-spin"></i> Generating QR code&hellip;</span>';
+                                    statusEl.innerHTML = '<span style="color:#0284c7;font-weight:600;">Starting WhatsApp Web</span> — generating a fresh QR code…';
                                 }
                             }
                         } catch (e) { /* silent */ }

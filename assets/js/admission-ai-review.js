@@ -204,27 +204,53 @@
       list.innerHTML = '<div class="air-empty">No AI review drafts yet.</div>';
       return;
     }
-    list.innerHTML = res.data.map(d => `
-      <div class="air-draft-item" data-id="${d.id}">
-        <span class="air-badge ${esc(d.classification)}">${esc(d.classification)}</span>
-        <div>
-          <div class="name">${esc(d.question_summary || d.parent_name || 'Draft #' + d.id)}</div>
-          <div class="meta">${esc(d.status)} · chat ${d.chat_id || '—'} · ${esc(d.model_used || '')}</div>
+    list.innerHTML = res.data.map(d => {
+      const isSelected = selectedDraftId === d.id;
+      const classLabel = (d.classification || 'admission').replace(/_/g, ' ');
+      const statusLabel = (d.status || 'needs_review').replace(/_/g, ' ');
+      const statusClass = d.status === 'reviewed' ? 'ok' : (d.status === 'sent' ? 'ok' : 'warn');
+      const title = d.question_summary || d.parent_name || ('Draft #' + d.id);
+      return `
+        <div class="air-draft-item ${isSelected ? 'active' : ''}" data-id="${d.id}">
+          <div class="air-draft-top">
+            <span class="air-badge ${esc(d.classification)}">${esc(classLabel)}</span>
+            <span class="air-status-pill air-status-micro ${statusClass}">${esc(statusLabel)}</span>
+            <span class="air-draft-id">#${d.id}</span>
+          </div>
+          <div class="air-draft-title">${esc(title)}</div>
+          <div class="air-draft-meta">
+            <span><i class="fa-brands fa-whatsapp" style="color:#25d366;margin-right:4px;"></i>Chat #${d.chat_id || '—'}</span>
+            <span class="air-meta-dot">•</span>
+            <span><i class="fa-solid fa-microchip" style="color:#6366f1;margin-right:4px;"></i>${esc(d.model_used || 'local AI')}</span>
+          </div>
         </div>
-        <div class="meta">#${d.id}</div>
-      </div>
-    `).join('');
+      `;
+    }).join('');
+
     $all('.air-draft-item', list).forEach(el => {
       el.addEventListener('click', async () => {
         selectedDraftId = parseInt(el.getAttribute('data-id'), 10);
+        $all('.air-draft-item', list).forEach(item => item.classList.remove('active'));
+        el.classList.add('active');
         const res = await call('get_draft', { id: selectedDraftId }, 'GET');
         if (res && res.success) renderDraft(res.data);
       });
     });
+
+    // Auto-select the first draft if none is currently selected
+    if (!selectedDraftId && res.data.length > 0) {
+      selectedDraftId = res.data[0].id;
+      const firstEl = list.querySelector(`.air-draft-item[data-id="${selectedDraftId}"]`);
+      if (firstEl) firstEl.classList.add('active');
+      renderDraft(res.data[0]);
+    }
   }
 
   function renderDraft(d) {
     selectedDraftId = d.id;
+    $all('.air-draft-item').forEach(el => {
+      el.classList.toggle('active', parseInt(el.getAttribute('data-id'), 10) === d.id);
+    });
     $('#airDraftEditor').style.display = 'block';
     $('#airDraftEmpty').style.display = 'none';
     $('#airClassBadge').className = 'air-badge ' + d.classification;
@@ -443,11 +469,36 @@
     });
   }
 
+  let lastInboundCount = -1;
+  let lastInboundTs = 0;
+  let lastBridgeState = null;
+
+  async function pollAirBackground() {
+    if (!$('#airSection')) return;
+    try {
+      const res = await refreshHealth();
+      if (!res) return;
+      const inboundCount = res.inbound_message_count || 0;
+      const inboundTs = res.latest_inbound_ts || 0;
+      const isLinked = !!res.bridge_connected;
+      const countChanged = lastInboundCount !== -1 && inboundCount !== lastInboundCount;
+      const tsChanged = lastInboundTs > 0 && inboundTs !== lastInboundTs;
+      const linkChanged = lastBridgeState !== null && isLinked !== lastBridgeState;
+      if (countChanged || tsChanged || linkChanged) {
+        await loadChats();
+      }
+      lastInboundCount = inboundCount;
+      lastInboundTs = inboundTs;
+      lastBridgeState = isLinked;
+    } catch (e) {}
+  }
+
   document.addEventListener('DOMContentLoaded', async () => {
     if (!$('#airSection')) return;
     bind();
     await refreshHealth();
     await loadChats();
     await loadDrafts();
+    setInterval(pollAirBackground, 3000);
   });
 })();

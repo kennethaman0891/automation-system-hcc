@@ -145,8 +145,9 @@ try {
             }
 
             // ── Automatically sync with Admission Enquiries & Follow-ups Pipeline ──
-            // Previews are not synced; the real message syncs when the chat is read.
-            if (empty($msg['from_me']) && !$isPreviewOnly) {
+            // Incoming individual messages (including previews captured from the chat list)
+            // must sync immediately so prospective parent enquiries are never dropped or delayed.
+            if (empty($msg['from_me'])) {
                 try {
                     $db->exec('SAVEPOINT wa_enq_sync');
                     waSyncInboundAdmissionEnquiry($db, $msg, $chatId, $senderId, $waChatId, $chatType);
@@ -230,7 +231,7 @@ function waPhoneOnSchoolRoster(PDO $db, string $phone10): bool {
 
 function waMessageHasAdmissionIntent(string $body): bool {
     $text = mb_strtolower($body);
-    if (preg_match('/\b(admissions?|fees?|nursery|lkg|ukg|prospectus|brochure|vacancy|vacant|seats?|apply|application|registration|register)\b/u', $text)) {
+    if (preg_match('/\b(admissions?|admit|pravesh|dakhila|fees?|cost|charges|nursery|lkg|ukg|playgroup|kindergarten|pre-kg|prospectus|brochure|form|forms|vacancy|vacant|seats?|available|open|apply|application|registration|register|enrol|enroll|enrollment|enrolment|joining|join|visit|tour|appointment|meeting|principal|office|timings?|syllabus|curriculum|board|cbse|state|inquiry|inquiries|enquiry|enquiries)\b/u', $text)) {
         return true;
     }
     if (preg_match('/\b(class|standard|std|grade)\s*([0-9]{1,2}|i{1,3}|iv|vi{0,3}|ix|x|xi|xii|nursery|lkg|ukg)\b/u', $text)) {

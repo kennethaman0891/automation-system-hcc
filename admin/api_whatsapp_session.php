@@ -30,6 +30,9 @@ function waEnsureSessionIngestColumns(PDO $db): void {
     if (!in_array('last_skip_note', $cols, true)) {
         $db->exec('ALTER TABLE whatsapp_sessions ADD COLUMN last_skip_note VARCHAR(255) NULL DEFAULT NULL');
     }
+    if (!in_array('is_syncing', $cols, true)) {
+        $db->exec('ALTER TABLE whatsapp_sessions ADD COLUMN is_syncing TINYINT(1) NOT NULL DEFAULT 0');
+    }
     $ready = true;
 }
 
@@ -42,13 +45,15 @@ switch ($action) {
         $session = $stmt->fetch(PDO::FETCH_ASSOC);
 
         $lastPollTs = !empty($session['last_poll_at']) ? strtotime($session['last_poll_at']) : 0;
-        $isBridgeRunning = (time() - $lastPollTs) < 45;
+        $isBridgeRunning = (time() - $lastPollTs) < 90;
         $qrExpiresTs = !empty($session['qr_expires_at']) ? strtotime($session['qr_expires_at']) : 0;
         $isQrValid = !empty($session['qr_code']) && ($qrExpiresTs > time());
+        $isSyncing = !empty($session['is_syncing']);
 
         waJsonResponse([
             'success' => true,
             'bridge_running' => $isBridgeRunning,
+            'is_syncing' => $isSyncing,
             'session' => $session ? [
                 'id' => (int)$session['id'],
                 'is_connected' => (bool)$session['is_connected'],
@@ -60,6 +65,7 @@ switch ($action) {
                 'qr_expires_at' => $session['qr_expires_at'],
                 'qr_valid' => $isQrValid,
                 'bridge_running' => $isBridgeRunning,
+                'is_syncing' => $isSyncing,
                 'last_ingest_at' => $session['last_ingest_at'] ?? null,
                 'last_skip_note' => $session['last_skip_note'] ?? null
             ] : null
@@ -67,24 +73,26 @@ switch ($action) {
         break;
         
     case 'qr':
-        $stmt = $db->prepare("SELECT qr_code, qr_expires_at, last_poll_at FROM whatsapp_sessions WHERE session_name = 'default'");
+        $stmt = $db->prepare("SELECT qr_code, qr_expires_at, last_poll_at, is_syncing FROM whatsapp_sessions WHERE session_name = 'default'");
         $stmt->execute();
         $session = $stmt->fetch(PDO::FETCH_ASSOC);
 
         $lastPollTs = !empty($session['last_poll_at']) ? strtotime($session['last_poll_at']) : 0;
-        $isBridgeRunning = (time() - $lastPollTs) < 45;
+        $isBridgeRunning = (time() - $lastPollTs) < 90;
         $qrExpiresTs = !empty($session['qr_expires_at']) ? strtotime($session['qr_expires_at']) : 0;
         $isQrValid = !empty($session['qr_code']) && ($qrExpiresTs > time());
+        $isSyncing = !empty($session['is_syncing']);
 
         if ($session && $isQrValid) {
             waJsonResponse([
                 'success' => true,
                 'bridge_running' => $isBridgeRunning,
+                'is_syncing' => $isSyncing,
                 'qr_code' => $session['qr_code'],
                 'expires_at' => $session['qr_expires_at']
             ]);
         } else {
-            if ($isBridgeRunning) {
+            if ($isBridgeRunning && !$isSyncing) {
                 $tmpDir = getenv('WHATSAPP_IPC_DIR');
                 if (!$tmpDir || !is_dir($tmpDir)) {
                     $tmpDir = (DIRECTORY_SEPARATOR !== '\\' && is_dir('/tmp')) ? '/tmp' : sys_get_temp_dir();
@@ -99,8 +107,9 @@ switch ($action) {
             waJsonResponse([
                 'success' => false,
                 'bridge_running' => $isBridgeRunning,
-                'error' => $isBridgeRunning ? 'No valid QR code. Refresh requested.' : 'WhatsApp bridge is offline.',
-                'action' => 'refresh_qr'
+                'is_syncing' => $isSyncing,
+                'error' => $isSyncing ? 'QR scanned. Synchronizing chats with phone...' : ($isBridgeRunning ? 'No valid QR code. Refresh requested.' : 'WhatsApp bridge is offline.'),
+                'action' => $isSyncing ? 'syncing' : 'refresh_qr'
             ], $isBridgeRunning ? 404 : 503);
         }
         break;
@@ -134,6 +143,7 @@ switch ($action) {
                     platform = VALUES(platform),
                     cookies = VALUES(cookies),
                     local_storage = VALUES(local_storage),
+                    is_syncing = 0,
                     updated_at = NOW()";
 
         $stmt = $db->prepare($sql);
@@ -181,6 +191,10 @@ switch ($action) {
             $note = $payload['last_skip_note'];
             $sets[] = 'last_skip_note = ?';
             $params[] = ($note === null || $note === '') ? null : mb_substr((string)$note, 0, 255);
+        }
+        if (isset($payload['is_syncing'])) {
+            $sets[] = 'is_syncing = ?';
+            $params[] = !empty($payload['is_syncing']) ? 1 : 0;
         }
         $db->prepare('UPDATE whatsapp_sessions SET ' . implode(', ', $sets) . " WHERE session_name = 'default'")
            ->execute($params);

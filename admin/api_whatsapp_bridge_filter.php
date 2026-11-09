@@ -144,7 +144,8 @@ $admissionKeywords = [
     'enquiry', 'inquiry', 'apply', 'application', 'form', 'prospectus', 'brochure',
     'age criteria', 'age limit', 'vacancy', 'vacant', 'seat', 'seats', 'available', 'open',
     'syllabus', 'uniform', 'interaction', 'interview', 'registration', 'register',
-    'hello', 'hi', 'namaste', 'good morning', 'good afternoon', 'inquire', 'admit'
+    'hello', 'hi', 'namaste', 'good morning', 'good afternoon', 'good evening', 'inquire', 'admit',
+    'test', 'testing', 'ping', 'hey', 'ok', 'okay', 'help', 'info', 'query', 'question', 'details'
 ];
 
 waJsonResponse([

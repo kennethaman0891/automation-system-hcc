@@ -5495,7 +5495,7 @@ class WaApp extends HTMLElement {
       const linked = !!(sess && sess.is_connected);
       badge.classList.toggle('is-linked', linked);
       badge.classList.toggle('is-unlinked', known && !linked);
-      text.textContent = !known ? 'Checking…' : (linked ? 'Connected' : (sess.bridge_running === false ? 'Bridge offline' : 'Not linked'));
+      text.textContent = !known ? 'Checking…' : (linked ? 'Connected' : (sess.is_syncing ? 'Syncing…' : (sess.bridge_running === false ? 'Bridge offline' : 'Not linked')));
       const phone = sess && sess.phone_number ? String(sess.phone_number) : '';
       badge.title = linked ? ('WhatsApp linked' + (phone ? ' · ' + phone : '')) : (known ? 'WhatsApp is not linked — scan the QR' : 'Checking WhatsApp link…');
       if (linked) {
@@ -5527,7 +5527,8 @@ class WaApp extends HTMLElement {
         thumb.style.display = 'none';
         btn.classList.add('no-thumb');
         const running = !!(sess && sess.bridge_running);
-        label.textContent = running ? 'Waiting for QR…' : 'Bridge offline — start it for QR';
+        const syncing = !!(sess && sess.is_syncing);
+        label.textContent = syncing ? 'Syncing with phone…' : (running ? 'Waiting for QR…' : 'Bridge offline — start it for QR');
         btn.title = running
           ? 'The WhatsApp bridge is running and preparing a QR code'
           : 'WhatsApp bridge is offline — start it on this Mac (automation/start-bridge.sh) to get a QR';
