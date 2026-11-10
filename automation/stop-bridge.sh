@@ -19,7 +19,8 @@ fi
 pkill -f "node whatsapp-bridge.js" 2>/dev/null || true
 # Only Chrome tied to this project's session dir
 ps aux | awk '/\.whatsapp-session/ && !/awk/ {print $2}' | while read -r pid; do
-  kill "$pid" 2>/dev/null || true
+  [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+  [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
 done
 echo "[stop] $(date) bridge stopped" >> "$LOG"
 echo "Bridge stopped."

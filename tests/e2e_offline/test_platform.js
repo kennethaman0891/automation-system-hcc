@@ -68,6 +68,18 @@ try {
 }
 t('P16', 'plist lint (plutil or structural)', plutilOk || (/Label/.test(plist) && /ProgramArguments/.test(plist)), plutilDetail);
 
+// Isolation from system Google Chrome on macOS
+const resolvedChrome = WhatsAppBridge.findChrome();
+if (process.platform === 'darwin') {
+  t('P17', 'macOS does not default to system Google Chrome.app', resolvedChrome !== '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', resolvedChrome);
+  t('P18', 'macOS prefers isolated browser or Chrome for Testing', !resolvedChrome || resolvedChrome.includes('Google Chrome for Testing') || resolvedChrome.includes('Chromium'), resolvedChrome);
+} else {
+  t('P17', 'platform findChrome returned string or null', resolvedChrome === null || typeof resolvedChrome === 'string');
+}
+
+// Explicit path parameter test (using process.execPath which is guaranteed to exist)
+t('P19', 'findChrome respects explicit path', WhatsAppBridge.findChrome(process.execPath) === process.execPath);
+
 const failed = results.filter(r => !r.ok).length;
 const out = { suite: 'platform', passed: results.length - failed, failed, results };
 fs.writeFileSync(path.join(__dirname, 'results', 'platform.json'), JSON.stringify(out, null, 2));

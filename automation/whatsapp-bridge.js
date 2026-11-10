@@ -19,11 +19,28 @@ const mime = require('mime-types');
 
 /**
  * Cross-platform detection of Chrome or Chromium executable.
- * Checks: explicit path -> CHROME_PATH env -> platform standard paths -> Puppeteer cache.
+ *
+ * CRITICAL (macOS Single-Instance Isolation):
+ * Never default to macOS's system `/Applications/Google Chrome.app` for headless
+ * automation. Doing so registers the system binary with LaunchServices in headless mode,
+ * preventing the user from opening their desktop Chrome GUI browser from the Dock.
+ *
+ * Resolution Order:
+ * 1. explicitPath parameter (if provided & exists)
+ * 2. CHROME_PATH environment variable (if provided & exists)
+ * 3. Puppeteer's dedicated browser (`puppeteer.executablePath()`, e.g. "Google Chrome for Testing")
+ * 4. Standalone Chromium / Edge binaries that do NOT share bundle ID with desktop Chrome
+ * 5. Platform-specific fallbacks (Windows / Linux standard paths)
  */
 function findChrome(explicitPath) {
   if (explicitPath && fs.existsSync(explicitPath)) return explicitPath;
   if (process.env.CHROME_PATH && fs.existsSync(process.env.CHROME_PATH)) return process.env.CHROME_PATH;
+
+  // 1. Prefer Puppeteer's dedicated, isolated Chrome for Testing binary
+  try {
+    const pPath = puppeteer.executablePath ? puppeteer.executablePath() : null;
+    if (pPath && fs.existsSync(pPath)) return pPath;
+  } catch (e) {}
 
   let candidates = [];
   if (process.platform === 'win32') {
@@ -40,19 +57,20 @@ function findChrome(explicitPath) {
       path.join(progFiles, 'Microsoft', 'Edge', 'Application', 'msedge.exe')
     ].filter(Boolean);
   } else if (process.platform === 'darwin') {
+    // macOS: Use standalone Chromium or Microsoft Edge first.
+    // Explicitly exclude /Applications/Google Chrome.app to prevent hijacking user's primary desktop GUI browser.
     candidates = [
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      path.join(os.homedir(), 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome'),
       '/Applications/Chromium.app/Contents/MacOS/Chromium',
+      path.join(os.homedir(), 'Applications', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
       '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'
     ];
   } else {
     candidates = [
-      '/usr/bin/google-chrome',
-      '/usr/bin/google-chrome-stable',
       '/usr/bin/chromium',
       '/usr/bin/chromium-browser',
-      '/snap/bin/chromium'
+      '/snap/bin/chromium',
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable'
     ];
   }
 
@@ -60,10 +78,11 @@ function findChrome(explicitPath) {
     if (fs.existsSync(c)) return c;
   }
 
-  try {
-    const pPath = puppeteer.executablePath ? puppeteer.executablePath() : null;
-    if (pPath && fs.existsSync(pPath)) return pPath;
-  } catch (e) {}
+  // Only use macOS desktop Google Chrome if explicitly permitted via env var
+  if (process.platform === 'darwin' && process.env.ALLOW_SYSTEM_CHROME === '1') {
+    const sysChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    if (fs.existsSync(sysChrome)) return sysChrome;
+  }
 
   return null;
 }
@@ -491,6 +510,16 @@ this.browser = null;
 
       if (!this.config.executablePath) {
         this.config.executablePath = findChrome();
+      }
+      if (!this.config.executablePath && process.platform === 'darwin') {
+        this.log('warn', 'Puppeteer browser not found. Installing Chrome for Testing...');
+        try {
+          const { execSync } = require('child_process');
+          execSync('npx puppeteer install chrome', { stdio: 'inherit', cwd: __dirname });
+          this.config.executablePath = findChrome();
+        } catch (err) {
+          this.log('error', `Failed to auto-install Chrome for Testing: ${err.message}`);
+        }
       }
       if (this.config.executablePath) {
         this.log('info', `Using Chrome executable: ${this.config.executablePath}`);

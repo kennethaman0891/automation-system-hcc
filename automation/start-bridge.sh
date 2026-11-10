@@ -46,8 +46,19 @@ if [ -e "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
   exit 0
 fi
 
+# Clean up any leftover Chrome instances bound to this project's session
+ps aux | awk '/\.whatsapp-session/ && !/awk/ {print $2}' | while read -r pid; do
+  [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
+done
+
 # Clear stale Chrome singleton locks from a previous crash
 rm -f .whatsapp-session/SingletonLock       .whatsapp-session/SingletonSocket       .whatsapp-session/SingletonCookie       .whatsapp-session/lockfile 2>/dev/null
+
+# Ensure isolated Puppeteer Chrome is available
+if ! "$NODE_BIN" -e "const p = require('puppeteer'); if (!require('fs').existsSync(p.executablePath())) process.exit(1);" 2>/dev/null; then
+  echo "[start] Puppeteer Chrome missing, installing..." >> "$LOG"
+  npx puppeteer install chrome >> "$LOG" 2>&1 || true
+fi
 
 if [[ "${1:-}" == "--foreground" ]] || [[ "${FOREGROUND:-0}" == "1" ]]; then
   echo "[start] $(date) starting bridge (supervised foreground)" >> "$LOG"

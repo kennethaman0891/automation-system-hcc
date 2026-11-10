@@ -199,7 +199,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const layout = document.querySelector('.admin-layout');
 
   const syncToggles = (expanded) => {
-    sidebarToggles.forEach((b) => b.setAttribute('aria-expanded', expanded ? 'true' : 'false'));
+    sidebarToggles.forEach((b) => {
+      b.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+      b.setAttribute('title', expanded ? 'Collapse sidebar' : 'Expand sidebar');
+    });
   };
 
   if (sidebarToggles.length && sidebar) {
@@ -213,6 +216,12 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     };
 
+    // Initialize toggle state on page load
+    if (!isMobile() && layout) {
+      const isCollapsed = layout.classList.contains('sidebar-collapsed');
+      syncToggles(!isCollapsed);
+    }
+
     sidebarToggles.forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -221,6 +230,14 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (layout) {
           const collapsed = layout.classList.toggle('sidebar-collapsed');
           syncToggles(!collapsed);
+          try {
+            if (collapsed) {
+              localStorage.setItem('hcc_sidebar_collapsed', '1');
+            } else {
+              localStorage.removeItem('hcc_sidebar_collapsed');
+            }
+          } catch (err) {}
+          if (hideRailTooltip) hideRailTooltip();
         }
       });
     });
@@ -239,6 +256,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (typeof window.hccScrollActiveSidebar === 'function') {
         window.hccScrollActiveSidebar(false);
       }
+      if (hideRailTooltip) hideRailTooltip();
     });
 
     // Auto-scroll active sidebar item into view upon full document/asset load
@@ -256,6 +274,93 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isMobile()) closeSidebar();
       });
     });
+
+    /* ── 1.1 Floating Tooltip Engine for Collapsed Icons Rail ── */
+    let railTooltip = document.getElementById('sidebarRailTooltip');
+    if (!railTooltip) {
+      railTooltip = document.createElement('div');
+      railTooltip.id = 'sidebarRailTooltip';
+      railTooltip.className = 'sidebar-rail-tooltip';
+      railTooltip.setAttribute('role', 'tooltip');
+      railTooltip.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(railTooltip);
+    }
+
+    var hideRailTooltip = () => {
+      if (railTooltip) {
+        railTooltip.classList.remove('visible');
+        railTooltip.setAttribute('aria-hidden', 'true');
+      }
+    };
+
+    var showRailTooltip = (el) => {
+      if (!layout || !layout.classList.contains('sidebar-collapsed') || window.innerWidth <= 1024) {
+        hideRailTooltip();
+        return;
+      }
+      const label = el.getAttribute('data-tooltip') || el.querySelector('span')?.textContent?.trim();
+      if (!label) {
+        hideRailTooltip();
+        return;
+      }
+      const badge = el.getAttribute('data-badge') || el.querySelector('.sidebar-badge')?.textContent?.trim();
+
+      railTooltip.innerHTML = '';
+      const textNode = document.createElement('span');
+      textNode.textContent = label;
+      railTooltip.appendChild(textNode);
+
+      if (badge) {
+        const badgeNode = document.createElement('span');
+        badgeNode.className = 'sidebar-rail-tooltip-badge badge-' + badge.toLowerCase();
+        badgeNode.textContent = badge;
+        railTooltip.appendChild(badgeNode);
+      }
+
+      const rect = el.getBoundingClientRect();
+      railTooltip.style.top = '0px';
+      railTooltip.style.left = '0px';
+      railTooltip.classList.add('visible');
+      railTooltip.setAttribute('aria-hidden', 'false');
+
+      const tipHeight = railTooltip.offsetHeight;
+      const topPos = Math.round(rect.top + (rect.height / 2) - (tipHeight / 2));
+      const leftPos = Math.round(rect.right + 10);
+
+      railTooltip.style.top = Math.max(8, topPos) + 'px';
+      railTooltip.style.left = leftPos + 'px';
+    };
+
+    sidebar.addEventListener('mouseenter', (e) => {
+      const target = e.target.closest('a, button');
+      if (target && sidebar.contains(target)) {
+        showRailTooltip(target);
+      }
+    }, true);
+
+    sidebar.addEventListener('mouseleave', (e) => {
+      const target = e.target.closest('a, button');
+      if (target) {
+        hideRailTooltip();
+      }
+    }, true);
+
+    sidebar.addEventListener('focusin', (e) => {
+      const target = e.target.closest('a, button');
+      if (target && sidebar.contains(target)) {
+        showRailTooltip(target);
+      }
+    }, true);
+
+    sidebar.addEventListener('focusout', () => {
+      hideRailTooltip();
+    }, true);
+
+    sidebar.addEventListener('click', () => {
+      hideRailTooltip();
+    });
+
+    window.addEventListener('scroll', hideRailTooltip, { passive: true });
   }
 
   /* ── 2. Custom CSS Logout Confirmation Modal Popup ── */

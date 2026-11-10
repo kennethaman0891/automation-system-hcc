@@ -27,8 +27,13 @@ async function render() {
   console.log(`Audio: ${audioPath}`);
   console.log(`Output: ${outVideoPath}`);
 
-  const browser = await puppeteer.launch({
-    executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  let execPath = null;
+  try {
+    const WhatsAppBridge = require('../../automation/whatsapp-bridge');
+    execPath = WhatsAppBridge.findChrome();
+  } catch (e) {}
+
+  const launchOpts = {
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -45,7 +50,12 @@ async function render() {
       height: HEIGHT,
       deviceScaleFactor: 1
     }
-  });
+  };
+  if (execPath) {
+    launchOpts.executablePath = execPath;
+  }
+
+  const browser = await puppeteer.launch(launchOpts);
 
   const page = await browser.newPage();
   await page.goto(`file://${htmlPath}?render`, { waitUntil: 'networkidle0' });

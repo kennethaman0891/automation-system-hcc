@@ -1,13 +1,14 @@
 const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
+const WhatsAppBridge = require('./whatsapp-bridge');
 
 (async () => {
   const outDir = '/tmp/hcc-shots';
   fs.mkdirSync(outDir, { recursive: true });
   const browser = await puppeteer.launch({
     headless: true,
-    executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    executablePath: WhatsAppBridge.findChrome(),
     args: ['--no-sandbox', '--window-size=1400,900']
   });
   const page = await browser.newPage();

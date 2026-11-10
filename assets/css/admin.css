@@ -43,8 +43,9 @@
   --shadow-lg:    0 16px 40px rgba(42,16,24,0.14);
 
   /* Layout */
-  --sidebar-w:    264px;
-  --topbar-h:     68px;
+  --sidebar-w:            264px;
+  --sidebar-collapsed-w:  72px;
+  --topbar-h:             68px;
 }
 
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
@@ -66,6 +67,7 @@ img { max-width: 100%; }
   display: flex;
   flex-direction: column;
   min-width: 0;
+  transition: margin-left 0.26s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ============================================================
@@ -85,7 +87,8 @@ img { max-width: 100%; }
   left: 0;
   z-index: 100;
   border-right: 1px solid rgba(255,255,255,0.06);
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: width 0.26s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow-x: hidden;
 }
 
 /* Brand block */
@@ -992,11 +995,9 @@ body.hcc-confirm-open {
   color: var(--gold-ink);
 }
 
-/* Header hamburger: hidden on desktop while sidebar is open (the
-   in-sidebar hamburger handles collapse); appears when collapsed
-   as the reopen path. Always visible on mobile. */
+/* Header hamburger: primary sidebar toggle button on desktop and mobile */
 .sidebar-toggle {
-  display: none;
+  display: inline-flex;
   width: 40px;
   height: 40px;
   flex-shrink: 0;
@@ -1023,12 +1024,223 @@ body.hcc-confirm-open {
 }
 .sidebar-overlay.active { display: block; }
 
-/* Desktop sidebar collapse via in-sidebar hamburger (mobile uses .open instead) */
+/* Desktop sidebar collapse: transforms into compact Icons Panel (Rail) */
 @media (min-width: 1025px) {
-  .admin-layout.sidebar-collapsed .admin-sidebar { transform: translateX(-100%); }
-  .admin-layout.sidebar-collapsed .admin-main { margin-left: 0; }
-  .admin-layout.sidebar-collapsed .sidebar-toggle { display: inline-flex; }
+  .admin-layout.sidebar-collapsed .admin-sidebar {
+    width: var(--sidebar-collapsed-w);
+    transform: translateX(0);
+    box-shadow: 4px 0 24px rgba(0,0,0,0.18);
+  }
+  .admin-layout.sidebar-collapsed .admin-main {
+    margin-left: var(--sidebar-collapsed-w);
+  }
+  .admin-layout.sidebar-collapsed .sidebar-toggle {
+    display: inline-flex;
+  }
+
+  /* 1. Brand in Icons Rail */
+  .admin-layout.sidebar-collapsed .sidebar-brand {
+    padding: 14px 6px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .admin-layout.sidebar-collapsed .sidebar-brand-main {
+    justify-content: center;
+    flex: 0 0 auto;
+    margin: 0 auto;
+  }
+  .admin-layout.sidebar-collapsed .sidebar-brand img {
+    width: 38px;
+    height: 38px;
+    margin: 0 auto;
+  }
+  .admin-layout.sidebar-collapsed .sidebar-brand-text {
+    display: none !important;
+  }
+
+  /* 2. Section divider in Icons Rail */
+  .admin-layout.sidebar-collapsed .sidebar-nav {
+    padding: 10px 6px;
+  }
+  .admin-layout.sidebar-collapsed .sidebar-label {
+    margin: 10px 8px;
+    height: 1px;
+    padding: 0;
+    font-size: 0;
+    background: rgba(255, 255, 255, 0.1);
+    text-indent: -9999px;
+    overflow: hidden;
+  }
+  .admin-layout.sidebar-collapsed .sidebar-label:first-child {
+    display: none;
+  }
+
+  /* 3. Navigation Links in Icons Rail */
+  .admin-layout.sidebar-collapsed .sidebar-nav a {
+    width: 48px;
+    height: 44px;
+    margin: 0 auto 6px auto;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    gap: 0;
+    position: relative;
+    border: 1px solid transparent;
+  }
+  .admin-layout.sidebar-collapsed .sidebar-nav a span {
+    display: none !important;
+  }
+  .admin-layout.sidebar-collapsed .sidebar-nav a i {
+    font-size: 1.18rem;
+    width: auto;
+    margin: 0;
+    color: rgba(255,255,255,0.72);
+    transition: transform 0.18s ease, color 0.18s ease;
+  }
+  .admin-layout.sidebar-collapsed .sidebar-nav a:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    transform: scale(1.06);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  }
+  .admin-layout.sidebar-collapsed .sidebar-nav a:hover i {
+    color: var(--gold-light);
+  }
+  .admin-layout.sidebar-collapsed .sidebar-nav a.active {
+    background: linear-gradient(135deg, rgba(201,162,39,0.28) 0%, rgba(122,34,56,0.5) 100%);
+    border-color: rgba(201,162,39,0.45);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.25), inset 0 0 0 1px rgba(255,255,255,0.12);
+  }
+  .admin-layout.sidebar-collapsed .sidebar-nav a.active::before {
+    display: none;
+  }
+  .admin-layout.sidebar-collapsed .sidebar-nav a.active i {
+    color: var(--gold-light);
+    text-shadow: 0 0 8px rgba(201,162,39,0.5);
+  }
+
+  /* 4. Badge Dots in Icons Rail */
+  .admin-layout.sidebar-collapsed .sidebar-nav a[data-badge]::after {
+    content: '';
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--gold);
+    box-shadow: 0 0 0 2px var(--brand-dark);
+  }
+  .admin-layout.sidebar-collapsed .sidebar-nav a[data-badge="Live"]::after { background: #25D366; }
+  .admin-layout.sidebar-collapsed .sidebar-nav a[data-badge="CRM"]::after { background: #10b981; }
+  .admin-layout.sidebar-collapsed .sidebar-nav a[data-badge="Pipeline"]::after { background: #0ea5e9; }
+  .admin-layout.sidebar-collapsed .sidebar-nav a[data-badge="Drive"]::after { background: #4285F4; }
+  .admin-layout.sidebar-collapsed .sidebar-nav a[data-badge="Vault"]::after { background: #f59e0b; }
+  .admin-layout.sidebar-collapsed .sidebar-nav a[data-badge="Fast"]::after { background: #fbbf24; }
+  .admin-layout.sidebar-collapsed .sidebar-nav a[data-badge="Builder"]::after { background: var(--gold); }
+
+  /* 5. Footer in Icons Rail */
+  .admin-layout.sidebar-collapsed .sidebar-footer {
+    padding: 12px 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+  }
+  .admin-layout.sidebar-collapsed .sidebar-security,
+  .admin-layout.sidebar-collapsed .sidebar-logout {
+    width: 48px;
+    height: 44px;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+  }
+  .admin-layout.sidebar-collapsed .sidebar-security span,
+  .admin-layout.sidebar-collapsed .sidebar-logout span {
+    display: none !important;
+  }
+  .admin-layout.sidebar-collapsed .sidebar-security i,
+  .admin-layout.sidebar-collapsed .sidebar-logout i {
+    font-size: 1.15rem;
+    width: auto;
+    margin: 0;
+  }
+  .admin-layout.sidebar-collapsed .sidebar-security:hover,
+  .admin-layout.sidebar-collapsed .sidebar-logout:hover {
+    transform: scale(1.06);
+  }
 }
+
+/* ============================================================
+   SIDEBAR RAIL FLOATING TOOLTIP
+   ============================================================ */
+.sidebar-rail-tooltip {
+  position: fixed;
+  z-index: 99999;
+  pointer-events: none;
+  background: rgba(30, 10, 16, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(201, 162, 39, 0.4);
+  box-shadow: 0 10px 28px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.25);
+  border-radius: 8px;
+  padding: 6px 12px;
+  color: #ffffff;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(-6px);
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: inherit;
+  line-height: 1.35;
+}
+.sidebar-rail-tooltip.visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(0);
+}
+.sidebar-rail-tooltip::before {
+  content: '';
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  border-width: 5px;
+  border-style: solid;
+  border-color: transparent rgba(201, 162, 39, 0.4) transparent transparent;
+}
+.sidebar-rail-tooltip-badge {
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 1px 7px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(201,162,39,0.22);
+  color: var(--gold-light);
+  border: 1px solid rgba(201,162,39,0.4);
+}
+.sidebar-rail-tooltip-badge.badge-live { background: rgba(37,211,102,0.2); color: #4ade80; border-color: rgba(37,211,102,0.4); }
+.sidebar-rail-tooltip-badge.badge-crm { background: rgba(16,185,129,0.2); color: #34d399; border-color: rgba(16,185,129,0.4); }
+.sidebar-rail-tooltip-badge.badge-pipeline { background: rgba(14,165,233,0.2); color: #38bdf8; border-color: rgba(14,165,233,0.4); }
+.sidebar-rail-tooltip-badge.badge-drive { background: rgba(66,133,244,0.2); color: #60a5fa; border-color: rgba(66,133,244,0.4); }
+.sidebar-rail-tooltip-badge.badge-vault { background: rgba(245,158,11,0.2); color: #fbbf24; border-color: rgba(245,158,11,0.4); }
+.sidebar-rail-tooltip-badge.badge-fast { background: rgba(245,158,11,0.2); color: #fbbf24; border-color: rgba(245,158,11,0.4); }
+.sidebar-rail-tooltip-badge.badge-builder { background: rgba(201,162,39,0.22); color: var(--gold-light); border-color: rgba(201,162,39,0.4); }
+
 @media (max-width: 1024px) {
   .sidebar-collapse { display: inline-flex; }
 }
