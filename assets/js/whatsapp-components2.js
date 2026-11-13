@@ -4085,7 +4085,7 @@ class WaQrModal extends HTMLElement {
       if (!qr && sessInfo && sessInfo.bridge_running === false) {
         this._lastQr = '';
         imgBox.textContent = 'Bridge offline';
-        statusEl.textContent = 'WhatsApp bridge is offline — start it to get a QR. On this Mac run: automation/start-bridge.sh (or double-click automation/Start WhatsApp Bridge.command). The QR appears here automatically.';
+        statusEl.textContent = 'WhatsApp bridge is offline. It restarts on its own on this Mac. The QR appears here when it is ready.';
         statusEl.style.color = '#b45309';
         return;
       }
@@ -4663,7 +4663,9 @@ class WaEnquiryDrawer extends HTMLElement {
   }
 
   connectedCallback() {
-    this.render();
+    // No base render() exists on this component — show the empty state so the
+    // drawer is never blank if it is opened without going through open().
+    this.renderNoEnquiry();
   }
 
   async open(chat) {
@@ -5516,6 +5518,13 @@ class WaApp extends HTMLElement {
     };
 
     const applyQr = (qr, sess) => {
+      if (qrModal && qrModal.hasAttribute('open')) {
+        thumb.style.display = 'none';
+        btn.classList.add('no-thumb');
+        label.textContent = 'Scan the QR in the window';
+        btn.title = 'One QR is already open. Scan that code.';
+        return;
+      }
       if (qr && typeof qr === 'string' && /^data:image\//.test(qr)) {
         if (qr !== lastQr) { lastQr = qr; thumb.src = qr; }   // only swap when changed (no flicker)
         thumb.style.display = 'block';
@@ -5528,10 +5537,10 @@ class WaApp extends HTMLElement {
         btn.classList.add('no-thumb');
         const running = !!(sess && sess.bridge_running);
         const syncing = !!(sess && sess.is_syncing);
-        label.textContent = syncing ? 'Syncing with phone…' : (running ? 'Waiting for QR…' : 'Bridge offline — start it for QR');
+        label.textContent = syncing ? 'Syncing with phone…' : (running ? 'Waiting for QR…' : 'Bridge offline — restarting');
         btn.title = running
           ? 'The WhatsApp bridge is running and preparing a QR code'
-          : 'WhatsApp bridge is offline — start it on this Mac (automation/start-bridge.sh) to get a QR';
+          : 'WhatsApp bridge is offline. It restarts on its own. The QR will show here.';
       }
     };
 
@@ -5543,9 +5552,13 @@ class WaApp extends HTMLElement {
       try {
         const sess = await store.loadSession();
         const linked = applyStatus(sess || { is_connected: false });
-        if (!linked) {
+        const onScreen = this.getClientRects().length > 0;
+        const modalOpen = !!(qrModal && qrModal.hasAttribute('open'));
+        if (!linked && onScreen && !modalOpen) {
           const qr = await store.getQR();   // read-only GET; never triggers refresh_qr
           applyQr(qr, sess);
+        } else if (!linked && modalOpen) {
+          applyQr(null, sess);
         }
       } catch (e) {
         applyStatus(null);
@@ -5658,7 +5671,7 @@ class WaApp extends HTMLElement {
         const linked = !!(sess && sess.is_connected);
         // Always refresh the chat list from the API (works offline of WhatsApp Web).
         await this.store.loadChats(true);
-        if (!linked) qrModal?.open();
+        if (!linked && this.getClientRects().length) qrModal?.open();
       } catch (e) {
         console.warn('Pairing bootstrap failed', e);
         qrModal?.open();

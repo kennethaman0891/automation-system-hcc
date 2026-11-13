@@ -2,7 +2,8 @@
 /**
  * HCC Automation System — Google Drive Teacher Workspace & Staff Collaboration Hub
  * Allows teachers to view their personal Drive folder, access auto-filed academic work,
- * and share folders directly with other registered teachers in the school.
+ * link shared Google Drive folders directly (with or without OAuth), and collaborate
+ * with other registered teachers in the school.
  */
 
 $adminPage = 'shared_workspace';
@@ -28,20 +29,175 @@ if (!$currentUser) {
     exit;
 }
 
+// -------------------------------------------------------------------------
+// 1. HANDLE POST ACTIONS (Manual Link, Unlink, File Upload)
+// -------------------------------------------------------------------------
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!verifyCSRFToken()) {
+        $_SESSION['flash_error'] = 'Security validation failed. Please try again.';
+        header('Location: shared_workspace.php');
+        exit;
+    }
+
+    $action = trim($_POST['action'] ?? '');
+
+    // Action A: Save or Update Google Drive Folder URL manually
+    if ($action === 'save_folder') {
+        $folderUrlInput = trim($_POST['google_drive_folder_url'] ?? '');
+
+        if ($folderUrlInput === '') {
+            $_SESSION['flash_error'] = 'Please provide a valid Google Drive folder URL or ID.';
+            header('Location: shared_workspace.php');
+            exit;
+        }
+
+        // Extract folder ID from URL if full URL is supplied
+        $extractedId = '';
+        if (preg_match('/folders\/([a-zA-Z0-9_-]+)/', $folderUrlInput, $matches)) {
+            $extractedId = $matches[1];
+        } elseif (preg_match('/id=([a-zA-Z0-9_-]+)/', $folderUrlInput, $matches)) {
+            $extractedId = $matches[1];
+        } elseif (preg_match('/^[a-zA-Z0-9_-]{15,}$/', $folderUrlInput)) {
+            $extractedId = $folderUrlInput;
+        }
+
+        $cleanUrl = $extractedId ? "https://drive.google.com/drive/folders/{$extractedId}" : $folderUrlInput;
+        $folderId = $extractedId ?: substr(md5($cleanUrl), 0, 24);
+
+        // Subfolders
+        $subfolders = [
+            'marks'      => [
+                'name' => '01_Semester_Marksheets_and_Results',
+                'url'  => trim($_POST['subfolder_marks'] ?? '') ?: $cleanUrl
+            ],
+            'unit_tests' => [
+                'name' => '02_Unit_Tests_and_Exams',
+                'url'  => trim($_POST['subfolder_unit_tests'] ?? '') ?: $cleanUrl
+            ],
+            'analytics'  => [
+                'name' => '03_Class_Analytics_Reports',
+                'url'  => trim($_POST['subfolder_analytics'] ?? '') ?: $cleanUrl
+            ],
+            'reports'    => [
+                'name' => '04_Student_Report_Cards',
+                'url'  => trim($_POST['subfolder_reports'] ?? '') ?: $cleanUrl
+            ],
+        ];
+
+        try {
+            $upd = $db->prepare("UPDATE users SET google_drive_folder_id = ?, google_drive_folder_url = ?, google_drive_subfolders = ? WHERE id = ?");
+            $upd->execute([$folderId, $cleanUrl, json_encode($subfolders), $adminId]);
+
+            $_SESSION['google_drive_folder_id']  = $folderId;
+            $_SESSION['google_drive_folder_url'] = $cleanUrl;
+            $_SESSION['google_drive_subfolders'] = $subfolders;
+
+            rcLogAudit('workspace_drive_linked', 'workspace', "User {$currentUser['username']} linked Google Drive folder ({$cleanUrl})");
+            $_SESSION['flash_success'] = 'Google Drive workspace folder successfully updated and ready!';
+        } catch (\Throwable $e) {
+            error_log('Error updating Drive folder: ' . $e->getMessage());
+            $_SESSION['flash_error'] = 'Could not save Google Drive folder link to database.';
+        }
+
+        header('Location: shared_workspace.php');
+        exit;
+    }
+
+    // Action B: Unlink / Disconnect Workspace
+    if ($action === 'unlink_folder') {
+        try {
+            $upd = $db->prepare("UPDATE users SET google_drive_folder_id = NULL, google_drive_folder_url = NULL, google_drive_subfolders = NULL WHERE id = ?");
+            $upd->execute([$adminId]);
+
+            unset($_SESSION['google_drive_folder_id'], $_SESSION['google_drive_folder_url'], $_SESSION['google_drive_subfolders']);
+
+            // Optionally clear OAuth credentials if requested
+            if (!empty($_POST['clear_oauth'])) {
+                $db->prepare("UPDATE users SET google_id = NULL, google_avatar = NULL, google_refresh_token = NULL, auth_provider = 'local' WHERE id = ?")->execute([$adminId]);
+                unset($_SESSION['google_logged_in'], $_SESSION['google_access_token'], $_SESSION['google_avatar']);
+            }
+
+            rcLogAudit('workspace_drive_unlinked', 'workspace', "User {$currentUser['username']} unlinked Google Drive workspace.");
+            $_SESSION['flash_success'] = 'Google Drive workspace unlinked successfully.';
+        } catch (\Throwable $e) {
+            error_log('Error unlinking Drive folder: ' . $e->getMessage());
+            $_SESSION['flash_error'] = 'Failed to unlink workspace folder.';
+        }
+
+        header('Location: shared_workspace.php');
+        exit;
+    }
+
+    // Action C: Direct File Upload to Workspace
+    if ($action === 'upload_file') {
+        if (empty($_FILES['workspace_file']) || $_FILES['workspace_file']['error'] !== UPLOAD_ERR_OK) {
+            $_SESSION['flash_error'] = 'Please choose a valid file to upload.';
+            header('Location: shared_workspace.php');
+            exit;
+        }
+
+        $fileTmp  = $_FILES['workspace_file']['tmp_name'];
+        $origName = basename($_FILES['workspace_file']['name']);
+        $fileSize = $_FILES['workspace_file']['size'];
+        $category = in_array($_POST['file_category'] ?? '', ['marks', 'unit_tests', 'analytics', 'reports', 'general'], true) ? $_POST['file_category'] : 'general';
+
+        if ($fileSize > 25 * 1024 * 1024) {
+            $_SESSION['flash_error'] = 'File exceeds maximum upload size (25MB).';
+            header('Location: shared_workspace.php');
+            exit;
+        }
+
+        // Allowed extensions
+        $ext = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
+        $allowedExts = ['pdf', 'xlsx', 'xls', 'docx', 'doc', 'csv', 'png', 'jpg', 'jpeg', 'zip'];
+        if (!in_array($ext, $allowedExts, true)) {
+            $_SESSION['flash_error'] = 'File type not supported. Allowed: PDF, Excel, Word, CSV, ZIP, Images.';
+            header('Location: shared_workspace.php');
+            exit;
+        }
+
+        $safeName = preg_replace('/[^a-zA-Z0-9_\-\.]/', '_', $origName);
+        $safeName = time() . '_' . $safeName;
+
+        // Ensure storage directory
+        $targetDir = __DIR__ . '/../storage/workspace/' . $category;
+        if (!is_dir($targetDir)) {
+            @mkdir($targetDir, 0755, true);
+        }
+
+        $destPath = $targetDir . '/' . $safeName;
+        if (move_uploaded_file($fileTmp, $destPath)) {
+            rcLogAudit('workspace_file_uploaded', 'workspace', "User {$currentUser['username']} uploaded '{$origName}' to category {$category}");
+            $_SESSION['flash_success'] = "File '{$origName}' uploaded successfully to {$category} archive!";
+        } else {
+            $_SESSION['flash_error'] = 'Failed to save uploaded file to workspace storage.';
+        }
+
+        header('Location: shared_workspace.php');
+        exit;
+    }
+}
+
+// -------------------------------------------------------------------------
+// 2. RETRIEVE WORKSPACE & STAFF DATA
+// -------------------------------------------------------------------------
 $googleClient = new HCCGoogleDrive();
 $googleConfigured = $googleClient->isConfigured();
 
-// Fetch all other staff members for the sharing dropdown
-$staffStmt = $db->prepare("SELECT id, username, full_name, email, role, google_avatar, google_drive_folder_url FROM users WHERE id != ? ORDER BY full_name ASC");
+// Fetch all colleagues for the directory & sharing dropdown
+$staffStmt = $db->prepare("SELECT id, username, full_name, email, role, google_avatar, google_drive_folder_url, google_drive_folder_id FROM users WHERE id != ? ORDER BY full_name ASC");
 $staffStmt->execute([$adminId]);
 $colleagues = $staffStmt->fetchAll(PDO::FETCH_ASSOC);
 
-$isGoogleConnected = !empty($currentUser['google_id']) || !empty($_SESSION['google_logged_in']);
-$driveFolderId     = $currentUser['google_drive_folder_id'] ?? ($_SESSION['google_drive_folder_id'] ?? '');
-$driveFolderUrl    = $currentUser['google_drive_folder_url'] ?? ($_SESSION['google_drive_folder_url'] ?? '');
+$isGoogleOAuthConnected = !empty($currentUser['google_id']) || !empty($_SESSION['google_logged_in']);
+$driveFolderId          = $currentUser['google_drive_folder_id'] ?? ($_SESSION['google_drive_folder_id'] ?? '');
+$driveFolderUrl         = $currentUser['google_drive_folder_url'] ?? ($_SESSION['google_drive_folder_url'] ?? '');
+
 if ($driveFolderId && !$driveFolderUrl) {
     $driveFolderUrl = "https://drive.google.com/drive/folders/{$driveFolderId}";
 }
+
+$isWorkspaceConnected = (!empty($driveFolderUrl) || !empty($driveFolderId));
 
 $subfolders = [];
 if (!empty($currentUser['google_drive_subfolders'])) {
@@ -50,16 +206,25 @@ if (!empty($currentUser['google_drive_subfolders'])) {
     $subfolders = $_SESSION['google_drive_subfolders'];
 }
 
-// Generate connect Google URL if not connected
+// Generate connect Google URL if OAuth is configured
 $connectGoogleUrl = '';
-$googleClientId = $settings['google_client_id'] ?? '';
+$googleClientId   = $settings['google_client_id'] ?? '';
 if ($googleConfigured) {
     if (session_status() === PHP_SESSION_NONE) {
         session_start();
     }
-    $_SESSION['oauth_state'] = bin2hex(random_bytes(16));
+    $_SESSION['oauth_state']    = bin2hex(random_bytes(16));
+    $_SESSION['oauth_redirect'] = 'shared_workspace.php?connected=1';
     $connectGoogleUrl = $googleClient->getAuthUrl($_SESSION['oauth_state']);
 }
+
+// Flash messages
+$flashSuccess = $_SESSION['flash_success'] ?? null;
+$flashError   = $_SESSION['flash_error'] ?? null;
+unset($_SESSION['flash_success'], $_SESSION['flash_error']);
+
+// Count connected colleagues
+$connectedColleagueCount = count(array_filter($colleagues, fn($c) => !empty($c['google_drive_folder_url'])));
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -67,13 +232,15 @@ if ($googleConfigured) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Google Drive Workspace &amp; Staff Collaboration | <?= sanitize($schoolName) ?></title>
-    <link rel="icon" href="../assets/images/hcclogo.jpg">
-    <link rel="stylesheet" href="../assets/vendor/font-awesome@6.5.0/css/all.min.css">
-    <link rel="stylesheet" href="../assets/vendor/inter-fonts.css">
-    <link rel="stylesheet" href="../assets/css/admin.css?v=<?= filemtime(__DIR__ . '/../assets/css/admin.css') ?>">
+    <link rel="icon" href="<?= BASE_URL ?>assets/images/hcclogo.jpg">
+    <link rel="stylesheet" href="<?= BASE_URL ?>assets/vendor/font-awesome@6.5.0/css/all.min.css">
+    <link rel="stylesheet" href="<?= BASE_URL ?>assets/vendor/inter-fonts.css">
+    <link rel="stylesheet" href="<?= BASE_URL ?>assets/css/admin.css?v=<?= (is_file(__DIR__ . '/../assets/css/admin.css') ? filemtime(__DIR__ . '/../assets/css/admin.css') : 0) ?>">
     <style>
+        /* Modern Workspace Palette (Deep Slate + Brand Accent) */
         .workspace-hero {
-            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            background: radial-gradient(1000px 400px at 10% 0%, rgba(37,99,235,0.18), transparent 60%),
+                        linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
             border-radius: 16px;
             padding: 30px;
             color: #ffffff;
@@ -84,6 +251,7 @@ if ($googleConfigured) {
             justify-content: space-between;
             gap: 20px;
             flex-wrap: wrap;
+            border: 1px solid rgba(255, 255, 255, 0.08);
         }
         .hero-info {
             display: flex;
@@ -102,23 +270,26 @@ if ($googleConfigured) {
             justify-content: center;
             font-size: 2rem;
             color: #f8fafc;
+            flex-shrink: 0;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.3);
         }
         .hero-title {
             margin: 0 0 6px 0;
-            font-size: 1.5rem;
+            font-size: 1.45rem;
             font-weight: 800;
             letter-spacing: -0.02em;
             display: flex;
             align-items: center;
             gap: 10px;
+            flex-wrap: wrap;
         }
         .hero-sub {
             margin: 0;
             color: #94a3b8;
-            font-size: 0.9rem;
+            font-size: 0.88rem;
             display: flex;
             align-items: center;
-            gap: 14px;
+            gap: 16px;
             flex-wrap: wrap;
         }
         .hero-sub span {
@@ -128,19 +299,20 @@ if ($googleConfigured) {
         }
         .hero-actions {
             display: flex;
-            gap: 12px;
+            gap: 10px;
             flex-wrap: wrap;
+            align-items: center;
         }
         .btn-drive-main {
             display: inline-flex;
             align-items: center;
-            gap: 10px;
-            padding: 12px 22px;
+            gap: 8px;
+            padding: 11px 20px;
             background: #2563eb;
             color: #ffffff;
             border-radius: 10px;
             font-weight: 700;
-            font-size: 0.92rem;
+            font-size: 0.9rem;
             text-decoration: none;
             transition: all 0.2s ease;
             box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);
@@ -153,30 +325,40 @@ if ($googleConfigured) {
             transform: translateY(-2px);
             box-shadow: 0 6px 20px rgba(37, 99, 235, 0.5);
         }
-        .btn-copy-link {
+        .btn-drive-action {
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            padding: 12px 18px;
+            padding: 11px 16px;
             background: rgba(255, 255, 255, 0.1);
             color: #ffffff;
             border-radius: 10px;
             font-weight: 600;
-            font-size: 0.92rem;
+            font-size: 0.88rem;
             text-decoration: none;
             border: 1px solid rgba(255, 255, 255, 0.2);
             transition: all 0.2s ease;
             cursor: pointer;
         }
-        .btn-copy-link:hover {
+        .btn-drive-action:hover {
             background: rgba(255, 255, 255, 0.2);
+            color: #ffffff;
+            transform: translateY(-1px);
+        }
+        .btn-drive-danger {
+            background: rgba(220, 38, 38, 0.18);
+            border-color: rgba(220, 38, 38, 0.4);
+            color: #fca5a5;
+        }
+        .btn-drive-danger:hover {
+            background: rgba(220, 38, 38, 0.35);
             color: #ffffff;
         }
 
         /* Subfolder Grid */
         .folder-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
             gap: 18px;
             margin-bottom: 28px;
         }
@@ -184,75 +366,88 @@ if ($googleConfigured) {
             background: #ffffff;
             border: 1.5px solid #e2e8f0;
             border-radius: 14px;
-            padding: 18px;
-            transition: all 0.2s ease;
+            padding: 20px;
+            transition: all 0.22s ease;
             display: flex;
             flex-direction: column;
             justify-content: space-between;
             text-decoration: none;
             color: inherit;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+            position: relative;
         }
         .folder-card:hover {
             border-color: #3b82f6;
             transform: translateY(-3px);
-            box-shadow: 0 8px 20px rgba(59, 130, 246, 0.12);
+            box-shadow: 0 10px 24px rgba(59, 130, 246, 0.14);
         }
         .folder-icon {
-            width: 44px;
-            height: 44px;
-            border-radius: 10px;
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
             background: #eff6ff;
             color: #2563eb;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.3rem;
+            font-size: 1.35rem;
             margin-bottom: 14px;
         }
         .folder-icon.ut { background: #fef3c7; color: #d97706; }
         .folder-icon.an { background: #f0fdf4; color: #16a34a; }
         .folder-icon.rc { background: #fdf2f8; color: #db2777; }
         .folder-title {
-            font-size: 0.96rem;
+            font-size: 1rem;
             font-weight: 800;
             color: #0f172a;
-            margin: 0 0 4px 0;
+            margin: 0 0 5px 0;
         }
         .folder-sub {
-            font-size: 0.78rem;
+            font-size: 0.82rem;
             color: #64748b;
-            margin: 0 0 14px 0;
-            line-height: 1.4;
+            margin: 0 0 16px 0;
+            line-height: 1.45;
         }
         .folder-footer {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            font-size: 0.78rem;
+            font-size: 0.82rem;
             font-weight: 700;
             color: #2563eb;
-            padding-top: 10px;
+            padding-top: 12px;
             border-top: 1px solid #f1f5f9;
         }
 
-        /* Sharing Section */
-        .share-card {
+        /* 2-Column Collaboration Section */
+        .collab-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-bottom: 28px;
+        }
+        @media (max-width: 992px) {
+            .collab-grid { grid-template-columns: 1fr; }
+        }
+
+        .panel-card {
             background: #ffffff;
             border: 1.5px solid #e2e8f0;
             border-radius: 16px;
-            padding: 26px;
-            margin-bottom: 28px;
+            padding: 24px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+            display: flex;
+            flex-direction: column;
         }
-        .share-header {
+        .panel-header {
             display: flex;
             align-items: center;
             gap: 14px;
             margin-bottom: 18px;
         }
-        .share-header-icon {
-            width: 46px;
-            height: 46px;
+        .panel-icon {
+            width: 44px;
+            height: 44px;
             border-radius: 12px;
             background: rgba(37, 99, 235, 0.1);
             color: #2563eb;
@@ -260,96 +455,169 @@ if ($googleConfigured) {
             align-items: center;
             justify-content: center;
             font-size: 1.25rem;
+            flex-shrink: 0;
         }
-        .share-header h3 {
+        .panel-icon.purple { background: rgba(147, 51, 234, 0.1); color: #9333ea; }
+        .panel-icon.emerald { background: rgba(16, 185, 129, 0.1); color: #10b981; }
+        .panel-header h3 {
             margin: 0;
-            font-size: 1.2rem;
+            font-size: 1.15rem;
             font-weight: 800;
             color: #0f172a;
         }
-        .share-header p {
+        .panel-header p {
             margin: 3px 0 0;
-            font-size: 0.84rem;
+            font-size: 0.82rem;
             color: #64748b;
         }
-        .share-form-flex {
-            display: flex;
-            gap: 12px;
-            align-items: flex-end;
-            flex-wrap: wrap;
-        }
-        .share-input-group {
-            flex: 1;
-            min-width: 260px;
-        }
-        .share-input-group label {
+
+        /* Forms inside panels */
+        .input-label {
             display: block;
             font-size: 0.82rem;
             font-weight: 700;
             color: #334155;
             margin-bottom: 6px;
         }
-        .share-select {
+        .form-control-custom {
             width: 100%;
-            height: 46px;
+            height: 44px;
             padding: 0 14px;
-            font-size: 0.9rem;
+            font-size: 0.88rem;
             border: 1.5px solid #cbd5e1;
             border-radius: 9px;
             background: #ffffff;
             color: #0f172a;
             outline: none;
+            transition: border-color 0.18s, box-shadow 0.18s;
+            font-family: inherit;
         }
-        .share-select:focus {
+        .form-control-custom:focus {
             border-color: #2563eb;
             box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
         }
-        .btn-share-submit {
-            height: 46px;
-            padding: 0 24px;
-            background: #0f172a;
-            color: #ffffff;
-            border: none;
-            border-radius: 9px;
+
+        /* Colleague directory table */
+        .staff-directory-wrap {
+            max-height: 380px;
+            overflow-y: auto;
+            border: 1px solid #f1f5f9;
+            border-radius: 12px;
+        }
+        .staff-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 14px;
+            border-bottom: 1px solid #f1f5f9;
+            gap: 12px;
+            transition: background 0.15s;
+        }
+        .staff-item:last-child { border-bottom: none; }
+        .staff-item:hover { background: #f8fafc; }
+        .staff-user-meta {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+            flex: 1;
+        }
+        .staff-avatar-mini {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: #e2e8f0;
+            color: #334155;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             font-weight: 700;
-            font-size: 0.92rem;
-            cursor: pointer;
+            font-size: 0.82rem;
+            flex-shrink: 0;
+        }
+        .staff-names {
+            min-width: 0;
+            line-height: 1.3;
+        }
+        .staff-names strong {
+            display: block;
+            font-size: 0.88rem;
+            color: #0f172a;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .staff-names span {
+            font-size: 0.74rem;
+            color: #64748b;
+        }
+        .btn-staff-open {
+            padding: 6px 12px;
+            border-radius: 8px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            color: #2563eb;
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            text-decoration: none;
             display: inline-flex;
             align-items: center;
-            gap: 8px;
-            transition: all 0.2s ease;
+            gap: 5px;
+            transition: all 0.15s;
+            white-space: nowrap;
         }
-        .btn-share-submit:hover {
-            background: #1e293b;
-            transform: translateY(-1px);
+        .btn-staff-open:hover {
+            background: #2563eb;
+            color: #ffffff;
+            border-color: #2563eb;
         }
 
-        /* Not Connected State */
-        .connect-cta-box {
+        /* Unconnected Setup Box */
+        .setup-dual-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-top: 18px;
+        }
+        @media (max-width: 768px) {
+            .setup-dual-grid { grid-template-columns: 1fr; }
+        }
+        .setup-card {
             background: #ffffff;
             border: 2px dashed #cbd5e1;
             border-radius: 16px;
-            padding: 44px 24px;
+            padding: 28px;
             text-align: center;
-            max-width: 600px;
-            margin: 40px auto;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
         }
-        .connect-cta-icon {
-            font-size: 3.5rem;
-            color: #4285f4;
-            margin-bottom: 16px;
+        .setup-card.primary-choice {
+            border-style: solid;
+            border-color: #93c5fd;
+            background: linear-gradient(180deg, #f0f7ff 0%, #ffffff 100%);
         }
-        .connect-cta-title {
-            font-size: 1.4rem;
-            font-weight: 800;
-            color: #0f172a;
-            margin-bottom: 8px;
-        }
-        .connect-cta-sub {
+
+        /* Flash message banner */
+        .workspace-alert {
+            padding: 14px 18px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
             font-size: 0.9rem;
-            color: #64748b;
-            line-height: 1.5;
-            margin-bottom: 24px;
+            font-weight: 600;
+        }
+        .workspace-alert.success {
+            background: #ecfdf5;
+            color: #065f46;
+            border: 1px solid #a7f3d0;
+        }
+        .workspace-alert.error {
+            background: #fef2f2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
         }
 
         /* Toast notification */
@@ -359,7 +627,7 @@ if ($googleConfigured) {
             right: 24px;
             background: #0f172a;
             color: #ffffff;
-            padding: 14px 20px;
+            padding: 12px 20px;
             border-radius: 10px;
             box-shadow: 0 10px 25px rgba(0,0,0,0.25);
             display: none;
@@ -367,7 +635,65 @@ if ($googleConfigured) {
             gap: 10px;
             font-size: 0.88rem;
             font-weight: 600;
-            z-index: 9999;
+            z-index: 99999;
+            border: 1px solid rgba(255,255,255,0.15);
+        }
+
+        /* Edit Modal */
+        .workspace-modal-backdrop {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.65);
+            backdrop-filter: blur(4px);
+            z-index: 99990;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .workspace-modal-backdrop.is-open {
+            display: flex;
+        }
+        .workspace-modal-card {
+            background: #ffffff;
+            border-radius: 16px;
+            max-width: 620px;
+            width: 100%;
+            box-shadow: 0 20px 45px rgba(0,0,0,0.3);
+            overflow: hidden;
+            animation: modalPop 0.2s ease-out;
+        }
+        @keyframes modalPop {
+            from { transform: scale(0.95); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        .modal-head {
+            padding: 20px 24px;
+            background: #f8fafc;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .modal-head h3 {
+            margin: 0;
+            font-size: 1.15rem;
+            font-weight: 800;
+            color: #0f172a;
+        }
+        .modal-body {
+            padding: 24px;
+            max-height: 75vh;
+            overflow-y: auto;
+        }
+        .modal-foot {
+            padding: 16px 24px;
+            background: #f8fafc;
+            border-top: 1px solid #e2e8f0;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 12px;
         }
     </style>
 </head>
@@ -380,36 +706,63 @@ if ($googleConfigured) {
             <header class="admin-header">
                 <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Toggle sidebar"><i class="fas fa-bars"></i></button>
                 <div class="header-titles">
-                    <h1 class="page-title"><i class="fa-brands fa-google-drive text-primary me-2"></i>Google Drive Workspace</h1>
+                    <h1 class="page-title"><i class="fa-brands fa-google-drive" style="color:#4285F4; margin-right:8px;"></i>Google Drive Workspace</h1>
                     <p class="page-sub"><?= sanitize($schoolName) ?> &bull; Automated Cloud Archive &amp; Staff Collaboration</p>
                 </div>
                 <div class="header-actions">
                     <div class="admin-user">
-                        <i class="fas fa-shield-alt"></i>
-                        <span><?= sanitize($adminUser) ?> (<?= strtoupper(sanitize($adminRole)) ?>)</span>
+                        <div class="user-avatar"><?= htmlspecialchars(mb_strtoupper(mb_substr(trim($currentUser['full_name'] ?: $adminUser), 0, 1))) ?></div>
+                        <div class="user-meta">
+                            <strong><?= htmlspecialchars($currentUser['full_name'] ?: $adminUser) ?></strong>
+                            <small><?= htmlspecialchars(ucfirst($adminRole)) ?></small>
+                        </div>
                     </div>
                 </div>
             </header>
 
             <div class="admin-content">
-                <?php if ($isGoogleConnected && $driveFolderId): ?>
-                    <!-- Connected Workspace Hero -->
+                <!-- Flash messages -->
+                <?php if ($flashSuccess): ?>
+                    <div class="workspace-alert success">
+                        <i class="fa-solid fa-circle-check"></i>
+                        <span><?= htmlspecialchars($flashSuccess) ?></span>
+                    </div>
+                <?php endif; ?>
+                <?php if ($flashError): ?>
+                    <div class="workspace-alert error">
+                        <i class="fa-solid fa-triangle-exclamation"></i>
+                        <span><?= htmlspecialchars($flashError) ?></span>
+                    </div>
+                <?php endif; ?>
+
+                <?php if ($isWorkspaceConnected): ?>
+                    <!-- Connected Workspace Hero Banner -->
                     <div class="workspace-hero">
                         <div class="hero-info">
                             <?php if (!empty($currentUser['google_avatar'])): ?>
                                 <img src="<?= htmlspecialchars($currentUser['google_avatar']) ?>" alt="Avatar" class="hero-avatar">
                             <?php else: ?>
-                                <div class="hero-avatar"><i class="fa-solid fa-user"></i></div>
+                                <div class="hero-avatar">
+                                    <?= htmlspecialchars(mb_strtoupper(mb_substr(trim($currentUser['full_name'] ?: $adminUser), 0, 1))) ?>
+                                </div>
                             <?php endif; ?>
                             <div>
                                 <h2 class="hero-title">
-                                    <?= htmlspecialchars($currentUser['full_name']) ?>'s Academic Workspace
-                                    <span class="badge" style="background:#10b981; font-size:0.65rem; padding:4px 8px; border-radius:12px; font-weight:700;">Active &bull; Auto-Sync</span>
+                                    <?= htmlspecialchars($currentUser['full_name'] ?: $adminUser) ?>'s Academic Workspace
+                                    <?php if ($isGoogleOAuthConnected): ?>
+                                        <span class="badge" style="background:#10b981; font-size:0.68rem; padding:4px 9px; border-radius:12px; font-weight:700;">
+                                            <i class="fa-solid fa-bolt"></i> Google OAuth Active
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="badge" style="background:#0284c7; font-size:0.68rem; padding:4px 9px; border-radius:12px; font-weight:700;">
+                                            <i class="fa-solid fa-link"></i> Shared Drive Linked
+                                        </span>
+                                    <?php endif; ?>
                                 </h2>
                                 <p class="hero-sub">
                                     <span><i class="fa-solid fa-envelope"></i> <?= htmlspecialchars($currentUser['email']) ?></span>
                                     <span><i class="fa-solid fa-folder-tree"></i> Academic Year 2024-25</span>
-                                    <span><i class="fa-brands fa-google-drive"></i> Google Drive Cloud Connected</span>
+                                    <span><i class="fa-solid fa-users"></i> <?= (int)$connectedColleagueCount ?> Colleagues Active</span>
                                 </p>
                             </div>
                         </div>
@@ -418,17 +771,28 @@ if ($googleConfigured) {
                             <a href="<?= htmlspecialchars($driveFolderUrl) ?>" target="_blank" rel="noopener" class="btn-drive-main">
                                 <i class="fa-solid fa-arrow-up-right-from-square"></i> Open in Google Drive
                             </a>
-                            <button type="button" class="btn-copy-link" onclick="copyDriveLink('<?= htmlspecialchars($driveFolderUrl) ?>')">
+                            <button type="button" class="btn-drive-action" onclick="copyDriveLink('<?= htmlspecialchars($driveFolderUrl) ?>')">
                                 <i class="fa-solid fa-link"></i> Copy Link
+                            </button>
+                            <button type="button" class="btn-drive-action" onclick="openEditModal()">
+                                <i class="fa-solid fa-pen-to-square"></i> Edit Links
+                            </button>
+                            <button type="button" class="btn-drive-action btn-drive-danger" onclick="openUnlinkModal()">
+                                <i class="fa-solid fa-link-slash"></i> Unlink
                             </button>
                         </div>
                     </div>
 
                     <!-- Organized Subfolders Grid -->
-                    <h3 style="font-size:1.1rem; font-weight:800; color:#0f172a; margin-bottom:14px;">
-                        <i class="fa-solid fa-folder-open text-primary me-2"></i>Personal Workspace Subfolders
-                    </h3>
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; flex-wrap:wrap; gap:10px;">
+                        <h3 style="font-size:1.15rem; font-weight:800; color:#0f172a; margin:0;">
+                            <i class="fa-solid fa-folder-open" style="color:#2563eb; margin-right:8px;"></i>Academic Workspace Subfolders
+                        </h3>
+                        <span style="font-size:0.82rem; color:#64748b;">Click any card to open folder in Google Drive</span>
+                    </div>
+
                     <div class="folder-grid">
+                        <!-- 1. Semester Marksheets -->
                         <a href="<?= htmlspecialchars($subfolders['marks']['url'] ?? $driveFolderUrl) ?>" target="_blank" class="folder-card">
                             <div>
                                 <div class="folder-icon"><i class="fa-solid fa-table-list"></i></div>
@@ -441,6 +805,7 @@ if ($googleConfigured) {
                             </div>
                         </a>
 
+                        <!-- 2. Unit Tests -->
                         <a href="<?= htmlspecialchars($subfolders['unit_tests']['url'] ?? $driveFolderUrl) ?>" target="_blank" class="folder-card">
                             <div>
                                 <div class="folder-icon ut"><i class="fa-solid fa-table-cells"></i></div>
@@ -453,6 +818,7 @@ if ($googleConfigured) {
                             </div>
                         </a>
 
+                        <!-- 3. Class Analytics -->
                         <a href="<?= htmlspecialchars($subfolders['analytics']['url'] ?? $driveFolderUrl) ?>" target="_blank" class="folder-card">
                             <div>
                                 <div class="folder-icon an"><i class="fa-solid fa-chart-line"></i></div>
@@ -465,6 +831,7 @@ if ($googleConfigured) {
                             </div>
                         </a>
 
+                        <!-- 4. Student Report Cards -->
                         <a href="<?= htmlspecialchars($subfolders['reports']['url'] ?? $driveFolderUrl) ?>" target="_blank" class="folder-card">
                             <div>
                                 <div class="folder-icon rc"><i class="fa-solid fa-file-invoice"></i></div>
@@ -478,24 +845,61 @@ if ($googleConfigured) {
                         </a>
                     </div>
 
-                    <!-- Inter-Staff Collaboration & Sharing Section -->
-                    <div class="share-card">
-                        <div class="share-header">
-                            <div class="share-header-icon"><i class="fa-solid fa-user-group"></i></div>
-                            <div>
-                                <h3>Share Workspace with Fellow Teachers</h3>
-                                <p>Grant access to a colleague directly inside Google Drive. The folder will immediately appear under their <em>"Shared with me"</em> section.</p>
+                    <!-- 2-Column: Upload Document + Staff Directory & Sharing -->
+                    <div class="collab-grid">
+                        <!-- Left Panel: Direct Document Upload to Workspace -->
+                        <div class="panel-card">
+                            <div class="panel-header">
+                                <div class="panel-icon emerald"><i class="fa-solid fa-cloud-arrow-up"></i></div>
+                                <div>
+                                    <h3>Upload Document to Workspace</h3>
+                                    <p>File exams, marksheets, or syllabus documents straight into your workspace archive.</p>
+                                </div>
                             </div>
+
+                            <form method="POST" action="shared_workspace.php" enctype="multipart/form-data" style="display:flex; flex-direction:column; gap:16px;">
+                                <?= csrfField() ?>
+                                <input type="hidden" name="action" value="upload_file">
+
+                                <div>
+                                    <label class="input-label" for="file_category">Target Folder Category</label>
+                                    <select name="file_category" id="file_category" class="form-control-custom" required>
+                                        <option value="marks">01. Semester Marksheets &amp; Results</option>
+                                        <option value="unit_tests">02. Unit Tests &amp; Exams</option>
+                                        <option value="analytics">03. Class Analytics Reports</option>
+                                        <option value="reports">04. Student Report Cards &amp; Slips</option>
+                                        <option value="general">05. General Workspace Documents</option>
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label class="input-label" for="workspace_file">Choose Document File (PDF, Excel, Word, CSV, ZIP)</label>
+                                    <input type="file" name="workspace_file" id="workspace_file" class="form-control-custom" style="padding-top:8px;" required>
+                                </div>
+
+                                <button type="submit" class="btn-drive-main" style="justify-content:center; margin-top:4px;">
+                                    <i class="fa-solid fa-arrow-up-from-bracket"></i> Upload to Archive
+                                </button>
+                            </form>
                         </div>
 
-                        <form id="shareForm" onsubmit="handleShareSubmit(event)">
-                            <?= csrfField() ?>
-                            <input type="hidden" name="folder_id" value="<?= htmlspecialchars($driveFolderId) ?>">
+                        <!-- Right Panel: Share Workspace with Fellow Teachers -->
+                        <div class="panel-card">
+                            <div class="panel-header">
+                                <div class="panel-icon purple"><i class="fa-solid fa-user-plus"></i></div>
+                                <div>
+                                    <h3>Share Workspace with Fellow Teachers</h3>
+                                    <p>Grant folder access to a colleague so they can review or co-grade marks.</p>
+                                </div>
+                            </div>
 
-                            <div class="share-form-flex">
-                                <div class="share-input-group">
-                                    <label for="colleague_select">Select Staff Member</label>
-                                    <select class="share-select" id="colleague_select" required onchange="handleColleagueChange(this)">
+                            <form id="shareForm" onsubmit="handleShareSubmit(event)" style="display:flex; flex-direction:column; gap:16px;">
+                                <?= csrfField() ?>
+                                <input type="hidden" name="folder_id" value="<?= htmlspecialchars($driveFolderId) ?>">
+
+                                <div>
+                                    <label class="input-label" for="colleague_select">Select Staff Member</label>
+                                    <select class="form-control-custom" id="colleague_select" required onchange="handleColleagueChange(this)">
                                         <option value="">-- Choose a teacher or administrator --</option>
                                         <?php foreach ($colleagues as $staff): ?>
                                             <option value="<?= htmlspecialchars($staff['email']) ?>">
@@ -506,113 +910,293 @@ if ($googleConfigured) {
                                     </select>
                                 </div>
 
-                                <div class="share-input-group" id="customEmailGroup" style="display:none;">
-                                    <label for="custom_email">Colleague Google Email</label>
-                                    <input type="email" id="custom_email" class="share-select" placeholder="e.g. teacher@gmail.com">
+                                <div id="customEmailGroup" style="display:none;">
+                                    <label class="input-label" for="custom_email">Colleague Google Email</label>
+                                    <input type="email" id="custom_email" class="form-control-custom" placeholder="e.g. teacher@gmail.com">
                                 </div>
 
-                                <div class="share-input-group" style="flex:0 0 180px;">
-                                    <label for="share_role">Access Level</label>
-                                    <select class="share-select" id="share_role" name="role">
+                                <div>
+                                    <label class="input-label" for="share_role">Access Level</label>
+                                    <select class="form-control-custom" id="share_role" name="role">
                                         <option value="reader">Viewer (Read Only)</option>
-                                        <option value="writer">Editor (Can Co-Grade)</option>
+                                        <option value="writer">Editor (Can Co-Grade &amp; Upload)</option>
                                     </select>
                                 </div>
 
-                                <button type="submit" class="btn-share-submit" id="btnShareSubmit">
-                                    <i class="fa-solid fa-paper-plane"></i> Share Now
+                                <button type="submit" class="btn-drive-main" id="btnShareSubmit" style="background:#0f172a; justify-content:center;">
+                                    <i class="fa-solid fa-paper-plane"></i> Send Share Invitation
                                 </button>
+                            </form>
+                        </div>
+                    </div>
+
+                    <!-- Staff Collaboration Directory -->
+                    <div class="panel-card">
+                        <div class="panel-header" style="justify-content:space-between; flex-wrap:wrap; gap:10px;">
+                            <div style="display:flex; align-items:center; gap:14px;">
+                                <div class="panel-icon"><i class="fa-solid fa-address-book"></i></div>
+                                <div>
+                                    <h3>Staff Shared Workspace Directory</h3>
+                                    <p>Browse active Google Drive workspaces shared by other teachers and faculty.</p>
+                                </div>
                             </div>
-                        </form>
+                            <div style="width:260px;">
+                                <input type="text" id="staffSearchInput" class="form-control-custom" placeholder="Search teacher by name..." oninput="filterStaffDirectory(this.value)">
+                            </div>
+                        </div>
+
+                        <div class="staff-directory-wrap">
+                            <?php if (empty($colleagues)): ?>
+                                <p style="padding:20px; color:#64748b; text-align:center; margin:0;">No other staff members found.</p>
+                            <?php else: ?>
+                                <div id="staffList">
+                                    <?php foreach ($colleagues as $staff): 
+                                        $hasDrive = !empty($staff['google_drive_folder_url']);
+                                    ?>
+                                        <div class="staff-item" data-search="<?= strtolower(htmlspecialchars($staff['full_name'] . ' ' . $staff['email'] . ' ' . $staff['role'])) ?>">
+                                            <div class="staff-user-meta">
+                                                <div class="staff-avatar-mini">
+                                                    <?= htmlspecialchars(mb_strtoupper(mb_substr(trim($staff['full_name']), 0, 1))) ?>
+                                                </div>
+                                                <div class="staff-names">
+                                                    <strong><?= htmlspecialchars($staff['full_name']) ?></strong>
+                                                    <span><?= htmlspecialchars($staff['email']) ?> &bull; <?= strtoupper($staff['role']) ?></span>
+                                                </div>
+                                            </div>
+                                            <div style="display:flex; align-items:center; gap:8px;">
+                                                <?php if ($hasDrive): ?>
+                                                    <span class="badge" style="background:#ecfdf5; color:#059669; border:1px solid #a7f3d0; font-size:0.72rem; padding:4px 8px; border-radius:6px;">
+                                                        <i class="fa-solid fa-circle-check"></i> Drive Active
+                                                    </span>
+                                                    <a href="<?= htmlspecialchars($staff['google_drive_folder_url']) ?>" target="_blank" rel="noopener" class="btn-staff-open" title="Open Teacher's Google Drive">
+                                                        <span>Open</span> <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                                                    </a>
+                                                    <button type="button" class="btn-staff-open" style="background:#f8fafc; color:#475569; border-color:#cbd5e1;" onclick="copyDriveLink('<?= htmlspecialchars($staff['google_drive_folder_url']) ?>')" title="Copy Link">
+                                                        <i class="fa-solid fa-link"></i>
+                                                    </button>
+                                                <?php else: ?>
+                                                    <span class="badge" style="background:#f1f5f9; color:#94a3b8; font-size:0.72rem; padding:4px 8px; border-radius:6px;">
+                                                        Not Linked Yet
+                                                    </span>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
+                        </div>
                     </div>
 
                 <?php else: ?>
-                    <!-- Unconnected CTA -->
-                    <div class="connect-cta-box">
-                        <div class="connect-cta-icon"><i class="fa-brands fa-google-drive"></i></div>
-                        <h2 class="connect-cta-title">Connect Your Google Account</h2>
-                        <p class="connect-cta-sub">
-                            Connect your Google Account to automatically provision your personal Google Drive workspace.
-                            Whenever you enter marks, generate unit tests, or download analytics PDFs, everything will be auto-filed into your Drive and instantly shareable with other teachers.
+                    <!-- Unconnected / Welcome Setup Screen -->
+                    <div style="text-align:center; max-width:860px; margin:20px auto 40px auto;">
+                        <div style="width:70px; height:70px; border-radius:20px; background:#eff6ff; color:#2563eb; display:inline-flex; align-items:center; justify-content:center; font-size:2.2rem; margin-bottom:16px; box-shadow:0 8px 20px rgba(37,99,235,0.15);">
+                            <i class="fa-brands fa-google-drive"></i>
+                        </div>
+                        <h2 style="font-size:1.75rem; font-weight:800; color:#0f172a; margin:0 0 8px 0; letter-spacing:-0.02em;">
+                            Setup Your Academic Drive Workspace
+                        </h2>
+                        <p style="font-size:0.95rem; color:#64748b; line-height:1.6; margin:0 0 28px 0;">
+                            Connect your Google Drive to collaborate with other teachers and organize marks, exams, and analytics into structured cloud folders. Choose either instant link or OAuth sign-in below.
                         </p>
-                        <?php if ($googleConfigured): ?>
-                            <!-- Google Sign-In Button (using Google Identity Services) -->
-                            <div id="googleSignInButton" style="margin-bottom: 16px;"></div>
-                            <p style="font-size: 0.8rem; color: #64748b;">or</p>
-                            <a href="<?= htmlspecialchars($connectGoogleUrl) ?>" class="btn-drive-main" style="padding:14px 28px; font-size:1rem; display:inline-block;">
-                                <i class="fa-brands fa-google"></i> Connect Google Account Now
-                            </a>
-                            <script src="https://accounts.google.com/gsi/client" async defer></script>
-                            <script>
-                                window.onload = function() {
-                                    if (typeof google !== 'undefined' && google.accounts) {
-                                        google.accounts.id.initialize({
-                                            client_id: "<?= htmlspecialchars($googleClientId) ?>",
-                                            callback: handleGoogleCredentialResponse,
-                                            ux_mode: 'popup',
-                                            auto_select: false,
-                                            cancel_on_tap_outside: true
-                                        });
-                                        google.accounts.id.renderButton(
-                                            document.getElementById('googleSignInButton'),
-                                            { theme: 'outline', size: 'large', width: '100%', text: 'signin_with', shape: 'rectangular', logo_alignment: 'left' }
-                                        );
-                                    }
-                                };
-                                function handleGoogleCredentialResponse(response) {
-                                    // Send the ID token to the backend for session creation
-                                    fetch('api_google_login.php', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ credential: response.credential })
-                                    }).then(r => r.json()).then(data => {
-                                        if (data.success) {
-                                            window.location.reload();
-                                        } else {
-                                            console.error('Google login failed:', data.error);
-                                        }
-                                    });
-                                }
-                            </script>
-                        <?php else: ?>
-                            <div class="alert alert-warning text-start py-2 px-3 small" style="background:#fffbeb; border:1px solid #fde68a; color:#92400e; border-radius:8px;">
-                                <i class="fa-solid fa-circle-exclamation me-1"></i>
-                                Google OAuth is not yet configured on this server. Please enter your Google Cloud Client ID & Secret in <a href="change_password.php" style="color:#7a2238; font-weight:700;">Account Security</a>.
+
+                        <div class="setup-dual-grid">
+                            <!-- Choice 1: Direct Link (Works immediately without OAuth setup) -->
+                            <div class="setup-card primary-choice">
+                                <div>
+                                    <div style="display:inline-flex; align-items:center; gap:6px; background:#dbeafe; color:#1d4ed8; font-size:0.72rem; font-weight:800; padding:4px 10px; border-radius:999px; text-transform:uppercase; margin-bottom:14px;">
+                                        <i class="fa-solid fa-bolt"></i> Instant &bull; No API Credentials Needed
+                                    </div>
+                                    <h3 style="font-size:1.2rem; font-weight:800; color:#0f172a; margin:0 0 8px 0;">
+                                        Paste Google Drive Link
+                                    </h3>
+                                    <p style="font-size:0.86rem; color:#64748b; line-height:1.5; margin:0 0 20px 0;">
+                                        Paste any Google Drive Shared Folder or Personal Folder link. Your workspace and subfolders will activate immediately.
+                                    </p>
+                                </div>
+
+                                <form method="POST" action="shared_workspace.php">
+                                    <?= csrfField() ?>
+                                    <input type="hidden" name="action" value="save_folder">
+                                    <div style="margin-bottom:14px; text-align:left;">
+                                        <label class="input-label" for="quick_folder_url">Google Drive Folder URL / ID</label>
+                                        <input type="text" name="google_drive_folder_url" id="quick_folder_url" class="form-control-custom" placeholder="https://drive.google.com/drive/folders/..." required>
+                                    </div>
+                                    <button type="submit" class="btn-drive-main" style="width:100%; justify-content:center;">
+                                        <i class="fa-solid fa-link"></i> Link &amp; Activate Workspace
+                                    </button>
+                                </form>
                             </div>
-                        <?php endif; ?>
+
+                            <!-- Choice 2: Google OAuth 2.0 Sign-In -->
+                            <div class="setup-card">
+                                <div>
+                                    <div style="display:inline-flex; align-items:center; gap:6px; background:#f1f5f9; color:#475569; font-size:0.72rem; font-weight:800; padding:4px 10px; border-radius:999px; text-transform:uppercase; margin-bottom:14px;">
+                                        <i class="fa-brands fa-google"></i> Automated Sync
+                                    </div>
+                                    <h3 style="font-size:1.2rem; font-weight:800; color:#0f172a; margin:0 0 8px 0;">
+                                        Sign in with Google OAuth
+                                    </h3>
+                                    <p style="font-size:0.86rem; color:#64748b; line-height:1.5; margin:0 0 20px 0;">
+                                        Uses your school Google Cloud Client ID to automatically provision organized folders and live permission syncing.
+                                    </p>
+                                </div>
+
+                                <div>
+                                    <?php if ($googleConfigured): ?>
+                                        <a href="<?= htmlspecialchars($connectGoogleUrl) ?>" class="btn-drive-main" style="width:100%; justify-content:center; background:#0f172a;">
+                                            <i class="fa-brands fa-google"></i> Connect Google Account
+                                        </a>
+                                    <?php else: ?>
+                                        <div style="background:#fffbeb; border:1px solid #fde68a; color:#92400e; padding:12px; border-radius:10px; font-size:0.82rem; text-align:left;">
+                                            <i class="fa-solid fa-circle-info"></i> Google OAuth API credentials are not yet configured on this server. You can paste your folder link on the left or add Client ID in <a href="change_password.php" style="color:#7a2238; font-weight:700;">Account Security</a>.
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 <?php endif; ?>
             </div>
         </main>
-    </div>        </div>
-        </main>
     </div>
 
-    <!-- Toast -->
+    <!-- Edit Folder Links Modal -->
+    <div class="workspace-modal-backdrop" id="editLinksModal">
+        <div class="workspace-modal-card">
+            <div class="modal-head">
+                <h3><i class="fa-solid fa-pen-to-square text-primary me-2"></i>Configure Workspace Folder Links</h3>
+                <button type="button" onclick="closeEditModal()" style="background:none; border:none; font-size:1.3rem; color:#64748b; cursor:pointer;">&times;</button>
+            </div>
+            <form method="POST" action="shared_workspace.php">
+                <?= csrfField() ?>
+                <input type="hidden" name="action" value="save_folder">
+                <div class="modal-body">
+                    <div style="margin-bottom:16px;">
+                        <label class="input-label" for="modal_root_url">Main Google Drive Folder URL</label>
+                        <input type="text" name="google_drive_folder_url" id="modal_root_url" class="form-control-custom" value="<?= htmlspecialchars($driveFolderUrl) ?>" required>
+                        <span style="font-size:0.75rem; color:#64748b; margin-top:4px; display:block;">Parent workspace folder in Google Drive.</span>
+                    </div>
+
+                    <div style="border-top:1px solid #f1f5f9; padding-top:14px; margin-bottom:14px;">
+                        <strong style="font-size:0.86rem; color:#0f172a; display:block; margin-bottom:10px;">Optional: Custom Subfolder Links</strong>
+                        
+                        <div style="margin-bottom:12px;">
+                            <label class="input-label" for="sub_marks">Semester Marksheets Folder</label>
+                            <input type="text" name="subfolder_marks" id="sub_marks" class="form-control-custom" value="<?= htmlspecialchars($subfolders['marks']['url'] ?? '') ?>" placeholder="Leave blank to use main folder">
+                        </div>
+
+                        <div style="margin-bottom:12px;">
+                            <label class="input-label" for="sub_ut">Unit Tests &amp; Exams Folder</label>
+                            <input type="text" name="subfolder_unit_tests" id="sub_ut" class="form-control-custom" value="<?= htmlspecialchars($subfolders['unit_tests']['url'] ?? '') ?>" placeholder="Leave blank to use main folder">
+                        </div>
+
+                        <div style="margin-bottom:12px;">
+                            <label class="input-label" for="sub_an">Class Analytics Reports Folder</label>
+                            <input type="text" name="subfolder_analytics" id="sub_an" class="form-control-custom" value="<?= htmlspecialchars($subfolders['analytics']['url'] ?? '') ?>" placeholder="Leave blank to use main folder">
+                        </div>
+
+                        <div style="margin-bottom:12px;">
+                            <label class="input-label" for="sub_rc">Student Report Cards Folder</label>
+                            <input type="text" name="subfolder_reports" id="sub_rc" class="form-control-custom" value="<?= htmlspecialchars($subfolders['reports']['url'] ?? '') ?>" placeholder="Leave blank to use main folder">
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-foot">
+                    <button type="button" onclick="closeEditModal()" class="btn-drive-action" style="background:#f1f5f9; color:#475569; border-color:#cbd5e1;">Cancel</button>
+                    <button type="submit" class="btn-drive-main">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Confirm Unlink Modal -->
+    <div class="workspace-modal-backdrop" id="unlinkModal">
+        <div class="workspace-modal-card" style="max-width:480px;">
+            <div class="modal-head">
+                <h3 style="color:#dc2626;"><i class="fa-solid fa-triangle-exclamation me-2"></i>Unlink Google Drive</h3>
+                <button type="button" onclick="closeUnlinkModal()" style="background:none; border:none; font-size:1.3rem; color:#64748b; cursor:pointer;">&times;</button>
+            </div>
+            <form method="POST" action="shared_workspace.php">
+                <?= csrfField() ?>
+                <input type="hidden" name="action" value="unlink_folder">
+                <div class="modal-body">
+                    <p style="font-size:0.92rem; color:#475569; line-height:1.5; margin:0 0 16px 0;">
+                        Are you sure you want to unlink this Google Drive workspace? Your files in Google Drive will remain completely untouched, but your account links in this portal will be disconnected.
+                    </p>
+                    <?php if ($isGoogleOAuthConnected): ?>
+                        <label style="display:flex; align-items:center; gap:8px; font-size:0.84rem; color:#334155; cursor:pointer;">
+                            <input type="checkbox" name="clear_oauth" value="1" checked>
+                            <span>Also disconnect Google OAuth login from my account</span>
+                        </label>
+                    <?php endif; ?>
+                </div>
+                <div class="modal-foot">
+                    <button type="button" onclick="closeUnlinkModal()" class="btn-drive-action" style="background:#f1f5f9; color:#475569; border-color:#cbd5e1;">Cancel</button>
+                    <button type="submit" class="btn-drive-main" style="background:#dc2626;">Yes, Unlink Workspace</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
     <div id="shareToast">
-        <i class="fa-solid fa-circle-check text-success"></i>
+        <i class="fa-solid fa-circle-check" style="color:#4ade80;"></i>
         <span id="toastMsg"></span>
     </div>
 
     <script>
     function copyDriveLink(url) {
         if (!url) return;
-        navigator.clipboard.writeText(url).then(() => {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).then(() => {
+                showToast('Google Drive link copied to clipboard!');
+            }).catch(() => {
+                fallbackCopy(url);
+            });
+        } else {
+            fallbackCopy(url);
+        }
+    }
+
+    function fallbackCopy(url) {
+        const temp = document.createElement('textarea');
+        temp.value = url;
+        document.body.appendChild(temp);
+        temp.select();
+        try {
+            document.execCommand('copy');
             showToast('Google Drive link copied to clipboard!');
-        }).catch(() => {
-            prompt('Copy your Google Drive link:', url);
-        });
+        } catch (e) {
+            prompt('Copy link:', url);
+        }
+        document.body.removeChild(temp);
+    }
+
+    function openEditModal() {
+        document.getElementById('editLinksModal').classList.add('is-open');
+    }
+    function closeEditModal() {
+        document.getElementById('editLinksModal').classList.remove('is-open');
+    }
+
+    function openUnlinkModal() {
+        document.getElementById('unlinkModal').classList.add('is-open');
+    }
+    function closeUnlinkModal() {
+        document.getElementById('unlinkModal').classList.remove('is-open');
     }
 
     function handleColleagueChange(sel) {
         const customGroup = document.getElementById('customEmailGroup');
+        const customInput = document.getElementById('custom_email');
         if (sel.value === 'custom') {
             customGroup.style.display = 'block';
-            document.getElementById('custom_email').required = true;
-            document.getElementById('custom_email').focus();
+            customInput.required = true;
+            customInput.focus();
         } else {
             customGroup.style.display = 'none';
-            document.getElementById('custom_email').required = false;
+            customInput.required = false;
         }
     }
 
@@ -635,7 +1219,7 @@ if ($googleConfigured) {
         const btn = document.getElementById('btnShareSubmit');
         const origText = btn.innerHTML;
         btn.disabled = true;
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sharing...';
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending...';
 
         try {
             const formData = new FormData();
@@ -654,14 +1238,27 @@ if ($googleConfigured) {
                 sel.value = '';
                 document.getElementById('customEmailGroup').style.display = 'none';
             } else {
-                alert(data.error || 'Could not share folder.');
+                alert(data.error || 'Could not share folder via Google API. You can still copy the folder link and send it directly.');
             }
         } catch (err) {
-            alert('Network error while communicating with Google Drive.');
+            alert('Network error communicating with Google Drive share service.');
         } finally {
             btn.disabled = false;
             btn.innerHTML = origText;
         }
+    }
+
+    function filterStaffDirectory(q) {
+        const query = q.trim().toLowerCase();
+        const items = document.querySelectorAll('.staff-item');
+        items.forEach(el => {
+            const searchData = el.getAttribute('data-search') || '';
+            if (query === '' || searchData.includes(query)) {
+                el.style.display = 'flex';
+            } else {
+                el.style.display = 'none';
+            }
+        });
     }
 
     function showToast(msg) {
@@ -671,7 +1268,7 @@ if ($googleConfigured) {
         toast.style.display = 'flex';
         setTimeout(() => {
             toast.style.display = 'none';
-        }, 4500);
+        }, 4000);
     }
     </script>
     <script src="<?= BASE_URL ?>assets/js/admin.js?v=<?= (is_file(__DIR__ . '/../assets/js/admin.js') ? filemtime(__DIR__ . '/../assets/js/admin.js') : 0) ?>"></script>

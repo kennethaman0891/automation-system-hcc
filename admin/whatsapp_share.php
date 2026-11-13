@@ -978,11 +978,16 @@ if ($selectedRollsParam !== '') {
                             <div><strong>Option 1 (WhatsApp Scanner):</strong> WhatsApp &rarr; Linked Devices &rarr; Link a Device</div>
                             <div style="margin-top:3px;"><strong>Option 2 (Phone Camera):</strong> Scan with Camera app &rarr; Tap link to open WhatsApp</div>
                         </div>
-                        <div style="width:260px;height:260px;margin:0 auto;display:flex;align-items:center;justify-content:center;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">
-                            <img id="waLinkQr" alt="WhatsApp QR code" style="width:248px;height:248px;display:none;">
+                        <div style="width:264px;height:264px;margin:0 auto;display:flex;align-items:center;justify-content:center;background:#ffffff;border:1px solid #cbd5e1;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.05);padding:8px;box-sizing:border-box;">
+                            <img id="waLinkQr" alt="WhatsApp QR code" style="width:100%;height:100%;object-fit:contain;image-rendering:pixelated;image-rendering:crisp-edges;display:none;">
                             <span id="waLinkSpin" style="color:#94a3b8;font-size:0.8rem;">Waiting for bridge QR&hellip;</span>
                         </div>
-                        <p id="waLinkStatus" style="margin:12px 0 0;font-size:0.78rem;color:#94a3b8;">Waiting for scan&hellip;</p>
+                        <div style="margin-top:8px;display:flex;align-items:center;justify-content:center;gap:8px;">
+                            <button type="button" id="waRefreshQrBtn" style="background:#f1f5f9;border:1px solid #cbd5e1;border-radius:6px;padding:5px 12px;font-size:0.75rem;font-weight:600;color:#334155;cursor:pointer;display:inline-flex;align-items:center;gap:5px;">
+                                <i class="fa-solid fa-arrows-rotate"></i> Refresh QR Code
+                            </button>
+                        </div>
+                        <p id="waLinkStatus" style="margin:8px 0 0;font-size:0.78rem;color:#94a3b8;">Waiting for scan&hellip;</p>
 
                         <div style="margin-top:14px;border-top:1px solid #e2e8f0;padding-top:12px;">
                             <button type="button" id="waPairToggle" style="background:none;border:none;color:#0ea5e9;font-size:0.8rem;cursor:pointer;text-decoration:underline;">
@@ -1018,11 +1023,16 @@ if ($selectedRollsParam !== '') {
                         logoutPending = true;
                         chip.style.display = 'none';
                         dismissed = false;
-                        overlay.style.display = 'flex';
                         img.style.display = 'none';
                         spin.style.display = 'inline';
                         spin.textContent = 'Waiting for bridge QR…';
                         statusEl.innerHTML = '<span style="color:#f59e0b;font-weight:600;">Logged out.</span> Waiting for a new QR…';
+                        if (replicaSurfaceOpen()) {
+                            overlay.style.display = 'none';
+                            window.dispatchEvent(new CustomEvent('open-qr-modal'));
+                            return;
+                        }
+                        overlay.style.display = 'flex';
                     });
 
                     function showQR() { dismissed = false; overlay.style.display = 'flex'; fab.style.display = 'none'; }
@@ -1036,6 +1046,14 @@ if ($selectedRollsParam !== '') {
                     });
 
                     var lastQr = '';
+                    var ensureAt = 0;
+
+                    function replicaSurfaceOpen() {
+                        var box = document.getElementById('waAppContainer');
+                        if (!box) return false;
+                        if (document.body.classList.contains('wa-fullscreen-active')) return true;
+                        return window.getComputedStyle(box).display !== 'none';
+                    }
 
                     async function tick() {
                         try {
@@ -1051,33 +1069,40 @@ if ($selectedRollsParam !== '') {
                             }
                             if (!sess || !sess.is_connected) logoutPending = false;
                             chip.style.display = 'none';
+                            // Web Replica has its own QR dialog. Showing this overlay
+                            // at the same time puts two codes on the screen.
+                            if (replicaSurfaceOpen()) {
+                                overlay.style.display = 'none';
+                                fab.style.display = 'none';
+                                return;
+                            }
                             if (!dismissed) overlay.style.display = 'flex';
 
-                            var bridgeAlive = !!(s && (s.bridge_running || (sess && sess.bridge_running)));
-                            var isSyncing = !!((s && s.is_syncing) || (sess && sess.is_syncing));
-
                             var q = await fetch('api_whatsapp_session.php?action=qr', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return null; });
-                            if (q && q.is_syncing) isSyncing = true;
+                            var bridgeAlive = !!((s && (s.bridge_running || (sess && sess.bridge_running))) || (q && q.bridge_running));
+                            var isSyncing = !!((s && s.is_syncing) || (sess && sess.is_syncing) || (q && q.is_syncing));
 
-                            if (isSyncing) {
-                                img.style.display = 'none';
-                                spin.style.display = 'inline';
-                                spin.innerHTML = '<span style="color:#0284c7;font-size:0.85rem;"><i class="fa-solid fa-circle-notch fa-spin"></i> Syncing with phone…</span>';
-                                statusEl.innerHTML = '<span style="color:#0284c7;font-weight:600;"><i class="fa-solid fa-spinner fa-spin"></i> QR scanned!</span> Linking device & organizing chats (keep WhatsApp open on your phone)…';
-                            } else if (q && q.success && q.qr_code) {
+                            if (q && q.success && q.qr_code) {
                                 if (q.qr_code !== lastQr) {
                                     lastQr = q.qr_code;
                                     img.src = q.qr_code;
-                                    img.style.display = 'block';
-                                    spin.style.display = 'none';
                                 }
-                                statusEl.innerHTML = '<span style="color:#059669;font-weight:600;">● QR ready</span> — scan it now with WhatsApp';
+                                img.style.display = 'block';
+                                spin.style.display = 'none';
+                                statusEl.innerHTML = '<span style="color:#059669;font-weight:600;">● QR ready</span> — point phone camera or WhatsApp scanner';
                             } else {
                                 img.style.display = 'none';
                                 spin.style.display = 'inline';
-                                if (!bridgeAlive && (!q || q.bridge_running === false)) {
-                                    spin.innerHTML = '<span style="color:#ef4444;font-size:0.85rem;"><i class="fa-solid fa-triangle-exclamation"></i> Bridge offline</span>';
-                                    statusEl.innerHTML = '<span style="color:#ef4444;font-weight:600;">WhatsApp bridge is not running</span><br><span style="color:#64748b;font-size:0.75rem;">Start it to get a QR: run <code>./automation/start-bridge.sh</code> in Terminal, or double-click <code>automation/Start WhatsApp Bridge.command</code></span>';
+                                if (!bridgeAlive) {
+                                    if (Date.now() - ensureAt > 60000) {
+                                        ensureAt = Date.now();
+                                        fetch('api_whatsapp_session.php?action=ensure', { method: 'POST', cache: 'no-store' }).catch(function () {});
+                                    }
+                                    spin.innerHTML = '<span style="color:#0284c7;font-size:0.85rem;"><i class="fa-solid fa-circle-notch fa-spin"></i> Starting bridge…</span>';
+                                    statusEl.innerHTML = '<span style="color:#0284c7;font-weight:600;">Starting the WhatsApp bridge</span><br><span style="color:#64748b;font-size:0.75rem;">It starts on its own on this Mac. The QR will show here. You do not need to run a command.</span>';
+                                } else if (isSyncing) {
+                                    spin.innerHTML = '<span style="color:#059669;font-size:0.85rem;"><i class="fa-solid fa-circle-notch fa-spin"></i> Linking…</span>';
+                                    statusEl.innerHTML = '<span style="color:#059669;font-weight:600;">QR scanned</span> — linking your phone. Keep WhatsApp open.';
                                 } else {
                                     spin.innerHTML = '<span style="color:#0284c7;font-size:0.85rem;"><i class="fa-solid fa-circle-notch fa-spin"></i> Generating QR code&hellip;</span>';
                                     statusEl.innerHTML = '<span style="color:#0284c7;font-weight:600;">Starting WhatsApp Web</span> — generating a fresh QR code…';
@@ -1088,6 +1113,27 @@ if ($selectedRollsParam !== '') {
 
                     tick();
                     setInterval(tick, 3000);
+
+                    // ── Manual QR Refresh button ──
+                    var refreshBtn = document.getElementById('waRefreshQrBtn');
+                    if (refreshBtn) {
+                        refreshBtn.addEventListener('click', async function () {
+                            refreshBtn.disabled = true;
+                            refreshBtn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Refreshing…';
+                            img.style.display = 'none';
+                            spin.style.display = 'inline';
+                            spin.innerHTML = '<span style="color:#0284c7;font-size:0.85rem;"><i class="fa-solid fa-circle-notch fa-spin"></i> Generating fresh QR code…</span>';
+                            try {
+                                await fetch('api_whatsapp_session.php?action=refresh_qr', { method: 'POST' });
+                                lastQr = '';
+                                setTimeout(tick, 2000);
+                            } catch (e) {}
+                            setTimeout(function () {
+                                refreshBtn.disabled = false;
+                                refreshBtn.innerHTML = '<i class="fa-solid fa-arrows-rotate"></i> Refresh QR Code';
+                            }, 3500);
+                        });
+                    }
 
                     // ── Phone-number pairing code (no QR / no camera) ──
                     var pairToggle = document.getElementById('waPairToggle');
@@ -1251,6 +1297,11 @@ if ($selectedRollsParam !== '') {
                 btnViewReplica.style.boxShadow = isReplica ? '0 1px 3px rgba(0,0,0,0.12)' : 'none';
             }
             if (viewModeInput) viewModeInput.value = isReplica ? 'replica' : 'hub';
+            if (isReplica) {
+                var linkChip = document.getElementById('waLinkChip');
+                var alreadyLinked = linkChip && linkChip.style.display === 'inline-flex';
+                if (!alreadyLinked) window.dispatchEvent(new CustomEvent('open-qr-modal'));
+            }
 
             // Update URL without reload for persistent reload / bookmarking
             try {

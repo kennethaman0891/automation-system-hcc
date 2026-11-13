@@ -116,11 +116,6 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High Schoo
             <span>WhatsApp Hub</span>
             <span class="sidebar-badge wa">Live</span>
         </a>
-        <a href="custom_dispatcher.php" <?= $adminPage === 'custom_dispatcher' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Custom Dispatcher" data-badge="Fast">
-            <i class="fa-solid fa-paper-plane" style="color:#f59e0b;"></i>
-            <span>Custom Dispatcher</span>
-            <span class="sidebar-badge" style="background:rgba(245,158,11,0.18);color:#fbbf24;border:1px solid rgba(245,158,11,0.35);">Fast</span>
-        </a>
         <a href="admission_followups.php" <?= $adminPage === 'admission_followups' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Admission Follow-ups" data-badge="CRM">
             <i class="fa-solid fa-headset" style="color:#10b981;"></i>
             <span>Admission Follow-ups</span>

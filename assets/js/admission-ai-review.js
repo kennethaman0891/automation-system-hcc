@@ -16,6 +16,17 @@
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
+  function formatMsgTime(unix, precision) {
+    const n = Number(unix);
+    if (!n) return '';
+    const d = new Date(n * 1000);
+    if (Number.isNaN(d.getTime())) return '';
+    if (precision === 'day') return d.toLocaleDateString();
+    const opts = { year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+    if (precision === 'second' || (!precision && d.getSeconds() !== 0)) opts.second = '2-digit';
+    return d.toLocaleString(undefined, opts);
+  }
+
   function toast(msg, type) {
     if (typeof showToast === 'function') showToast(msg, type || 'info');
     else console.log('[AIR]', type, msg);
@@ -71,45 +82,66 @@
     }
     const inbound = $('#airInboundNote');
     if (inbound && res) {
-      inbound.textContent = 'Stored inbound messages: ' + (res.inbound_message_count || 0);
+      inbound.textContent = 'Stored inbound messages: ' + (res.inbound_message_count || 0) + '. Newest are listed below.';
     }
     return res;
   }
 
-  async function loadChats() {
-    const list = $('#airChatList');
-    list.innerHTML = '<div class="air-empty">Loading chats…</div>';
-    const res = await call('list_chats', { limit: 50 }, 'GET');
-    if (!res || !res.success) {
-      list.innerHTML = '<div class="air-empty">Could not load chats.</div>';
-      return;
-    }
-    if (res.empty) {
-      list.innerHTML = '<div class="air-empty">' + esc(res.empty_message || 'No received messages available') + '</div>';
-      $('#airManualWrap').style.display = 'block';
-      return;
-    }
-    $('#airManualWrap').style.display = 'block';
-    list.innerHTML = res.data.map(c => `
-      <div class="air-chat-item" data-id="${c.chat_id}">
+  let lastChatSig = '';
+  let lastSelectedMsgSig = '';
+
+  function paintChats(list, rows) {
+    const scroll = list.scrollTop;
+    list.innerHTML = rows.map(c => `
+      <div class="air-chat-item${selectedChatId === c.chat_id ? ' active' : ''}" data-id="${c.chat_id}" data-msg="${c.message_id || ''}">
         <input type="radio" name="air_chat" value="${c.chat_id}" ${selectedChatId === c.chat_id ? 'checked' : ''}>
         <div>
-          <div class="name">${esc(c.name)}</div>
-          <div class="meta">${esc(c.phone_masked)} · ${c.inbound_count} inbound · ${esc((c.last_snippet || '').slice(0, 80))}</div>
+          <div class="name">${esc(c.name || 'Unknown')}</div>
+          <div class="meta">${esc(c.phone_masked || 'unknown')} · ${esc((c.last_snippet || '').slice(0, 140))}</div>
         </div>
-        <div class="meta">${c.last_inbound_ts ? new Date(c.last_inbound_ts * 1000).toLocaleString() : ''}</div>
+        <div class="meta">${formatMsgTime(c.last_inbound_ts, c.time_precision)}</div>
       </div>
     `).join('');
+    list.scrollTop = scroll;
     $all('.air-chat-item', list).forEach(el => {
       el.addEventListener('click', () => {
         selectedChatId = parseInt(el.getAttribute('data-id'), 10);
-        $all('.air-chat-item', list).forEach(x => x.classList.remove('active'));
-        el.classList.add('active');
+        $all('.air-chat-item', list).forEach(x => x.classList.toggle('active', x.getAttribute('data-id') === String(selectedChatId)));
         const radio = el.querySelector('input');
         if (radio) radio.checked = true;
         loadMessages(selectedChatId);
       });
     });
+  }
+
+  async function loadChats(opts) {
+    const quiet = !!(opts && opts.quiet);
+    const list = $('#airChatList');
+    if (!list) return false;
+    if (!quiet) list.innerHTML = '<div class="air-empty">Loading messages…</div>';
+    const res = await call('list_chats', { limit: 80 }, 'GET');
+    if (!res || !res.success) {
+      if (!quiet) list.innerHTML = '<div class="air-empty">Could not load messages.</div>';
+      return false;
+    }
+    if (res.empty) {
+      lastChatSig = '';
+      list.innerHTML = '<div class="air-empty">' + esc(res.empty_message || 'No received messages available') + '</div>';
+      const wrap = $('#airManualWrap');
+      if (wrap) wrap.style.display = 'block';
+      return false;
+    }
+    const wrap = $('#airManualWrap');
+    if (wrap) wrap.style.display = 'block';
+    const rows = res.data || [];
+    const sig = rows.map(c => (c.message_id || '') + ':' + (c.last_inbound_ts || 0) + ':' + (c.time_precision || '')).join(',');
+    const selectedSig = rows.filter(c => c.chat_id === selectedChatId).map(c => c.message_id).join(',');
+    if (quiet && sig === lastChatSig) return false;
+    const selectedChanged = selectedChatId && selectedSig !== lastSelectedMsgSig;
+    lastChatSig = sig;
+    lastSelectedMsgSig = selectedSig;
+    paintChats(list, rows);
+    return selectedChanged;
   }
 
   async function loadMessages(chatId) {
@@ -131,7 +163,7 @@
         <input type="checkbox" class="air-msg-cb" value="${m.id}" checked>
         <div>
           <div class="name">${esc((m.body || '').slice(0, 140))}</div>
-          <div class="meta">${esc(m.sender_name || 'Parent')} · ${m.timestamp ? new Date(m.timestamp * 1000).toLocaleString() : ''}</div>
+          <div class="meta">${esc(m.sender_name || 'Parent')} · ${formatMsgTime(m.timestamp, m.time_precision)}</div>
         </div>
         <div class="meta">#${m.id}</div>
       </label>
@@ -484,8 +516,10 @@
       const countChanged = lastInboundCount !== -1 && inboundCount !== lastInboundCount;
       const tsChanged = lastInboundTs > 0 && inboundTs !== lastInboundTs;
       const linkChanged = lastBridgeState !== null && isLinked !== lastBridgeState;
-      if (countChanged || tsChanged || linkChanged) {
-        await loadChats();
+      const due = (pollAirBackground.ticks = (pollAirBackground.ticks || 0) + 1) % 4 === 0;
+      if (countChanged || tsChanged || linkChanged || due) {
+        const selectedChanged = await loadChats({ quiet: true });
+        if (selectedChanged && selectedChatId) await loadMessages(selectedChatId);
       }
       lastInboundCount = inboundCount;
       lastInboundTs = inboundTs;

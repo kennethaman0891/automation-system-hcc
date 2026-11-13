@@ -194,52 +194,78 @@ case 'test_connection':
     break;
 
 case 'list_chats':
-    // Chats that have at least one inbound message (from_me=0). Honest empty otherwise.
-    $limit = min(100, max(1, (int)($input['limit'] ?? 50)));
+    // One row per stored incoming message, newest first. The admission list
+    // shows every inbound line, not one collapsed snippet per chat.
+    $limit = min(100, max(1, (int)($input['limit'] ?? 80)));
     $sql = "
-        SELECT c.id, c.wa_chat_id, c.name, c.chat_type, c.last_activity_at,
-               c.is_admission_enquiry,
-               COUNT(m.id) AS inbound_count,
-               MAX(m.timestamp) AS last_inbound_ts,
-               SUBSTRING(MAX(CONCAT(LPAD(m.timestamp,20,'0'),
-                   CASE
-                       WHEN COALESCE(m.body,'') != '' THEN m.body
-                       WHEN m.msg_type = 'image' THEN '📷 [Photo]'
-                       WHEN m.msg_type = 'audio' THEN '🎤 [Voice message]'
-                       WHEN m.msg_type = 'video' THEN '🎥 [Video]'
-                       WHEN m.msg_type = 'document' THEN '📄 [Document]'
-                       ELSE '[Attachment]'
-                   END
-               )), 21, 160) AS last_snippet
-        FROM whatsapp_chats c
-        INNER JOIN whatsapp_messages m ON m.chat_id = c.id AND m.from_me = 0
-        WHERE c.chat_type = 'individual'
-        GROUP BY c.id
-        ORDER BY last_inbound_ts DESC, c.last_activity_at DESC
+        SELECT m.id AS message_id, c.id AS chat_pk, c.wa_chat_id, c.name, c.chat_type,
+               c.is_admission_enquiry, m.timestamp AS last_inbound_ts,
+               CASE WHEN JSON_VALID(m.metadata) THEN JSON_UNQUOTE(JSON_EXTRACT(m.metadata, '$.time_precision')) ELSE NULL END AS time_precision,
+               CASE
+                   WHEN COALESCE(m.body,'') != '' THEN m.body
+                   WHEN m.msg_type = 'image' THEN '📷 [Photo]'
+                   WHEN m.msg_type = 'audio' THEN '🎤 [Voice message]'
+                   WHEN m.msg_type = 'video' THEN '🎥 [Video]'
+                   WHEN m.msg_type = 'document' THEN '📄 [Document]'
+                   ELSE '[Attachment]'
+               END AS last_snippet
+        FROM whatsapp_messages m
+        INNER JOIN whatsapp_chats c ON c.id = m.chat_id
+        WHERE m.from_me = 0 AND c.chat_type = 'individual'
+        ORDER BY m.timestamp DESC, m.id DESC
         LIMIT {$limit}
     ";
     $rows = $db->query($sql)->fetchAll(PDO::FETCH_ASSOC);
     $out = [];
     foreach ($rows as $r) {
         $phoneInfo = airPhoneFromWaChatId($r['wa_chat_id']);
+        $snippet = (string)$r['last_snippet'];
+        if (function_exists('mb_substr')) {
+            $snippet = mb_substr($snippet, 0, 180);
+        } else {
+            $snippet = substr($snippet, 0, 180);
+        }
         $out[] = [
-            'chat_id' => (int)$r['id'],
+            'message_id' => (int)$r['message_id'],
+            'chat_id' => (int)$r['chat_pk'],
             'name' => $r['name'] ?: 'Unknown',
             'chat_type' => $r['chat_type'],
-            'wa_chat_id' => $r['wa_chat_id'],
-            'phone_masked' => airMaskPhone($phoneInfo['phone'] ?? $r['wa_chat_id']),
+            'phone_masked' => airMaskPhone($phoneInfo['phone'] ?? ''),
             'phone_known' => $phoneInfo['source'] === 'chat_identity',
             'is_admission_enquiry' => (bool)$r['is_admission_enquiry'],
-            'inbound_count' => (int)$r['inbound_count'],
             'last_inbound_ts' => (int)$r['last_inbound_ts'],
-            'last_snippet' => (string)$r['last_snippet'],
+            'time_precision' => in_array($r['time_precision'] ?? '', ['day', 'minute', 'second'], true) ? $r['time_precision'] : '',
+            'last_snippet' => $snippet,
+            '_wa' => (string)$r['wa_chat_id'],
         ];
+    }
+    // The same photo was sometimes stored twice: once under the phone and once
+    // under title:name@lid. Keep the phone row.
+    $kept = [];
+    foreach ($out as $row) {
+        $isTitle = !$row['phone_known'] && preg_match('/^title:.+@lid$/i', $row['_wa']);
+        if ($isTitle) {
+            $name = mb_strtolower(trim($row['name']));
+            $drop = false;
+            foreach ($out as $other) {
+                if ($other['message_id'] === $row['message_id'] || !$other['phone_known']) continue;
+                if (mb_strtolower(trim($other['name'])) !== $name) continue;
+                if ($other['last_snippet'] !== $row['last_snippet']) continue;
+                if (abs($other['last_inbound_ts'] - $row['last_inbound_ts']) <= 180) {
+                    $drop = true;
+                    break;
+                }
+            }
+            if ($drop) continue;
+        }
+        unset($row['_wa']);
+        $kept[] = $row;
     }
     airJson([
         'success' => true,
-        'data' => $out,
-        'empty' => count($out) === 0,
-        'empty_message' => count($out) === 0
+        'data' => $kept,
+        'empty' => count($kept) === 0,
+        'empty_message' => count($kept) === 0
             ? 'No received messages available. Inbound WhatsApp messages have not been stored yet. You can paste parent text below for analysis (identity will stay unknown until a real chat is linked).'
             : null,
     ]);
@@ -259,7 +285,8 @@ case 'list_messages':
                    WHEN msg_type = 'document' THEN '📄 [Document]'
                    ELSE '[Attachment]'
                END AS body,
-               timestamp, status, received_at
+               timestamp, status, received_at,
+               CASE WHEN JSON_VALID(metadata) THEN JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.time_precision')) ELSE NULL END AS time_precision
         FROM whatsapp_messages
         WHERE chat_id = ? AND from_me = 0
         ORDER BY timestamp DESC, id DESC
@@ -275,6 +302,7 @@ case 'list_messages':
             'msg_type' => $m['msg_type'],
             'body' => $m['body'],
             'timestamp' => (int)$m['timestamp'],
+            'time_precision' => in_array($m['time_precision'] ?? '', ['day', 'minute', 'second'], true) ? $m['time_precision'] : '',
             'received_at' => $m['received_at'],
         ];
     }

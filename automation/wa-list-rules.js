@@ -70,15 +70,18 @@ function previewMsgId(waChatId, row) {
 /**
  * Decide which sidebar rows to open this cycle.
  * rows: [{ index, title, preview, time, rowText, unread, unreadCount }]
- * state: { prevSigs: Map, primed: bool, backfill: string[] (title keys), failUntil: Map }
+ * state: { prevSigs: Map, primed: bool, backfill: string[] (title keys), failUntil: Map,
+ *          quietUnread: Map(title key -> unix ms until which a stale badge is ignored) }
  * Returns { toOpen: [{ row, reason, key, sig }], deferred: [...] , sigs: Map(key -> sig) }
  * Reasons: unread > changed > new-today > backfill. Rows in failure backoff are deferred.
+ * A badge we already opened and found nothing new in does not keep winning the slot.
  */
 function planListActions(rows, state = {}, opts = {}) {
   const now = Number(opts.now) || Date.now();
   const limit = Math.max(0, Number(opts.limit) || 3);
   const prevSigs = state.prevSigs || new Map();
   const failUntil = state.failUntil || new Map();
+  const quietUnread = state.quietUnread || new Map();
   const primed = !!state.primed;
   const backfill = Array.isArray(state.backfill) ? state.backfill : [];
 
@@ -99,8 +102,9 @@ function planListActions(rows, state = {}, opts = {}) {
     const sig = rowSignature(row);
     sigs.set(key, sig);
     const prev = prevSigs.get(key);
+    const unreadQuiet = (quietUnread.get(key) || 0) > now;
     let reason = '';
-    if (row.unread || (Number(row.unreadCount) || 0) > 0) reason = 'unread';
+    if (!unreadQuiet && (row.unread || (Number(row.unreadCount) || 0) > 0)) reason = 'unread';
     else if (primed && sig !== null && prev !== undefined && prev !== null && prev !== sig) reason = 'changed';
     else if (primed && sig !== null && prev === undefined && isClockTime(row.time)) reason = 'new-today';
     else if (backfill.includes(key)) reason = 'backfill';
@@ -127,6 +131,136 @@ function nextBackoffMs(failCount) {
   return Math.min(10 * 60 * 1000, 30000 * Math.pow(2, n - 1));
 }
 
+// Sidebar and bubble clocks. Weekday names are the previous time WhatsApp showed
+// that name (today itself is a clock, so "Wednesday" on a Wednesday is last week).
+// A day label has no clock, so it is stored at noon and marked precision "day".
+// nowMs is the machine clock; the returned unix is in that same local timezone.
+function parseWaTime(text, nowMs) {
+  const now = new Date(Number(nowMs) || Date.now());
+  const fallback = { unix: Math.floor(now.getTime() / 1000), parsed: false, precision: '', hasDate: false };
+  const raw = String(text || '')
+    .replace(/[\u200E\u200F\u202A-\u202E\uFEFF\u2066-\u2069]/g, '')
+    .replace(/[\u00A0\u202F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!raw) return fallback;
+
+  const applyAmPm = (hour, ampm) => {
+    const ap = String(ampm || '').toLowerCase();
+    if (ap.startsWith('p') && hour < 12) hour += 12;
+    if (ap.startsWith('a') && hour === 12) hour = 0;
+    return hour;
+  };
+
+  const finish = (year, month, day, hour, minute, second, precision, hasDate) => {
+    year = Number(year);
+    month = Number(month);
+    day = Number(day);
+    hour = Number(hour);
+    minute = Number(minute);
+    second = Number(second) || 0;
+    if (year < 100) year += 2000;
+    if (month > 12 && day <= 12) {
+      const swap = day;
+      day = month;
+      month = swap;
+    }
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) return null;
+    const parsed = new Date(year, month - 1, day, hour, minute, second);
+    if (Number.isNaN(parsed.getTime())) return null;
+    if (parsed.getFullYear() !== year || parsed.getMonth() !== month - 1 || parsed.getDate() !== day) return null;
+    const unix = Math.floor(parsed.getTime() / 1000);
+    if (unix < 1577836800 || unix > Math.floor(now.getTime() / 1000) + 86400) return null;
+    return { unix, parsed: true, precision, hasDate: !!hasDate };
+  };
+
+  const timeDate = raw.match(/(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?\s*([ap]\.?m\.?)?\s*[,،]?\s*(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/i);
+  if (timeDate) {
+    const hour = applyAmPm(parseInt(timeDate[1], 10), timeDate[4]);
+    const second = timeDate[3] ? parseInt(timeDate[3], 10) : 0;
+    const hit = finish(
+      parseInt(timeDate[7], 10),
+      parseInt(timeDate[6], 10),
+      parseInt(timeDate[5], 10),
+      hour,
+      parseInt(timeDate[2], 10),
+      second,
+      second ? 'second' : 'minute',
+      true
+    );
+    if (hit) return hit;
+  }
+
+  const dateTime = raw.match(/(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})\s*[,،]?\s*(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?\s*([ap]\.?m\.?)?/i);
+  if (dateTime) {
+    const hour = applyAmPm(parseInt(dateTime[4], 10), dateTime[7]);
+    const second = dateTime[6] ? parseInt(dateTime[6], 10) : 0;
+    const hit = finish(
+      parseInt(dateTime[3], 10),
+      parseInt(dateTime[2], 10),
+      parseInt(dateTime[1], 10),
+      hour,
+      parseInt(dateTime[5], 10),
+      second,
+      second ? 'second' : 'minute',
+      true
+    );
+    if (hit) return hit;
+  }
+
+  const clockOnly = raw.match(/^(\d{1,2})[:.](\d{2})(?:[:.](\d{2}))?(?:\s*([ap])\.?\s?m\.?)?$/i);
+  if (clockOnly) {
+    const hour = applyAmPm(parseInt(clockOnly[1], 10), clockOnly[4]);
+    const second = clockOnly[3] ? parseInt(clockOnly[3], 10) : 0;
+    const hit = finish(
+      now.getFullYear(),
+      now.getMonth() + 1,
+      now.getDate(),
+      hour,
+      parseInt(clockOnly[2], 10),
+      second,
+      second ? 'second' : 'minute',
+      false
+    );
+    if (hit) return hit;
+  }
+
+  const dayWord = raw.toLowerCase();
+  if (dayWord === 'yesterday' || dayWord === 'today') {
+    const shift = dayWord === 'yesterday' ? 1 : 0;
+    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - shift, 12, 0, 0);
+    const hit = finish(date.getFullYear(), date.getMonth() + 1, date.getDate(), 12, 0, 0, 'day', true);
+    if (hit) return hit;
+  }
+
+  const week = {
+    sun: 0, sunday: 0,
+    mon: 1, monday: 1,
+    tue: 2, tues: 2, tuesday: 2,
+    wed: 3, wednesday: 3,
+    thu: 4, thur: 4, thurs: 4, thursday: 4,
+    fri: 5, friday: 5,
+    sat: 6, saturday: 6
+  };
+  if (Object.prototype.hasOwnProperty.call(week, dayWord)) {
+    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
+    let delta = date.getDay() - week[dayWord];
+    if (delta <= 0) delta += 7;
+    date.setDate(date.getDate() - delta);
+    const hit = finish(date.getFullYear(), date.getMonth() + 1, date.getDate(), 12, 0, 0, 'day', true);
+    if (hit) return hit;
+  }
+
+  const dated = raw.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/);
+  if (dated) {
+    const hit = finish(parseInt(dated[3], 10), parseInt(dated[2], 10), parseInt(dated[1], 10), 12, 0, 0, 'day', true);
+    if (hit) return hit;
+  }
+
+  return fallback;
+}
+
 module.exports = {
   normalizePhoneDigits,
   phoneDigitsFromJid,
@@ -138,5 +272,6 @@ module.exports = {
   rowSignature,
   previewMsgId,
   planListActions,
-  nextBackoffMs
+  nextBackoffMs,
+  parseWaTime
 };

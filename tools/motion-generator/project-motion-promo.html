@@ -1,0 +1,1159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1920, height=1080, initial-scale=1.0">
+<title>HCC School Automation System — Whole Project Motion Graphics Showcase</title>
+<script src="gsap.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg-dark: #070b0e;
+    --bg-surface: #0e171f;
+    --bg-card: rgba(14, 23, 31, 0.90);
+    --border-card: rgba(255, 255, 255, 0.09);
+    --gold: #f59e0b;
+    --gold-bright: #fbbf24;
+    --emerald: #10b981;
+    --wa-green: #00a884;
+    --wa-lightgreen: #25D366;
+    --cyan: #0ea5e9;
+    --sapphire: #38bdf8;
+    --violet: #8b5cf6;
+    --purple: #a855f7;
+    --crimson: #ef4444;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+  }
+
+  html, body {
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    background: var(--bg-dark);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text-primary);
+  }
+
+  #stage {
+    position: relative;
+    width: 1920px;
+    height: 1080px;
+    background: radial-gradient(135% 120% at 50% -10%, #0c1a24 0%, #08121a 45%, #05090c 100%);
+    overflow: hidden;
+    perspective: 1200px;
+  }
+
+  /* Ambient glowing blur mesh blobs */
+  .glow-blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(120px);
+    opacity: 0.38;
+    pointer-events: none;
+    will-change: transform;
+  }
+  #blobA {
+    width: 900px; height: 900px;
+    background: radial-gradient(circle, #0ea5e9 0%, rgba(14,165,233,0) 70%);
+    top: -250px; left: -200px;
+  }
+  #blobB {
+    width: 850px; height: 850px;
+    background: radial-gradient(circle, #10b981 0%, rgba(16,185,129,0) 70%);
+    bottom: -250px; right: -200px;
+    opacity: 0.32;
+  }
+  #blobC {
+    width: 700px; height: 700px;
+    background: radial-gradient(circle, #f59e0b 0%, rgba(245,158,11,0) 70%);
+    top: 250px; left: 600px;
+    opacity: 0.22;
+  }
+
+  /* Digital grid background overlay */
+  .grid-overlay {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+    background-size: 60px 60px;
+    pointer-events: none;
+  }
+
+  /* Top persistent watermark header */
+  .stage-watermark {
+    position: absolute;
+    top: 36px;
+    left: 54px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    z-index: 100;
+  }
+  .stage-watermark-logo {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 8px 24px rgba(245, 158, 11, 0.35);
+  }
+  .stage-watermark-logo svg {
+    width: 28px;
+    height: 28px;
+    fill: #ffffff;
+  }
+  .stage-watermark-text strong {
+    display: block;
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: #ffffff;
+  }
+  .stage-watermark-text span {
+    font-size: 0.75rem;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    font-weight: 600;
+  }
+
+  .stage-top-badge {
+    position: absolute;
+    top: 36px;
+    right: 54px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(14, 23, 31, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    padding: 8px 18px;
+    border-radius: 999px;
+    backdrop-filter: blur(12px);
+    z-index: 100;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #e2e8f0;
+  }
+  .stage-pulse-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #10b981;
+    box-shadow: 0 0 12px #10b981;
+  }
+
+  /* Universal Scene Container */
+  .scene {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 90px 80px 60px;
+    opacity: 0;
+    visibility: hidden;
+    will-change: transform, opacity;
+  }
+
+  /* Universal Typography */
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+    backdrop-filter: blur(8px);
+  }
+  .eyebrow-gold {
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    color: var(--gold-bright);
+  }
+  .eyebrow-cyan {
+    background: rgba(14, 165, 233, 0.15);
+    border: 1px solid rgba(14, 165, 233, 0.4);
+    color: var(--sapphire);
+  }
+  .eyebrow-emerald {
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    color: #34d399;
+  }
+  .eyebrow-violet {
+    background: rgba(139, 92, 246, 0.15);
+    border: 1px solid rgba(139, 92, 246, 0.4);
+    color: #c084fc;
+  }
+
+  .scene-title {
+    font-size: 3.2rem;
+    font-weight: 800;
+    line-height: 1.15;
+    text-align: center;
+    letter-spacing: -0.5px;
+    margin-bottom: 12px;
+    background: linear-gradient(135deg, #ffffff 40%, #cbd5e1 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .scene-subtitle {
+    font-size: 1.25rem;
+    color: var(--text-secondary);
+    text-align: center;
+    max-width: 860px;
+    line-height: 1.5;
+    margin-bottom: 36px;
+  }
+
+  /* Glassmorphic Cards & UI Frames */
+  .ui-window {
+    background: var(--bg-card);
+    border: 1px solid var(--border-card);
+    border-radius: 20px;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(20px);
+    overflow: hidden;
+  }
+
+  .ui-window-header {
+    height: 48px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid var(--border-card);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    gap: 8px;
+  }
+  .ui-dot { width: 12px; height: 12px; border-radius: 50%; }
+  .ui-dot-red { background: #ef4444; }
+  .ui-dot-yellow { background: #f59e0b; }
+  .ui-dot-green { background: #10b981; }
+  .ui-window-title {
+    margin-left: 12px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  /* ═══ SCENE 1: Brand & Institutional Shield ═══ */
+  #s1CrestWrap {
+    position: relative;
+    width: 140px;
+    height: 140px;
+    margin-bottom: 28px;
+  }
+  #s1CrestRing {
+    position: absolute;
+    inset: -12px;
+    border-radius: 50%;
+    border: 2px dashed rgba(245, 158, 11, 0.4);
+    animation: rotateRing 20s linear infinite;
+  }
+  @keyframes rotateRing {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  #s1Shield {
+    width: 140px;
+    height: 140px;
+    background: linear-gradient(135deg, #1e293b, #0f172a);
+    border: 3px solid var(--gold);
+    border-radius: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 20px 60px rgba(245, 158, 11, 0.35);
+  }
+  #s1Shield svg {
+    width: 74px;
+    height: 74px;
+    fill: var(--gold-bright);
+  }
+  .s1-pills-row {
+    display: flex;
+    gap: 16px;
+    margin-top: 14px;
+  }
+  .s1-pill {
+    padding: 10px 22px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  /* ═══ SCENE 2: Executive Dashboard HUD ═══ */
+  .s2-grid {
+    display: grid;
+    grid-template-columns: 280px 280px 280px 360px;
+    gap: 20px;
+    width: 1240px;
+  }
+  .s2-kpi-card {
+    background: rgba(15, 23, 42, 0.75);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .s2-kpi-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    margin-bottom: 16px;
+  }
+  .s2-kpi-val {
+    font-size: 2.5rem;
+    font-weight: 800;
+    letter-spacing: -1px;
+    color: #ffffff;
+  }
+  .s2-kpi-label {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .s2-notif-box {
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(14, 165, 233, 0.25);
+    border-radius: 16px;
+    padding: 20px;
+  }
+  .s2-notif-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  .s2-notif-item:last-child { border-bottom: none; }
+  .s2-notif-badge {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+  }
+
+  /* ═══ SCENE 3: Results Matrix & Parent Signature ═══ */
+  .s3-container {
+    display: flex;
+    gap: 32px;
+    width: 1360px;
+    align-items: center;
+  }
+  .s3-matrix-table {
+    flex: 1.4;
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 20px;
+  }
+  .s3-row {
+    display: grid;
+    grid-template-columns: 80px 180px 90px 90px 90px 80px 110px;
+    padding: 12px 14px;
+    align-items: center;
+    font-size: 0.9rem;
+    border-radius: 8px;
+    margin-bottom: 6px;
+  }
+  .s3-header-row {
+    background: rgba(255, 255, 255, 0.05);
+    font-weight: 700;
+    color: #94a3b8;
+    text-transform: uppercase;
+    font-size: 0.78rem;
+    letter-spacing: 0.5px;
+  }
+  .s3-data-row {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+  }
+  .s3-report-preview {
+    flex: 0.9;
+    background: #0f172a;
+    border: 1px solid rgba(14, 165, 233, 0.3);
+    border-radius: 18px;
+    padding: 28px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    position: relative;
+  }
+  .s3-sign-stamp {
+    position: absolute;
+    bottom: 24px;
+    right: 28px;
+    border: 2px dashed #10b981;
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
+    padding: 10px 18px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 0.85rem;
+  }
+
+  /* ═══ SCENE 4: Unit Tests I-IV & Slips ═══ */
+  .s4-hex-row {
+    display: flex;
+    gap: 24px;
+    margin-bottom: 36px;
+  }
+  .s4-hex-card {
+    width: 220px;
+    height: 140px;
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    border-radius: 18px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+  }
+  .s4-slips-stack {
+    display: flex;
+    gap: 20px;
+  }
+  .s4-slip {
+    width: 320px;
+    background: #1e293b;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+    padding: 18px;
+    font-size: 0.85rem;
+    box-shadow: 0 15px 35px rgba(0,0,0,0.4);
+  }
+
+  /* ═══ SCENE 5: Exam Timetable Builder ═══ */
+  .s5-table-wrap {
+    width: 1200px;
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    border-radius: 16px;
+    padding: 24px;
+  }
+  .s5-grid {
+    display: grid;
+    grid-template-columns: 140px 180px repeat(4, 1fr);
+    gap: 10px;
+  }
+  .s5-cell {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+  }
+  .s5-cell-header {
+    background: rgba(245, 158, 11, 0.12);
+    border-color: rgba(245, 158, 11, 0.25);
+    color: var(--gold-bright);
+    font-weight: 700;
+  }
+  .s5-rowspan-cell {
+    grid-column: span 3;
+    background: rgba(14, 165, 233, 0.15);
+    border: 1px solid rgba(14, 165, 233, 0.4);
+    color: var(--sapphire);
+    font-weight: 700;
+  }
+
+  /* ═══ SCENE 6: Student Promotion & Vault ═══ */
+  .s6-flow {
+    display: flex;
+    align-items: center;
+    gap: 40px;
+    margin-bottom: 30px;
+  }
+  .s6-node {
+    width: 320px;
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(139, 92, 246, 0.35);
+    border-radius: 16px;
+    padding: 24px;
+  }
+  .s6-arrow-connector {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    color: #a855f7;
+    font-weight: 700;
+  }
+  .s6-vault-badge {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    padding: 14px 28px;
+    border-radius: 14px;
+    color: #f87171;
+    font-weight: 700;
+  }
+
+  /* ═══ SCENE 7: Bonafide Certificate Generator ═══ */
+  .s7-cert-card {
+    width: 880px;
+    background: #0f172a;
+    border: 2px solid rgba(245, 158, 11, 0.4);
+    border-radius: 20px;
+    padding: 40px 50px;
+    position: relative;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  }
+  .s7-seal {
+    position: absolute;
+    bottom: 35px;
+    right: 50px;
+    width: 90px;
+    height: 90px;
+    border-radius: 50%;
+    border: 3px double var(--gold);
+    background: radial-gradient(circle, rgba(245, 158, 11, 0.25), transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--gold-bright);
+    font-size: 0.72rem;
+    text-align: center;
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  /* ═══ SCENE 8: Cloud Drive Workspace ═══ */
+  .s8-tree-wrap {
+    width: 940px;
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(14, 165, 233, 0.3);
+    border-radius: 18px;
+    padding: 30px;
+  }
+  .s8-tree-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 18px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 10px;
+    margin-bottom: 8px;
+    font-size: 0.95rem;
+    font-weight: 600;
+  }
+
+  /* ═══ SCENE 9: WhatsApp Dispatch Hub ═══ */
+  .s9-phone-stage {
+    width: 1080px;
+    background: #0b141a;
+    border: 1px solid rgba(0, 168, 132, 0.35);
+    border-radius: 20px;
+    padding: 24px;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+  }
+  .s9-chat-bubble {
+    background: #005c4b;
+    border-radius: 14px 14px 4px 14px;
+    padding: 16px 20px;
+    width: 480px;
+    margin-left: auto;
+    margin-bottom: 16px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.3);
+  }
+  .s9-pdf-attach {
+    background: rgba(0,0,0,0.22);
+    border-radius: 10px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-top: 10px;
+  }
+
+  /* ═══ SCENE 10: Admission CRM & AI Review ═══ */
+  .s10-funnel {
+    display: flex;
+    gap: 16px;
+    width: 1260px;
+    margin-bottom: 24px;
+  }
+  .s10-stage-col {
+    flex: 1;
+    background: rgba(15, 23, 42, 0.75);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding: 16px;
+  }
+  .s10-ai-card {
+    width: 860px;
+    background: rgba(139, 92, 246, 0.12);
+    border: 1px solid rgba(139, 92, 246, 0.4);
+    border-radius: 16px;
+    padding: 20px 26px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  /* ═══ SCENE 11: Grand Finale Ecosystem ═══ */
+  .s11-orbit-container {
+    position: relative;
+    width: 600px;
+    height: 380px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 24px;
+  }
+  .s11-core-shield {
+    width: 130px;
+    height: 130px;
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    border-radius: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 80px rgba(245, 158, 11, 0.5);
+    z-index: 2;
+  }
+  .s11-orbit-tag {
+    position: absolute;
+    padding: 8px 16px;
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 999px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: #e2e8f0;
+    white-space: nowrap;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  .s11-cta-btn {
+    padding: 16px 38px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: #ffffff;
+    font-size: 1.15rem;
+    font-weight: 700;
+    border: none;
+    box-shadow: 0 12px 36px rgba(16, 185, 129, 0.45);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <!-- Glowing ambient mesh blobs -->
+  <div class="glow-blob" id="blobA"></div>
+  <div class="glow-blob" id="blobB"></div>
+  <div class="glow-blob" id="blobC"></div>
+
+  <!-- Digital grid background -->
+  <div class="grid-overlay"></div>
+
+  <!-- Top Watermark Branding -->
+  <div class="stage-watermark">
+    <div class="stage-watermark-logo">
+      <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+    </div>
+    <div class="stage-watermark-text">
+      <strong>HCC HIGH SCHOOL</strong>
+      <span>Automation &amp; Exam Intelligence</span>
+    </div>
+  </div>
+
+  <div class="stage-top-badge">
+    <span class="stage-pulse-dot"></span>
+    <span>Unified Campus Enterprise • Live</span>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       SCENE 1: Genesis & Institutional Identity (0.0s - 5.0s)
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <section class="scene" id="scene1">
+    <div id="s1CrestWrap">
+      <div id="s1CrestRing"></div>
+      <div id="s1Shield">
+        <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
+      </div>
+    </div>
+    <span class="eyebrow eyebrow-gold">Campus Automation Platform</span>
+    <h1 class="scene-title">HINDUSTANI COVENANT CHURCH<br>HIGH SCHOOL</h1>
+    <p class="scene-subtitle">Unified Academic Management, High-Security Examinations &amp; Instant Communication</p>
+    <div class="s1-pills-row" id="s1Pills">
+      <div class="s1-pill">⚡ 100% Paperless</div>
+      <div class="s1-pill">🔒 HMAC Verified</div>
+      <div class="s1-pill">📊 Real-Time Analytics</div>
+      <div class="s1-pill">🚀 1-Click WhatsApp Batch</div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       SCENE 2: Executive Dashboard HUD (5.0s - 10.5s)
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <section class="scene" id="scene2">
+    <span class="eyebrow eyebrow-cyan">Executive Control Center</span>
+    <h2 class="scene-title" style="font-size:2.6rem;">Real-Time Institutional Intelligence</h2>
+    <p class="scene-subtitle" style="margin-bottom:28px;">Live enrollment tracking, class performance matrices &amp; instant system alerts</p>
+    <div class="s2-grid" id="s2Grid">
+      <div class="s2-kpi-card">
+        <div class="s2-kpi-icon" style="background:rgba(14,165,233,0.15);color:#0ea5e9;">👥</div>
+        <div>
+          <div class="s2-kpi-val" id="s2CountStudents">0</div>
+          <div class="s2-kpi-label">Total Enrolled</div>
+        </div>
+      </div>
+      <div class="s2-kpi-card">
+        <div class="s2-kpi-icon" style="background:rgba(245,158,11,0.15);color:#f59e0b;">🏛️</div>
+        <div>
+          <div class="s2-kpi-val">14</div>
+          <div class="s2-kpi-label">Active Standards</div>
+        </div>
+      </div>
+      <div class="s2-kpi-card">
+        <div class="s2-kpi-icon" style="background:rgba(16,185,129,0.15);color:#10b981;">📈</div>
+        <div>
+          <div class="s2-kpi-val" id="s2CountPass">0%</div>
+          <div class="s2-kpi-label">Academic Pass Rate</div>
+        </div>
+      </div>
+      <div class="s2-notif-box">
+        <div style="font-size:0.85rem;font-weight:700;margin-bottom:12px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;">Live Activity Alerts</div>
+        <div class="s2-notif-item">
+          <div class="s2-notif-badge" style="background:rgba(16,185,129,0.2);color:#10b981;">✓</div>
+          <div style="font-size:0.85rem;"><strong>Promotion Roster:</strong> STD VI-A Complete</div>
+        </div>
+        <div class="s2-notif-item">
+          <div class="s2-notif-badge" style="background:rgba(245,158,11,0.2);color:#f59e0b;">⚡</div>
+          <div style="font-size:0.85rem;"><strong>Unit Test II:</strong> STD X Results Published</div>
+        </div>
+        <div class="s2-notif-item">
+          <div class="s2-notif-badge" style="background:rgba(14,165,233,0.2);color:#0ea5e9;">📱</div>
+          <div style="font-size:0.85rem;"><strong>WhatsApp Hub:</strong> 42 Slips Delivered</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       SCENE 3: Semester Results Matrix & Parent Signature (10.5s - 16.5s)
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <section class="scene" id="scene3">
+    <span class="eyebrow eyebrow-emerald">Semester Evaluation Engine</span>
+    <h2 class="scene-title" style="font-size:2.6rem;">Dual-Assessment Marks &amp; Digital Signatures</h2>
+    <p class="scene-subtitle" style="margin-bottom:26px;">Integrated FA + SA calculations with tamper-proof parent verification</p>
+    <div class="s3-container" id="s3Container">
+      <div class="s3-matrix-table">
+        <div class="s3-row s3-header-row">
+          <div>Roll</div><div>Student</div><div>FA (40)</div><div>SA (60)</div><div>Total</div><div>Grade</div><div>Status</div>
+        </div>
+        <div class="s3-row s3-data-row">
+          <div>01</div><div><strong>Aarav Sharma</strong></div><div>38.0</div><div>56.5</div><div><strong>94.5</strong></div><div style="color:#10b981;font-weight:700;">A1</div><div><span style="color:#10b981;">✓ Verified</span></div>
+        </div>
+        <div class="s3-row s3-data-row">
+          <div>02</div><div><strong>Diya Patel</strong></div><div>36.5</div><div>54.0</div><div><strong>90.5</strong></div><div style="color:#10b981;font-weight:700;">A1</div><div><span style="color:#10b981;">✓ Verified</span></div>
+        </div>
+        <div class="s3-row s3-data-row">
+          <div>03</div><div><strong>Rohan Kulkarni</strong></div><div>34.0</div><div>51.0</div><div><strong>85.0</strong></div><div style="color:#38bdf8;font-weight:700;">A2</div><div><span style="color:#10b981;">✓ Verified</span></div>
+        </div>
+      </div>
+      <div class="s3-report-preview">
+        <div style="font-size:0.8rem;text-transform:uppercase;color:#94a3b8;letter-spacing:1px;margin-bottom:6px;">Official Digital Card</div>
+        <h3 style="font-size:1.3rem;margin-bottom:12px;color:#ffffff;">Annual Progress Report 2024-25</h3>
+        <p style="font-size:0.85rem;color:#cbd5e1;line-height:1.4;">Certified scholastic &amp; co-scholastic grades with tamper-proof public portal verification.</p>
+        <div class="s3-sign-stamp" id="s3SignStamp">
+          <svg style="width:20px;height:20px;fill:currentColor;" viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
+          <span>Digital Parent Signature Verified</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       SCENE 4: Continuous Assessment: Unit Tests I-IV & Slips (16.5s - 21.5s)
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <section class="scene" id="scene4">
+    <span class="eyebrow eyebrow-gold">Continuous Evaluation</span>
+    <h2 class="scene-title" style="font-size:2.6rem;">Four-Cycle Unit Tests &amp; Instant Slips</h2>
+    <p class="scene-subtitle" style="margin-bottom:28px;">Quarterly tracking across all standards with auto-generated slip distributions</p>
+    <div class="s4-hex-row" id="s4HexRow">
+      <div class="s4-hex-card">
+        <span style="font-size:1.8rem;">📝</span>
+        <strong>Unit Test I</strong>
+        <small style="color:#10b981;">Evaluated &bull; 100%</small>
+      </div>
+      <div class="s4-hex-card">
+        <span style="font-size:1.8rem;">📊</span>
+        <strong>Unit Test II</strong>
+        <small style="color:#10b981;">Evaluated &bull; 100%</small>
+      </div>
+      <div class="s4-hex-card">
+        <span style="font-size:1.8rem;">🎯</span>
+        <strong>Unit Test III</strong>
+        <small style="color:#0ea5e9;">In Progress</small>
+      </div>
+      <div class="s4-hex-card">
+        <span style="font-size:1.8rem;">🏆</span>
+        <strong>Unit Test IV</strong>
+        <small style="color:#94a3b8;">Scheduled</small>
+      </div>
+    </div>
+    <div class="s4-slips-stack" id="s4SlipsStack">
+      <div class="s4-slip">
+        <strong>Unit Test Slip &bull; Roll #01</strong>
+        <div style="margin-top:8px;color:#94a3b8;">Total: 96/100 &bull; Grade: A1</div>
+      </div>
+      <div class="s4-slip">
+        <strong>Unit Test Slip &bull; Roll #02</strong>
+        <div style="margin-top:8px;color:#94a3b8;">Total: 92/100 &bull; Grade: A1</div>
+      </div>
+      <div class="s4-slip">
+        <strong>Unit Test Slip &bull; Roll #03</strong>
+        <div style="margin-top:8px;color:#94a3b8;">Total: 88/100 &bull; Grade: A2</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       SCENE 5: Exam Timetable Builder Studio (21.5s - 27.0s)
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <section class="scene" id="scene5">
+    <span class="eyebrow eyebrow-gold">Academic Scheduling</span>
+    <h2 class="scene-title" style="font-size:2.6rem;">Exam Timetable Studio &bull; Rowspan Precision</h2>
+    <p class="scene-subtitle" style="margin-bottom:26px;">Collision-free multi-standard scheduling with mathematical row spans</p>
+    <div class="s5-table-wrap" id="s5TableWrap">
+      <div class="s5-grid">
+        <div class="s5-cell s5-cell-header">Date</div>
+        <div class="s5-cell s5-cell-header">Time Shift</div>
+        <div class="s5-cell s5-cell-header">STD VII</div>
+        <div class="s5-cell s5-cell-header">STD VIII</div>
+        <div class="s5-cell s5-cell-header">STD IX</div>
+        <div class="s5-cell s5-cell-header">STD X</div>
+
+        <div class="s5-cell">18-Mar-2025</div>
+        <div class="s5-cell">09:00 - 12:00</div>
+        <div class="s5-cell s5-rowspan-cell">Mathematics &bull; Unified Hall Assessment (No Clashes)</div>
+        <div class="s5-cell">Science</div>
+
+        <div class="s5-cell">20-Mar-2025</div>
+        <div class="s5-cell">09:00 - 12:00</div>
+        <div class="s5-cell">English</div>
+        <div class="s5-cell">Social Science</div>
+        <div class="s5-cell s5-rowspan-cell">Languages (Marathi / Hindi)</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       SCENE 6: Annual Student Promotion & Vault (27.0s - 32.5s)
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <section class="scene" id="scene6">
+    <span class="eyebrow eyebrow-violet">Academic Progression</span>
+    <h2 class="scene-title" style="font-size:2.6rem;">Automated Promotion &amp; Rollback Vault</h2>
+    <p class="scene-subtitle" style="margin-bottom:28px;">Seamless annual student migration with immutable historical snapshots</p>
+    <div class="s6-flow" id="s6Flow">
+      <div class="s6-node">
+        <span style="font-size:0.75rem;text-transform:uppercase;color:#94a3b8;font-weight:700;">Source Standard</span>
+        <h3 style="font-size:1.35rem;margin:6px 0;">Academic Year 2024-25</h3>
+        <p style="color:#cbd5e1;font-size:0.9rem;">STD VI &bull; Division A &bull; 42 Students</p>
+      </div>
+      <div class="s6-arrow-connector">
+        <span>⚡ 1-Click Promote</span>
+        <svg style="width:36px;height:36px;fill:currentColor;" viewBox="0 0 24 24"><path d="M5 13h11.86l-5.43 5.43 1.42 1.42L21.14 12l-8.29-8.29-1.42 1.42L16.86 11H5v2z"/></svg>
+      </div>
+      <div class="s6-node" style="border-color:#10b981;">
+        <span style="font-size:0.75rem;text-transform:uppercase;color:#10b981;font-weight:700;">Promoted Standard</span>
+        <h3 style="font-size:1.35rem;margin:6px 0;">Academic Year 2025-26</h3>
+        <p style="color:#cbd5e1;font-size:0.9rem;">STD VII &bull; Division A &bull; Ready</p>
+      </div>
+    </div>
+    <div class="s6-vault-badge" id="s6VaultBadge">
+      <svg style="width:24px;height:24px;fill:currentColor;" viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+      <span>Instant 1-Click Rollback Vault &bull; Full Historical Audit Logging</span>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       SCENE 7: Official Bonafide Certificate Generator (32.5s - 37.5s)
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <section class="scene" id="scene7">
+    <span class="eyebrow eyebrow-gold">Official Certification</span>
+    <h2 class="scene-title" style="font-size:2.6rem;">Instant Bonafide Certificate Engine</h2>
+    <p class="scene-subtitle" style="margin-bottom:26px;">Live WYSIWYG generator with automatic date-to-words &amp; public QR authentication</p>
+    <div class="s7-cert-card" id="s7CertCard">
+      <div style="font-size:0.8rem;text-transform:uppercase;color:#f59e0b;font-weight:700;letter-spacing:1px;margin-bottom:8px;">Hindustani Covenant Church High School, Solapur</div>
+      <h3 style="font-size:1.6rem;margin-bottom:14px;color:#ffffff;">BONAFIDE CERTIFICATE</h3>
+      <p style="font-size:1.0rem;color:#cbd5e1;line-height:1.6;margin-bottom:16px;">
+        This is to certify that Master/Miss <strong>Aarav Sharma</strong> (GR No: <strong>3875</strong>) is a bona fide student of this school studying in <strong>Standard X</strong>.
+        Date of Birth: <em>Twenty-Fourth August Two Thousand Ten</em>.
+      </p>
+      <div style="font-size:0.85rem;color:#10b981;font-weight:600;">✓ Verification QR Code Embedded &bull; Validated with Institutional Seal</div>
+      <div class="s7-seal">Official<br>School<br>Seal</div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       SCENE 8: Google Drive Cloud Workspace (37.5s - 42.5s)
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <section class="scene" id="scene8">
+    <span class="eyebrow eyebrow-cyan">Cloud Storage &amp; Sync</span>
+    <h2 class="scene-title" style="font-size:2.6rem;">Google Drive Teacher Workspace</h2>
+    <p class="scene-subtitle" style="margin-bottom:26px;">Automated cloud filing of marks, exam papers &amp; multi-teacher collaboration</p>
+    <div class="s8-tree-wrap" id="s8TreeWrap">
+      <div class="s8-tree-item" style="color:#0ea5e9;">
+        📁 /HCC High School Drive Workspace/
+      </div>
+      <div class="s8-tree-item" style="margin-left:30px;color:#38bdf8;">
+        📁 2025-26 Academic Master Archive/
+      </div>
+      <div class="s8-tree-item" style="margin-left:60px;color:#10b981;">
+        📄 STD-X-A_Semester_Report_Cards.pdf &bull; <small style="color:#94a3b8;">Auto-Filed</small>
+      </div>
+      <div class="s8-tree-item" style="margin-left:60px;color:#f59e0b;">
+        📄 STD-X_Unit_Test_Matrix.xlsx &bull; <small style="color:#94a3b8;">Synchronized</small>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       SCENE 9: WhatsApp Web Replica & Batch Dispatcher (42.5s - 49.5s)
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <section class="scene" id="scene9">
+    <span class="eyebrow eyebrow-emerald">Parent Communication</span>
+    <h2 class="scene-title" style="font-size:2.6rem;">1-Click WhatsApp Batch Dispatch Hub</h2>
+    <p class="scene-subtitle" style="margin-bottom:24px;">Direct delivery of Report Cards &amp; Slips to parent chat with verified double ticks</p>
+    <div class="s9-phone-stage" id="s9PhoneStage">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div style="font-weight:700;color:#00a884;font-size:1.05rem;">Batch Dispatch Progress: <span id="s9BatchCount">42 / 42 Delivered</span></div>
+        <div style="color:#53bdeb;font-weight:700;">100% Completed</div>
+      </div>
+      <div class="s9-chat-bubble" id="s9ChatBubble">
+        <p style="font-size:0.95rem;line-height:1.4;">Dear Parent, Please find enclosed the Official Semester Report Card for <strong>Aarav Sharma</strong>.</p>
+        <div class="s9-pdf-attach">
+          <span style="font-size:1.6rem;">📄</span>
+          <div>
+            <strong>Report_Card_Aarav_Sharma.pdf</strong>
+            <div style="font-size:0.75rem;color:#94a3b8;">142 KB &bull; Verified PDF</div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;align-items:center;gap:6px;margin-top:8px;font-size:0.75rem;color:#53bdeb;">
+          <span>10:42 AM</span>
+          <span style="font-size:0.95rem;">✓✓</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       SCENE 10: Admission CRM & AI Follow-Up Pipeline (49.5s - 54.5s)
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <section class="scene" id="scene10">
+    <span class="eyebrow eyebrow-violet">Admission Intelligence</span>
+    <h2 class="scene-title" style="font-size:2.6rem;">Admission CRM &amp; AI Review Pipeline</h2>
+    <p class="scene-subtitle" style="margin-bottom:24px;">Multi-stage inquiry tracking with AI draft suggestions and strict staff approval</p>
+    <div class="s10-funnel" id="s10Funnel">
+      <div class="s10-stage-col">
+        <strong style="color:#0ea5e9;">1. New</strong>
+        <div style="margin-top:8px;font-size:0.8rem;color:#94a3b8;">18 Enquiries</div>
+      </div>
+      <div class="s10-stage-col">
+        <strong style="color:#f59e0b;">2. Contacted</strong>
+        <div style="margin-top:8px;font-size:0.8rem;color:#94a3b8;">12 Active</div>
+      </div>
+      <div class="s10-stage-col">
+        <strong style="color:#8b5cf6;">3. Visit Planned</strong>
+        <div style="margin-top:8px;font-size:0.8rem;color:#94a3b8;">8 Scheduled</div>
+      </div>
+      <div class="s10-stage-col">
+        <strong style="color:#10b981;">4. Enrolled</strong>
+        <div style="margin-top:8px;font-size:0.8rem;color:#94a3b8;">24 Finalized</div>
+      </div>
+    </div>
+    <div class="s10-ai-card" id="s10AiCard">
+      <div>
+        <div style="font-size:0.8rem;color:#c084fc;font-weight:700;text-transform:uppercase;">AI Suggested Follow-Up</div>
+        <p style="font-size:0.95rem;color:#f1f5f9;margin-top:4px;">"Hello Mr. Patel, We would love to welcome you for the campus tour tomorrow at 10:00 AM."</p>
+      </div>
+      <div style="background:rgba(239,68,68,0.2);border:1px solid #ef4444;color:#fca5a5;padding:8px 14px;border-radius:8px;font-size:0.8rem;font-weight:700;">
+        🔒 Staff Approval Required
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       SCENE 11: Grand Finale Ecosystem Lockup (54.5s - 60.0s)
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <section class="scene" id="scene11">
+    <div class="s11-orbit-container" id="s11Orbit">
+      <div class="s11-core-shield">
+        <svg style="width:70px;height:70px;fill:#ffffff;" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      </div>
+      <div class="s11-orbit-tag" style="top:20px;left:40px;">📊 Executive Dashboard</div>
+      <div class="s11-orbit-tag" style="top:20px;right:40px;">📝 Semester Matrix</div>
+      <div class="s11-orbit-tag" style="top:110px;left:-40px;">🎯 Unit Tests I-IV</div>
+      <div class="s11-orbit-tag" style="top:110px;right:-40px;">📅 Timetable Studio</div>
+      <div class="s11-orbit-tag" style="bottom:70px;left:0px;">🎓 Student Promotion</div>
+      <div class="s11-orbit-tag" style="bottom:70px;right:0px;">📜 Bonafide Engine</div>
+      <div class="s11-orbit-tag" style="bottom:0px;left:80px;">☁️ Drive Workspace</div>
+      <div class="s11-orbit-tag" style="bottom:0px;right:80px;">💬 WhatsApp Hub</div>
+    </div>
+    <h1 class="scene-title" style="font-size:3.0rem;margin-bottom:8px;">HINDUSTANI COVENANT CHURCH</h1>
+    <p class="scene-subtitle" style="margin-bottom:24px;">The Complete School Automation System &bull; Fast &bull; Secure &bull; Paperless</p>
+    <button class="s11-cta-btn" id="s11Cta">
+      <span>Launch Full Automation Workspace</span>
+      <svg style="width:20px;height:20px;fill:currentColor;" viewBox="0 0 24 24"><path d="M5 13h11.86l-5.43 5.43 1.42 1.42L21.14 12l-8.29-8.29-1.42 1.42L16.86 11H5v2z"/></svg>
+    </button>
+  </section>
+</div>
+
+<script>
+  window.DURATION = 60.0;
+  window.FPS = 30;
+  window.TOTAL_FRAMES = 1800;
+
+  // Master GSAP Timeline
+  const tl = gsap.timeline({ paused: true, defaults: { ease: 'power3.out' } });
+  window.projectPromoTimeline = tl;
+
+  // Background Ambient Blob Orbits
+  gsap.to('#blobA', { x: 90, y: 70, duration: 12, repeat: -1, yoyo: true, ease: 'sine.inOut' });
+  gsap.to('#blobB', { x: -90, y: -70, duration: 14, repeat: -1, yoyo: true, ease: 'sine.inOut' });
+  gsap.to('#blobC', { x: -60, y: 60, duration: 10, repeat: -1, yoyo: true, ease: 'sine.inOut' });
+
+  // ── Scene 1: Brand & Shield (0.0s - 5.0s)
+  tl.set('#scene1', { autoAlpha: 1 }, 0);
+  tl.from('#s1CrestWrap', { scale: 0.7, opacity: 0, duration: 0.9, ease: 'back.out(1.8)' }, 0.2);
+  tl.from('#scene1 .scene-title', { y: 35, opacity: 0, duration: 0.9 }, 0.5);
+  tl.from('#scene1 .scene-subtitle', { y: 25, opacity: 0, duration: 0.8 }, 0.75);
+  tl.from('#s1Pills .s1-pill', { y: 20, opacity: 0, stagger: 0.15, duration: 0.6, ease: 'back.out(1.5)' }, 1.0);
+  tl.to('#scene1', { scale: 0.92, opacity: 0, duration: 0.6, ease: 'power2.in' }, 4.4);
+  tl.set('#scene1', { autoAlpha: 0 }, 5.0);
+
+  // ── Scene 2: Dashboard HUD (5.0s - 10.5s)
+  tl.set('#scene2', { autoAlpha: 1 }, 5.0);
+  tl.from('#scene2 .scene-title', { y: -20, opacity: 0, duration: 0.6 }, 5.1);
+  tl.from('#s2Grid .s2-kpi-card', { y: 40, opacity: 0, stagger: 0.15, duration: 0.7, ease: 'back.out(1.6)' }, 5.3);
+  tl.from('.s2-notif-box', { x: 40, opacity: 0, duration: 0.7 }, 5.7);
+
+  // Counter animations
+  const countObj = { students: 0, pass: 0 };
+  tl.to(countObj, {
+    students: 1248, pass: 98.4, duration: 2.2, ease: 'power2.out',
+    onUpdate: () => {
+      const sEl = document.getElementById('s2CountStudents');
+      const pEl = document.getElementById('s2CountPass');
+      if (sEl) sEl.textContent = Math.floor(countObj.students).toLocaleString();
+      if (pEl) pEl.textContent = countObj.pass.toFixed(1) + '%';
+    }
+  }, 5.6);
+  tl.to('#scene2', { scale: 0.92, opacity: 0, duration: 0.6, ease: 'power2.in' }, 9.9);
+  tl.set('#scene2', { autoAlpha: 0 }, 10.5);
+
+  // ── Scene 3: Results Matrix & Parent Signature (10.5s - 16.5s)
+  tl.set('#scene3', { autoAlpha: 1 }, 10.5);
+  tl.from('#scene3 .scene-title', { y: -20, opacity: 0, duration: 0.6 }, 10.6);
+  tl.from('.s3-matrix-table', { x: -50, opacity: 0, duration: 0.8 }, 10.8);
+  tl.from('.s3-report-preview', { x: 50, opacity: 0, duration: 0.8 }, 11.1);
+  tl.from('#s3SignStamp', { scale: 0, opacity: 0, rotation: -10, duration: 0.6, ease: 'back.out(2)' }, 13.5);
+  tl.to('#scene3', { scale: 0.92, opacity: 0, duration: 0.6, ease: 'power2.in' }, 15.9);
+  tl.set('#scene3', { autoAlpha: 0 }, 16.5);
+
+  // ── Scene 4: Unit Tests I-IV & Slips (16.5s - 21.5s)
+  tl.set('#scene4', { autoAlpha: 1 }, 16.5);
+  tl.from('#s4HexRow .s4-hex-card', { y: 40, opacity: 0, stagger: 0.15, duration: 0.7, ease: 'back.out(1.8)' }, 16.7);
+  tl.from('#s4SlipsStack .s4-slip', { y: 30, opacity: 0, stagger: 0.15, duration: 0.6 }, 18.0);
+  tl.to('#scene4', { scale: 0.92, opacity: 0, duration: 0.6, ease: 'power2.in' }, 20.9);
+  tl.set('#scene4', { autoAlpha: 0 }, 21.5);
+
+  // ── Scene 5: Timetable Studio (21.5s - 27.0s)
+  tl.set('#scene5', { autoAlpha: 1 }, 21.5);
+  tl.from('#s5TableWrap', { scale: 0.9, opacity: 0, duration: 0.8, ease: 'power3.out' }, 21.7);
+  tl.from('.s5-rowspan-cell', { backgroundColor: 'rgba(245,158,11,0.4)', duration: 0.6, yoyo: true, repeat: 1 }, 23.0);
+  tl.to('#scene5', { scale: 0.92, opacity: 0, duration: 0.6, ease: 'power2.in' }, 26.4);
+  tl.set('#scene5', { autoAlpha: 0 }, 27.0);
+
+  // ── Scene 6: Student Promotion & Vault (27.0s - 32.5s)
+  tl.set('#scene6', { autoAlpha: 1 }, 27.0);
+  tl.from('#s6Flow .s6-node', { x: -30, opacity: 0, stagger: 0.3, duration: 0.8 }, 27.2);
+  tl.from('#s6VaultBadge', { scale: 0.8, opacity: 0, duration: 0.6, ease: 'back.out(1.6)' }, 29.5);
+  tl.to('#scene6', { scale: 0.92, opacity: 0, duration: 0.6, ease: 'power2.in' }, 31.9);
+  tl.set('#scene6', { autoAlpha: 0 }, 32.5);
+
+  // ── Scene 7: Bonafide Certificate Generator (32.5s - 37.5s)
+  tl.set('#scene7', { autoAlpha: 1 }, 32.5);
+  tl.from('#s7CertCard', { y: 40, opacity: 0, duration: 0.8, ease: 'power3.out' }, 32.7);
+  tl.from('.s7-seal', { scale: 0, rotation: 180, opacity: 0, duration: 0.6, ease: 'back.out(2)' }, 34.5);
+  tl.to('#scene7', { scale: 0.92, opacity: 0, duration: 0.6, ease: 'power2.in' }, 36.9);
+  tl.set('#scene7', { autoAlpha: 0 }, 37.5);
+
+  // ── Scene 8: Google Drive Cloud Workspace (37.5s - 42.5s)
+  tl.set('#scene8', { autoAlpha: 1 }, 37.5);
+  tl.from('#s8TreeWrap', { y: 30, opacity: 0, duration: 0.8 }, 37.7);
+  tl.from('#s8TreeWrap .s8-tree-item', { x: -20, opacity: 0, stagger: 0.15, duration: 0.5 }, 38.3);
+  tl.to('#scene8', { scale: 0.92, opacity: 0, duration: 0.6, ease: 'power2.in' }, 41.9);
+  tl.set('#scene8', { autoAlpha: 0 }, 42.5);
+
+  // ── Scene 9: WhatsApp Batch Dispatch Hub (42.5s - 49.5s)
+  tl.set('#scene9', { autoAlpha: 1 }, 42.5);
+  tl.from('#s9PhoneStage', { scale: 0.9, opacity: 0, duration: 0.8 }, 42.7);
+  tl.from('#s9ChatBubble', { y: 30, opacity: 0, scale: 0.85, duration: 0.6, ease: 'back.out(1.8)' }, 43.6);
+  tl.to('#scene9', { scale: 0.92, opacity: 0, duration: 0.6, ease: 'power2.in' }, 48.9);
+  tl.set('#scene9', { autoAlpha: 0 }, 49.5);
+
+  // ── Scene 10: Admission CRM & AI Review (49.5s - 54.5s)
+  tl.set('#scene10', { autoAlpha: 1 }, 49.5);
+  tl.from('#s10Funnel .s10-stage-col', { y: 30, opacity: 0, stagger: 0.12, duration: 0.6 }, 49.7);
+  tl.from('#s10AiCard', { y: 25, opacity: 0, duration: 0.7, ease: 'back.out(1.5)' }, 51.0);
+  tl.to('#scene10', { scale: 0.92, opacity: 0, duration: 0.6, ease: 'power2.in' }, 53.9);
+  tl.set('#scene10', { autoAlpha: 0 }, 54.5);
+
+  // ── Scene 11: Grand Finale Ecosystem Lockup (54.5s - 60.0s)
+  tl.set('#scene11', { autoAlpha: 1 }, 54.5);
+  tl.from('.s11-core-shield', { scale: 0, opacity: 0, duration: 0.8, ease: 'back.out(2)' }, 54.7);
+  tl.from('#s11Orbit .s11-orbit-tag', { scale: 0, opacity: 0, stagger: 0.08, duration: 0.6, ease: 'back.out(1.8)' }, 55.2);
+  tl.from('#scene11 .scene-title', { y: 25, opacity: 0, duration: 0.7 }, 56.2);
+  tl.from('#s11Cta', { scale: 0.85, opacity: 0, duration: 0.6, ease: 'back.out(1.8)' }, 57.0);
+
+  // Auto-play if not running in render mode
+  if (!window.location.search.includes('render')) {
+    tl.play();
+  }
+</script>
+</body>
+</html>

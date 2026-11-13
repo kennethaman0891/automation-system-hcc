@@ -440,6 +440,35 @@ if (!function_exists('waInsertMessage')) {
             $msgId = (int)$find->fetchColumn();
         }
 
+        // A later read can replace a scrape-time stamp or a noon day-placeholder.
+        // A timestamp that was already a real clock is left alone.
+        $parsedTs = (int)($msg['timestamp'] ?? 0);
+        if ($msgId > 0 && !empty($msg['timestamp_parsed']) && $parsedTs > 1000000000 && $parsedTs < 20000000000) {
+            try {
+                $precision = '';
+                if (is_array($msg['metadata'] ?? null)) {
+                    $precision = (string)($msg['metadata']['time_precision'] ?? '');
+                }
+                $fix = $db->prepare("
+                    UPDATE whatsapp_messages
+                    SET timestamp = ?,
+                        metadata = JSON_SET(COALESCE(CAST(metadata AS JSON), JSON_OBJECT()), '$.time_precision', ?)
+                    WHERE id = ?
+                      AND timestamp <> ?
+                      AND (
+                        timestamp BETWEEN UNIX_TIMESTAMP(received_at) - 3 AND UNIX_TIMESTAMP(received_at) + 3
+                        OR (
+                          MOD(timestamp + 19800, 86400) = 43200
+                          AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.preview_only')) IN ('true', '1')
+                        )
+                      )
+                ");
+                $fix->execute([$parsedTs, $precision, $msgId, $parsedTs]);
+            } catch (Throwable $e) {
+                error_log('WA timestamp repair skipped: ' . $e->getMessage());
+            }
+        }
+
         if ($msgId > 0) {
             // Update chat's last_message_id and last_activity_at
             $db->prepare("

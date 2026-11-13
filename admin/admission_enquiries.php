@@ -832,7 +832,7 @@ $search  = trim($_GET['search'] ?? '');
 
                 <div class="air-body">
                     <div class="air-panel">
-                        <h3>1. Select source</h3>
+                        <h3>1. Incoming messages</h3>
                         <div class="air-context-box" id="airInboundNote">Checking stored inbound messages…</div>
                         <div class="air-chat-list" id="airChatList"><div class="air-empty">Loading…</div></div>
                         <h3 style="margin-top:12px;">Inbound messages in selected chat</h3>
@@ -966,9 +966,9 @@ $search  = trim($_GET['search'] ?? '');
                                     <th>Parent / WhatsApp</th>
                                     <th>Student &amp; Class</th>
                                     <th>Pipeline Status</th>
-                                    <th>Original WhatsApp Query</th>
+                                    <th>Query / Latest Message</th>
                                     <th>Assigned Staff</th>
-                                    <th>Date</th>
+                                    <th>Latest Activity</th>
                                     <th style="text-align:right;">Actions</th>
                                 </tr>
                             </thead>
@@ -1250,10 +1250,12 @@ $search  = trim($_GET['search'] ?? '');
         let currentPage = 1;
         let debounceTimer = null;
 
-        // ── Helper: Format Date ───────────────────────────────────────────────
+        // ── Helper: Format Date (Robust Cross-Browser & Mobile ISO Parsing) ──
         function formatDate(dtStr) {
             if (!dtStr) return '—';
-            const d = new Date(dtStr);
+            const s = String(dtStr).trim();
+            const iso = s.includes('T') ? s : s.replace(' ', 'T');
+            const d = new Date(iso);
             if (isNaN(d.getTime())) return dtStr;
             return d.toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', hour12:true });
         }
@@ -1357,18 +1359,28 @@ $search  = trim($_GET['search'] ?? '');
                 } else {
                     tbody.innerHTML = data.data.map(item => {
                         const statusClass = `status-${item.status}`;
-                        const origMsgPreview = escapeHtml((item.original_message || '').substring(0, 65)) + ((item.original_message || '').length > 65 ? '…' : '');
+                        const origMsg = item.original_message || '';
+                        const lastMsg = item.last_message_body || origMsg;
+                        const origMsgPreview = escapeHtml(origMsg.substring(0, 60)) + (origMsg.length > 60 ? '…' : '');
+                        const lastMsgPreview = escapeHtml(lastMsg.substring(0, 60)) + (lastMsg.length > 60 ? '…' : '');
+                        const isLastIncoming = item.last_message_type === 'incoming_message';
                         const reusedBadge = item.matched_student_roll ? `
                             <div class="reused-badge" title="Reused existing record: Roll #${escapeHtml(item.matched_student_roll)} (${escapeHtml(item.matched_student_class || '')})">
                                 <i class="fa-solid fa-link"></i> Roll #${escapeHtml(item.matched_student_roll)}
                             </div>
                         ` : '';
 
+                        const msgCountBadge = (item.message_count > 1) ? `
+                            <span style="display:inline-block;background:#e0f2fe;color:#0369a1;font-size:0.68rem;font-weight:700;padding:1px 6px;border-radius:999px;margin-left:4px;" title="${item.message_count} messages in conversation">
+                                <i class="fa-solid fa-comments" style="font-size:0.65rem;"></i> ${item.message_count}
+                            </span>
+                        ` : '';
+
                         return `
                             <tr>
                                 <td><strong>#${item.id}</strong></td>
                                 <td>
-                                    <div style="font-weight:700;color:var(--ink);">${escapeHtml(item.parent_name)}</div>
+                                    <div style="font-weight:700;color:var(--ink);">${escapeHtml(item.parent_name)}${msgCountBadge}</div>
                                     <div style="font-size:0.75rem;color:var(--text-2);margin-top:2px;">
                                         <i class="fa-brands fa-whatsapp" style="color:#25d366;"></i> ${escapeHtml(item.phone_number)}
                                     </div>
@@ -1384,15 +1396,26 @@ $search  = trim($_GET['search'] ?? '');
                                     <span class="status-badge ${statusClass}">${escapeHtml(item.status)}</span>
                                 </td>
                                 <td>
-                                    <span style="color:#475569;font-size:0.8rem;line-height:1.4;" title="${escapeHtml(item.original_message)}">
-                                        ${origMsgPreview}
-                                    </span>
+                                    <div style="color:#334155;font-size:0.8rem;line-height:1.4;" title="${escapeHtml(lastMsg)}">
+                                        ${lastMsg !== origMsg ? `<span style="font-size:0.68rem;font-weight:700;color:${isLastIncoming ? '#059669' : '#0284c7'};background:${isLastIncoming ? '#d1fae5' : '#e0f2fe'};padding:1px 5px;border-radius:4px;margin-right:4px;">${isLastIncoming ? 'INCOMING' : 'LATEST'}</span>` : ''}
+                                        <span>${lastMsgPreview || '<em style="color:#94a3b8;">No message text</em>'}</span>
+                                    </div>
+                                    ${origMsg && origMsg !== lastMsg ? `
+                                        <div style="font-size:0.72rem;color:var(--text-2);margin-top:2px;" title="Original Query: ${escapeHtml(origMsg)}">
+                                            <span style="opacity:0.75;">Orig:</span> ${origMsgPreview}
+                                        </div>
+                                    ` : ''}
                                 </td>
                                 <td>
                                     <span style="font-size:0.8rem;color:#334155;">${escapeHtml(item.assigned_staff_name || 'Unassigned')}</span>
                                 </td>
                                 <td>
-                                    <span style="font-size:0.75rem;color:var(--text-2);">${formatDate(item.created_at)}</span>
+                                    <div style="font-size:0.75rem;font-weight:600;color:#0f172a;">${formatDate(item.last_interaction_at || item.updated_at || item.created_at)}</div>
+                                    ${item.last_interaction_at && item.created_at && item.last_interaction_at !== item.created_at ? `
+                                        <div style="font-size:0.68rem;color:var(--text-2);margin-top:2px;" title="Registered: ${formatDate(item.created_at)}">
+                                            Created: ${formatDate(item.created_at)}
+                                        </div>
+                                    ` : ''}
                                 </td>
                                 <td style="text-align:right;white-space:nowrap;">
                                     <button type="button" class="btn-table btn-view-enquiry" data-id="${item.id}" title="View persistent conversation timeline">
@@ -1601,8 +1624,11 @@ $search  = trim($_GET['search'] ?? '');
         });
 
         // ── Open Persistent Conversation Timeline ─────────────────────────────
+        let currentTimelineSig = '';
+
         async function openEnquiryTimeline(id) {
             currentEnquiryId = id;
+            currentTimelineSig = '';
             try {
                 const res = await fetch(`api_admission_enquiry.php?action=get&id=${id}`);
                 const data = await res.json();
@@ -1640,6 +1666,7 @@ $search  = trim($_GET['search'] ?? '');
                 }
 
                 // Render Timeline
+                currentTimelineSig = `${(data.timeline || []).length}:${(data.timeline || []).map(t => t.id + ':' + (t.created_at || '')).join(',')}`;
                 renderTimelineStream(data.timeline || [], enq);
                 openModal('modalConversationView');
             } catch (err) {
@@ -1656,16 +1683,33 @@ $search  = trim($_GET['search'] ?? '');
 
             const iconMap = {
                 'incoming_message': { class: 'tl-incoming', icon: 'fa-whatsapp fa-brands', title: 'Parent Incoming WhatsApp Message' },
+                'outgoing_message': { class: 'tl-approved', icon: 'fa-paper-plane fa-solid', title: 'School Outgoing WhatsApp Message' },
                 'ai_draft':         { class: 'tl-aidraft',  icon: 'fa-wand-magic-sparkles fa-solid', title: 'AI-Generated Response Draft' },
                 'staff_edit':       { class: 'tl-staffedit',icon: 'fa-user-pen fa-solid', title: 'Staff Edited Draft' },
                 'approved_response':{ class: 'tl-approved', icon: 'fa-check-double fa-solid', title: 'Approved Response Sent / Ready' },
-                'follow_up':        { class: 'tl-followup', icon: 'fa-phone-volume fa-solid', title: 'Follow-Up History' },
+                'follow_up':        { class: 'tl-followup', icon: 'fa-phone-volume fa-solid', title: 'Follow-Up Scheduled' },
                 'status_change':    { class: 'tl-status',   icon: 'fa-arrows-rotate fa-solid', title: 'Admission Pipeline Status Change' },
-                'note':             { class: 'tl-status',   icon: 'fa-note-sticky fa-solid', title: 'Internal Note' }
+                'note':             { class: 'tl-status',   icon: 'fa-note-sticky fa-solid', title: 'Internal Note' },
+                'history_event':    { class: 'tl-status',   icon: 'fa-clock-rotate-left fa-solid', title: 'Follow-up History' }
             };
 
             wrap.innerHTML = timeline.map(item => {
-                const conf = iconMap[item.message_type] || { class: 'tl-status', icon: 'fa-circle-info fa-solid', title: item.message_type };
+                let conf = iconMap[item.message_type] || { class: 'tl-status', icon: 'fa-circle-info fa-solid', title: item.message_type };
+                if (item.message_type === 'history_event') {
+                    const act = item.history_action || '';
+                    if (act === 'whatsapp_opened') {
+                        conf = { class: 'tl-followup', icon: 'fa-arrow-up-right-from-square fa-solid', title: 'WhatsApp Opened' };
+                    } else if (act === 'completed' || act === 'manual_sent_confirmed') {
+                        conf = { class: 'tl-approved', icon: 'fa-circle-check fa-solid', title: 'Confirmed / Completed' };
+                    } else if (act === 'rescheduled') {
+                        conf = { class: 'tl-followup', icon: 'fa-calendar-days fa-solid', title: 'Follow-up Rescheduled' };
+                    } else if (act === 'cancelled') {
+                        conf = { class: 'tl-status', icon: 'fa-xmark fa-solid', title: 'Follow-up Cancelled' };
+                    } else if (act === 'created') {
+                        conf = { class: 'tl-status', icon: 'fa-user-plus fa-solid', title: 'Enquiry Registered' };
+                    }
+                }
+
                 return `
                     <div class="tl-item">
                         <div class="tl-icon ${conf.class}">
@@ -1687,6 +1731,9 @@ $search  = trim($_GET['search'] ?? '');
                     </div>
                 `;
             }).join('');
+
+            // Scroll timeline to latest messages
+            setTimeout(() => { wrap.scrollTop = wrap.scrollHeight; }, 50);
         }
 
         // Table details click
@@ -2049,8 +2096,9 @@ $search  = trim($_GET['search'] ?? '');
                 const items = data.data || [];
                 const highestId = items.length ? Math.max(...items.map(i => parseInt(i.id, 10) || 0)) : 0;
                 const totalCount = data.pagination?.total || 0;
-                const topUpdate = items.length ? `${items[0].id}:${items[0].updated_at || ''}:${items[0].message_count || 0}` : '';
-                const currentSig = `${totalCount}-${highestId}-${topUpdate}`;
+                const sumMsgs = items.reduce((acc, i) => acc + (parseInt(i.message_count, 10) || 0), 0);
+                const topActive = items.length ? `${items[0].id}:${items[0].last_interaction_at || items[0].updated_at || ''}` : '';
+                const currentSig = `${totalCount}-${highestId}-${sumMsgs}-${topActive}`;
 
                 if (lastKnownSig === '') {
                     lastKnownSig = currentSig;
@@ -2077,10 +2125,9 @@ $search  = trim($_GET['search'] ?? '');
                     const gRes = await fetch(`api_admission_enquiry.php?action=get&id=${currentEnquiryId}`);
                     const gData = await gRes.json();
                     if (gData && gData.success && gData.timeline) {
-                        if (lastTimelineCount === 0) {
-                            lastTimelineCount = gData.timeline.length;
-                        } else if (gData.timeline.length > lastTimelineCount) {
-                            lastTimelineCount = gData.timeline.length;
+                        const tSig = `${gData.timeline.length}:${gData.timeline.map(t => t.id + ':' + (t.created_at || '')).join(',')}`;
+                        if (tSig !== currentTimelineSig) {
+                            currentTimelineSig = tSig;
                             renderTimelineStream(gData.timeline, gData.data);
                         }
                     }

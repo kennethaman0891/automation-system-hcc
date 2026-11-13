@@ -26,8 +26,19 @@ if ($signature === '' || !hash_equals($expected, $signature)) {
     waJsonResponse(['success' => false, 'error' => 'Invalid signature'], 401);
 }
 
-$data = json_decode($payload, true);
-if (!is_array($data)) {
+// A broken character in one WhatsApp bubble used to make PHP reject the whole
+// batch, so the new message never reached the admission list.
+$jsonFlags = defined('JSON_INVALID_UTF8_SUBSTITUTE') ? JSON_INVALID_UTF8_SUBSTITUTE : 0;
+$data = json_decode($payload, true, 512, $jsonFlags);
+if (is_string($data)) {
+    $nested = json_decode($data, true, 512, $jsonFlags);
+    if (is_array($nested)) $data = $nested;
+}
+if (is_array($data) && isset($data['wa_msg_id']) && !isset($data[0])) {
+    $data = [$data];
+}
+if (!is_array($data) || !isset($data[0])) {
+    error_log('WA ingest rejected: bytes=' . strlen((string)$payload) . ' json=' . json_last_error_msg());
     waJsonResponse(['success' => false, 'error' => 'Expected JSON array'], 400);
 }
 
@@ -129,6 +140,7 @@ try {
                 'is_starred' => $msg['is_starred'] ?? false,
                 'status' => $msg['from_me'] ? 'sent' : 'delivered',
                 'timestamp' => (int)$msg['timestamp'],
+                'timestamp_parsed' => !empty($msg['timestamp_parsed']),
                 'metadata' => $msg['metadata'] ?? null
             ]);
             $inserted++;
@@ -145,9 +157,14 @@ try {
             }
 
             // ── Automatically sync with Admission Enquiries & Follow-ups Pipeline ──
-            // Incoming individual messages (including previews captured from the chat list)
-            // must sync immediately so prospective parent enquiries are never dropped or delayed.
-            if (empty($msg['from_me'])) {
+            // Incoming individual messages (including previews of a chat we tried to open)
+            // sync so a prospective parent is not dropped. A sidebar-only preview is just
+            // the latest line for the admission message list — it must not open an enquiry.
+            $previewReason = '';
+            if ($isPreviewOnly && is_array($msg['metadata'] ?? null)) {
+                $previewReason = (string)($msg['metadata']['reason'] ?? '');
+            }
+            if (empty($msg['from_me']) && $previewReason !== 'sidebar') {
                 try {
                     $db->exec('SAVEPOINT wa_enq_sync');
                     waSyncInboundAdmissionEnquiry($db, $msg, $chatId, $senderId, $waChatId, $chatType);
@@ -157,6 +174,17 @@ try {
                         $db->exec('ROLLBACK TO SAVEPOINT wa_enq_sync');
                     } catch (Throwable $ignored) {}
                     error_log('Admission enquiry sync warning: ' . $enqEx->getMessage());
+                }
+            } elseif (!empty($msg['from_me'])) {
+                // Outgoing messages sent by school staff: record into enquiry conversation timeline
+                try {
+                    $db->exec('SAVEPOINT wa_out_sync');
+                    waSyncOutboundAdmissionEnquiry($db, $msg, $chatId, $waChatId);
+                    $db->exec('RELEASE SAVEPOINT wa_out_sync');
+                } catch (Throwable $outEx) {
+                    try {
+                        $db->exec('ROLLBACK TO SAVEPOINT wa_out_sync');
+                    } catch (Throwable $ignored) {}
                 }
             }
             
@@ -320,10 +348,12 @@ function waSyncInboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, ?int $s
             }
         }
         if ($bodyText !== '') {
+            // Deduplicate only identical message body received within 30 seconds (network duplicate prevention).
+            // Do NOT use a multi-hour interval which drops valid conversational replies like 'yes', 'ok', 'thanks'.
             $byBody = $db->prepare("
                 SELECT id FROM admission_enquiry_messages
                 WHERE enquiry_id = ? AND message_type = 'incoming_message' AND body = ?
-                  AND created_at >= (NOW() - INTERVAL 6 HOUR)
+                  AND created_at >= (NOW() - INTERVAL 30 SECOND)
                 LIMIT 1
             ");
             $byBody->execute([$enquiryId, $bodyText]);
@@ -332,22 +362,26 @@ function waSyncInboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, ?int $s
             }
         }
 
+        $msgCreatedAt = !empty($msg['timestamp']) ? date('Y-m-d H:i:s', (int)$msg['timestamp']) : date('Y-m-d H:i:s');
+
         // Append to conversation timeline
         $msgIns = $db->prepare("
             INSERT INTO admission_enquiry_messages
             (enquiry_id, message_type, body, admin_name, metadata, created_at)
-            VALUES (?, 'incoming_message', ?, ?, ?, NOW())
+            VALUES (?, 'incoming_message', ?, ?, ?, ?)
         ");
         $metaJson = json_encode([
             'wa_msg_id' => $msg['wa_msg_id'] ?? null,
             'chat_id' => $chatId,
+            'timestamp' => (int)($msg['timestamp'] ?? time()),
             'source' => 'whatsapp_inbound'
         ], JSON_UNESCAPED_UNICODE);
         $msgIns->execute([
             $enquiryId,
             $bodyText !== '' ? $bodyText : '[Media / Attachment received on WhatsApp]',
             $parentName,
-            $metaJson
+            $metaJson,
+            $msgCreatedAt
         ]);
 
         // Update enquiry activity timestamp and reset reminder if it was previously reminded
@@ -372,10 +406,10 @@ function waSyncInboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, ?int $s
         $histStmt = $db->prepare("
             INSERT INTO admission_followup_history
             (enquiry_id, action, title, details, performed_by, manual_sent_confirmed, delivery_verified, created_at)
-            VALUES (?, 'note_added', 'Parent WhatsApp Message Received', ?, 'WhatsApp Ingest', 0, 0, NOW())
+            VALUES (?, 'note_added', 'Parent WhatsApp Message Received', ?, 'WhatsApp Ingest', 0, 0, ?)
         ");
         $snippet = $bodyText !== '' ? (mb_substr($bodyText, 0, 180) . (mb_strlen($bodyText) > 180 ? '...' : '')) : 'Media / Attachment received.';
-        $histStmt->execute([$enquiryId, $snippet]);
+        $histStmt->execute([$enquiryId, $snippet, $msgCreatedAt]);
 
         // Ensure whatsapp_chats is linked
         try {
@@ -480,11 +514,13 @@ function waSyncInboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, ?int $s
     ]);
     $newEnquiryId = (int)$db->lastInsertId();
 
+    $msgCreatedAt = !empty($msg['timestamp']) ? date('Y-m-d H:i:s', (int)$msg['timestamp']) : date('Y-m-d H:i:s');
+
     // Insert into admission_enquiry_messages
     $db->prepare("
         INSERT INTO admission_enquiry_messages
         (enquiry_id, message_type, body, admin_name, metadata, created_at)
-        VALUES (?, 'incoming_message', ?, ?, ?, NOW())
+        VALUES (?, 'incoming_message', ?, ?, ?, ?)
     ")->execute([
         $newEnquiryId,
         $bodyText !== '' ? $bodyText : '[WhatsApp Inbound Enquiry]',
@@ -492,18 +528,21 @@ function waSyncInboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, ?int $s
         json_encode([
             'source' => 'whatsapp',
             'phone' => $phoneE164,
+            'timestamp' => (int)($msg['timestamp'] ?? time()),
             'wa_msg_id' => $msg['wa_msg_id'] ?? null
-        ], JSON_UNESCAPED_UNICODE)
+        ], JSON_UNESCAPED_UNICODE),
+        $msgCreatedAt
     ]);
 
     // Insert into admission_followup_history
     $db->prepare("
         INSERT INTO admission_followup_history
         (enquiry_id, action, title, details, performed_by, manual_sent_confirmed, delivery_verified, created_at)
-        VALUES (?, 'created', 'New WhatsApp Admission Enquiry Captured', ?, 'WhatsApp Automation', 0, 0, NOW())
+        VALUES (?, 'created', 'New WhatsApp Admission Enquiry Captured', ?, 'WhatsApp Automation', 0, 0, ?)
     ")->execute([
         $newEnquiryId,
-        "Enquiry captured automatically from incoming WhatsApp message. Class: {$detectedClass}. Follow-up scheduled for today."
+        "Enquiry captured automatically from incoming WhatsApp message. Class: {$detectedClass}. Follow-up scheduled for today.",
+        $msgCreatedAt
     ]);
 
     // Link chat metadata
@@ -517,4 +556,86 @@ function waSyncInboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, ?int $s
     } catch (Throwable $ignored) {}
 
     return $newEnquiryId;
+}
+
+/**
+ * Sync outbound WhatsApp messages sent by school staff into the admission enquiry timeline.
+ * Preserves two-way conversations so staff can see parent queries and staff replies together.
+ */
+function waSyncOutboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, string $waChatId): void {
+    $bodyText = trim((string)($msg['body'] ?? ''));
+    if ($bodyText === '' || waInboundIsBlankSync($msg, $bodyText)) {
+        return;
+    }
+    $rawDigits = preg_replace('/\D/', '', $waChatId);
+    $phone10 = strlen($rawDigits) > 10 ? substr($rawDigits, -10) : $rawDigits;
+    $phoneE164 = '+' . $rawDigits;
+
+    // Check if an active enquiry exists for this chat or phone
+    $enqStmt = $db->prepare("
+        SELECT id, status FROM admission_enquiries
+        WHERE chat_id = ? OR phone_e164 = ? OR phone_number LIKE ?
+        ORDER BY id DESC LIMIT 1
+    ");
+    $enqStmt->execute([$chatId, $phoneE164, "%{$phone10}%"]);
+    $existing = $enqStmt->fetch(PDO::FETCH_ASSOC);
+    if (!$existing) {
+        return;
+    }
+
+    $enquiryId = (int)$existing['id'];
+    $waMsgId = (string)($msg['wa_msg_id'] ?? '');
+
+    // Check if already in timeline by wa_msg_id
+    if ($waMsgId !== '') {
+        $byId = $db->prepare("
+            SELECT id FROM admission_enquiry_messages
+            WHERE enquiry_id = ? AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.wa_msg_id')) = ?
+            LIMIT 1
+        ");
+        $byId->execute([$enquiryId, $waMsgId]);
+        if ($byId->fetchColumn()) {
+            return;
+        }
+    }
+
+    // Check if duplicate outgoing body within 30 seconds
+    $byBody = $db->prepare("
+        SELECT id FROM admission_enquiry_messages
+        WHERE enquiry_id = ? AND (message_type = 'outgoing_message' OR message_type = 'approved_response')
+          AND body = ? AND created_at >= (NOW() - INTERVAL 30 SECOND)
+        LIMIT 1
+    ");
+    $byBody->execute([$enquiryId, $bodyText]);
+    if ($byBody->fetchColumn()) {
+        return;
+    }
+
+    $senderName = trim((string)($msg['sender_name'] ?? 'School Staff'));
+    if ($senderName === '' || strtolower($senderName) === 'you') {
+        $senderName = 'School Staff';
+    }
+    $msgCreatedAt = !empty($msg['timestamp']) ? date('Y-m-d H:i:s', (int)$msg['timestamp']) : date('Y-m-d H:i:s');
+
+    $msgIns = $db->prepare("
+        INSERT INTO admission_enquiry_messages
+        (enquiry_id, message_type, body, admin_name, metadata, created_at)
+        VALUES (?, 'outgoing_message', ?, ?, ?, ?)
+    ");
+    $msgIns->execute([
+        $enquiryId,
+        $bodyText,
+        $senderName,
+        json_encode([
+            'wa_msg_id' => $waMsgId,
+            'chat_id' => $chatId,
+            'source' => 'whatsapp_outbound',
+            'timestamp' => (int)($msg['timestamp'] ?? time())
+        ], JSON_UNESCAPED_UNICODE),
+        $msgCreatedAt
+    ]);
+
+    // Update enquiry activity timestamp
+    $db->prepare("UPDATE admission_enquiries SET updated_at = NOW(), chat_id = COALESCE(chat_id, ?) WHERE id = ?")
+       ->execute([$chatId, $enquiryId]);
 }

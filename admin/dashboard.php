@@ -213,6 +213,11 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
                     <!-- 2. WAY MORE BROADER VIDEO STAGE -->
                     <div class="dash-wa-video-stage">
                         <div class="dash-wa-video-container" id="dashWaVideoWrapper">
+                            <?php
+                            $hasProjectVideo = file_exists(__DIR__ . '/../assets/videos/hcc-project-promo.mp4');
+                            $defaultVideoSrc = $hasProjectVideo ? BASE_URL . 'assets/videos/hcc-project-promo.mp4' : BASE_URL . 'assets/videos/whatsapp-hub-promo.mp4';
+                            $defaultPosterSrc = file_exists(__DIR__ . '/../assets/images/hcc-project-promo-poster.jpg') ? BASE_URL . 'assets/images/hcc-project-promo-poster.jpg' : BASE_URL . 'assets/images/wa-promo-poster.jpg';
+                            ?>
                             <video
                                 id="dashWaPromoVideo"
                                 class="dash-wa-video-player"
@@ -221,8 +226,8 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
                                 loop
                                 playsinline
                                 preload="metadata"
-                                poster="<?= BASE_URL ?>assets/images/wa-promo-poster.jpg?v=<?= (file_exists(__DIR__ . '/../assets/images/wa-promo-poster.jpg') ? filemtime(__DIR__ . '/../assets/images/wa-promo-poster.jpg') : 1) ?>"
-                                src="<?= BASE_URL ?>assets/videos/whatsapp-hub-promo.mp4?v=<?= (file_exists(__DIR__ . '/../assets/videos/whatsapp-hub-promo.mp4') ? filemtime(__DIR__ . '/../assets/videos/whatsapp-hub-promo.mp4') : 1) ?>">
+                                poster="<?= $defaultPosterSrc ?>?v=<?= time() ?>"
+                                src="<?= $defaultVideoSrc ?>?v=<?= time() ?>">
                                 Your browser does not support HTML5 video.
                             </video>
 
@@ -230,9 +235,9 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
                             <div class="dash-wa-video-overlay">
                                 <!-- Top Bar -->
                                 <div class="dash-wa-video-topbar">
-                                    <div class="video-tag-chip">
-                                        <i class="fa-brands fa-whatsapp"></i>
-                                        <span>HCC WhatsApp Parent Portal • Live Showcase</span>
+                                    <div class="video-tag-chip" id="dashVideoTagChip">
+                                        <i class="fa-solid fa-layer-group"></i>
+                                        <span>HCC Campus Automation System • Full Project Showcase</span>
                                     </div>
                                     <div class="video-controls-compact">
                                         <button type="button" class="btn-video-ctrl" id="waVideoPlayPauseBtn" title="Play / Pause Video" aria-label="Play or pause video">
@@ -295,8 +300,12 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
                                         <p class="text-muted" style="font-size:0.8rem;margin-bottom:12px;">Choose or change the promotional video displayed in the WhatsApp Hub advertisement:</p>
                                         <div class="video-source-options">
                                             <label class="video-opt-label">
-                                                <input type="radio" name="video_source_choice" value="default" checked>
-                                                <span>Official WhatsApp Share Hub Motion Graphics (1080p Full HD)</span>
+                                                <input type="radio" name="video_source_choice" value="project" checked>
+                                                <span>🌟 Full Campus Automation System Motion Graphics (1080p • 60s Showcase)</span>
+                                            </label>
+                                            <label class="video-opt-label" style="margin-top:6px;">
+                                                <input type="radio" name="video_source_choice" value="whatsapp">
+                                                <span>Official WhatsApp Share Hub Motion Graphics (1080p • 18s Promo)</span>
                                             </label>
                                             <label class="video-opt-label" style="margin-top:6px;">
                                                 <input type="radio" name="video_source_choice" value="custom">
@@ -554,14 +563,26 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
 
         if (!video) return;
 
-        // Restore custom video source if previously saved
+        // Restore custom or preferred video source if previously saved
         try {
+            var savedChoice = localStorage.getItem('hcc_promo_video_choice');
             var savedVideo = localStorage.getItem('hcc_wa_promo_video');
-            if (savedVideo) {
+            var tagChip = document.getElementById('dashVideoTagChip');
+
+            if (savedChoice === 'whatsapp') {
+                video.src = '<?= BASE_URL ?>assets/videos/whatsapp-hub-promo.mp4?v=<?= (file_exists(__DIR__ . '/../assets/videos/whatsapp-hub-promo.mp4') ? filemtime(__DIR__ . '/../assets/videos/whatsapp-hub-promo.mp4') : 1) ?>';
+                video.poster = '<?= BASE_URL ?>assets/images/wa-promo-poster.jpg';
+                if (tagChip) tagChip.innerHTML = '<i class="fa-brands fa-whatsapp"></i> <span>HCC WhatsApp Parent Portal • Live Showcase</span>';
+                var waRadio = document.querySelector('input[name="video_source_choice"][value="whatsapp"]');
+                if (waRadio) waRadio.checked = true;
+            } else if (savedChoice === 'custom' && savedVideo) {
                 video.src = savedVideo;
                 if (customUrlInput) customUrlInput.value = savedVideo;
                 var customRadio = document.querySelector('input[name="video_source_choice"][value="custom"]');
                 if (customRadio) customRadio.checked = true;
+            } else {
+                var projRadio = document.querySelector('input[name="video_source_choice"][value="project"]');
+                if (projRadio) projRadio.checked = true;
             }
         } catch (e) {}
 
@@ -650,18 +671,39 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
         if (saveSettingsBtn) {
             saveSettingsBtn.addEventListener('click', function () {
                 var checkedChoice = document.querySelector('input[name="video_source_choice"]:checked');
-                var val = checkedChoice ? checkedChoice.value : 'default';
+                var val = checkedChoice ? checkedChoice.value : 'project';
+                var tagChip = document.getElementById('dashVideoTagChip');
+
                 if (val === 'custom') {
                     var customUrl = (customUrlInput ? customUrlInput.value.trim() : '');
                     if (customUrl) {
-                        try { localStorage.setItem('hcc_wa_promo_video', customUrl); } catch (e) {}
+                        try {
+                            localStorage.setItem('hcc_promo_video_choice', 'custom');
+                            localStorage.setItem('hcc_wa_promo_video', customUrl);
+                        } catch (e) {}
                         video.src = customUrl;
+                        if (tagChip) tagChip.innerHTML = '<i class="fas fa-video"></i> <span>Custom Video Stream</span>';
                         video.load();
                         video.play().catch(function () {});
                     }
-                } else {
-                    try { localStorage.removeItem('hcc_wa_promo_video'); } catch (e) {}
+                } else if (val === 'whatsapp') {
+                    try {
+                        localStorage.setItem('hcc_promo_video_choice', 'whatsapp');
+                        localStorage.removeItem('hcc_wa_promo_video');
+                    } catch (e) {}
                     video.src = '<?= BASE_URL ?>assets/videos/whatsapp-hub-promo.mp4?v=<?= (file_exists(__DIR__ . '/../assets/videos/whatsapp-hub-promo.mp4') ? filemtime(__DIR__ . '/../assets/videos/whatsapp-hub-promo.mp4') : 1) ?>';
+                    video.poster = '<?= BASE_URL ?>assets/images/wa-promo-poster.jpg';
+                    if (tagChip) tagChip.innerHTML = '<i class="fa-brands fa-whatsapp"></i> <span>HCC WhatsApp Parent Portal • Live Showcase</span>';
+                    video.load();
+                    video.play().catch(function () {});
+                } else {
+                    try {
+                        localStorage.setItem('hcc_promo_video_choice', 'project');
+                        localStorage.removeItem('hcc_wa_promo_video');
+                    } catch (e) {}
+                    video.src = '<?= BASE_URL ?>assets/videos/hcc-project-promo.mp4?v=<?= (file_exists(__DIR__ . '/../assets/videos/hcc-project-promo.mp4') ? filemtime(__DIR__ . '/../assets/videos/hcc-project-promo.mp4') : 1) ?>';
+                    video.poster = '<?= BASE_URL ?>assets/images/hcc-project-promo-poster.jpg';
+                    if (tagChip) tagChip.innerHTML = '<i class="fa-solid fa-layer-group"></i> <span>HCC Campus Automation System • Full Project Showcase</span>';
                     video.load();
                     video.play().catch(function () {});
                 }

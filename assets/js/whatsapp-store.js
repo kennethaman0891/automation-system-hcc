@@ -209,6 +209,16 @@ class WhatsAppStore extends EventTarget {
       request.onerror = () => reject(request.error);
     });
   }
+
+  getByIndex(storeName, indexName, value) {
+    if (!this.db) return Promise.resolve(null);
+    return new Promise((resolve, reject) => {
+      const request = this.db.transaction([storeName], 'readonly')
+        .objectStore(storeName).index(indexName).get(value);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
+  }
   
   async put(storeName, data) {
     if (!this.db) return;
@@ -254,6 +264,16 @@ class WhatsAppStore extends EventTarget {
   
   async saveChats(chats) {
     for (const chat of chats) {
+      // wa_chat_id carries a UNIQUE index. When the server rebuilds chat rows
+      // (new id, same wa_chat_id) the stale local row makes every insert fail and
+      // the hub can never load chats again — drop it before writing.
+      if (chat.wa_chat_id) {
+        const stale = await this.getByIndex('chats', 'wa_chat_id', chat.wa_chat_id);
+        if (stale && String(stale.id) !== String(chat.id)) {
+          await this.delete('chats', stale.id);
+          this.chats.delete(stale.id);
+        }
+      }
       this.chats.set(chat.id, chat);
       await this.put('chats', chat);
     }
@@ -1401,8 +1421,15 @@ class WhatsAppStore extends EventTarget {
   // shows on the left without a manual refresh. Outgoing bubbles stay as they are.
   startInboundRefresh() {
     if (typeof setInterval === 'undefined' || this.inboundRefreshInterval) return;
+    let ticks = 0;
     this.inboundRefreshInterval = setInterval(() => {
       this.pollActiveChatMessages();
+      ticks++;
+      // SSE is easy for Apache to buffer, so the inbox never grew after a
+      // message was stored. Reload the chat list on a short timer instead.
+      if (ticks % 2 === 0 && (typeof document === 'undefined' || !document.hidden)) {
+        this.loadChats(true).catch(() => {});
+      }
     }, 5000);
   }
 
@@ -1502,6 +1529,21 @@ class WhatsAppStore extends EventTarget {
     this.dispatchEvent(new CustomEvent('sidebar:toggled', { detail: this.isSidebarCollapsed }));
   }
   
+  /**
+   * Drop a stale activeChatId (e.g. local id 139 after the server rebuilt chats
+   * to 172+) so send/receive stop targeting a chat that no longer exists.
+   */
+  ensureActiveChatValid(chats) {
+    if (this.activeChatId == null) return;
+    const list = Array.isArray(chats) ? chats : [];
+    const stillThere = list.some(c => String(c.id) === String(this.activeChatId));
+    if (!stillThere) {
+      this.activeChatId = null;
+      this.activeChat = null;
+      this.saveUIState('activeChatId', null);
+    }
+  }
+
   setActiveChat(chatId) {
     this.activeChatId = chatId;
     this.activeChat = this.chats.get(chatId)

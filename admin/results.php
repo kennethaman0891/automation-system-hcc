@@ -1021,6 +1021,29 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
         .meta-card span { font-size:0.95rem; font-weight:600; color:var(--ink); }
         .dashboard-loading { display:flex; align-items:center; justify-content:center; gap:10px; padding:60px 20px; color:var(--text-3); font-weight:600; font-size:1rem; }
         .dashboard-error { padding:18px 24px; border-radius:8px; background:#fef2f2; border:1px solid #fecaca; color:#991b1b; font-weight:600; margin:20px; text-align:center; }
+
+        /* Dashboard modal — narrow screens. Without min-width:0 the 4-up KPI grid
+           forces the flex panel wider than the viewport. */
+        @media (max-width: 720px) {
+            .modal { padding:10px; }
+            .modal-panel { min-width:0; max-height:94vh; }
+            .modal-header { padding:12px 14px; flex-wrap:wrap; row-gap:8px; position:relative; padding-right:52px; }
+            .modal-header h3 { font-size:0.92rem; min-width:0; overflow-wrap:anywhere; }
+            .modal-header .header-actions { margin-left:auto; }
+            .modal-header .modal-close { position:absolute; top:8px; right:8px; }
+            .dashboard-tabs { padding:8px 12px 0; }
+            .dashboard-tabs button { padding:8px 12px; font-size:0.78rem; }
+            .modal-body { padding:14px; }
+            .kpi-grid { grid-template-columns:repeat(2, 1fr); gap:10px; }
+            .kpi-value { font-size:1.3rem; }
+            .overview-charts { grid-template-columns:1fr; gap:12px; }
+            .chart-wrap { height:300px; min-height:240px; }
+            .chart-wrap-small { height:210px; }
+            .meta-cards { grid-template-columns:1fr 1fr; }
+        }
+        @media (max-width: 420px) {
+            .meta-cards { grid-template-columns:1fr; }
+        }
     </style>
 </head>
 <body>
@@ -1735,6 +1758,7 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
         const closeBtn = modal.querySelector('.modal-close');
         const backdrop = modal.querySelector('.modal-backdrop');
         const tabs = modal.querySelectorAll('.dashboard-tabs button');
+        const panels = modal.querySelectorAll('.tab-panel');
         let currentCharts = {};
         let activeStudent = { ck: '', roll: '' };
         let activeDashboardData = null;
@@ -2300,6 +2324,7 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
                 } catch (e) {
                     // Non-blocking background sync
                 }
+            } catch (err) {
                 console.error('Analytics PDF Error:', err);
                 alert('Could not generate Analytics PDF: ' + err.message);
             } finally {

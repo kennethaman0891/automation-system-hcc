@@ -284,187 +284,172 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <link rel="stylesheet" href="<?= BASE_URL ?>assets/vendor/bootstrap@5.3.3/css/bootstrap.min.css">
     <link rel="stylesheet" href="<?= BASE_URL ?>assets/vendor/font-awesome@6.5.0/css/all.min.css">
     <link rel="stylesheet" href="<?= BASE_URL ?>assets/vendor/inter-fonts.css">
-    <link rel="stylesheet" href="<?= BASE_URL ?>assets/css/admin-login.css?v=<?= (is_file(__DIR__ . '/../assets/css/admin-login.css') ? filemtime(__DIR__ . '/../assets/css/admin-login.css') : 0) ?>">
+    <link rel="stylesheet" href="<?= BASE_URL ?>assets/css/admin-login-bootstrap.css?v=<?= (is_file(__DIR__ . '/../assets/css/admin-login-bootstrap.css') ? filemtime(__DIR__ . '/../assets/css/admin-login-bootstrap.css') : 0) ?>">
 </head>
-<body class="auth-body">
-    <div class="container-fluid p-0">
-        <div class="row g-0 auth-shell">
-            <!-- Brand side (desktop only — mobile gets a compact brand mark above the form) -->
-            <aside class="col-lg-6 brand-panel d-none d-lg-flex flex-column justify-content-between p-4 p-xl-5">
-                <span class="brand-orb brand-orb--gold" aria-hidden="true"></span>
-                <span class="brand-orb brand-orb--rose" aria-hidden="true"></span>
-                <span class="brand-dots" aria-hidden="true"></span>
-
-                <header class="brand-head d-flex align-items-center gap-3 position-relative">
-                    <img class="brand-logo" src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="Hindustani Covenant Church High School logo">
+<body class="bg-body-tertiary login-page">
+    <div class="container-fluid px-0">
+        <div class="row g-0 login-shell">
+            <aside class="login-aside col-lg-5 d-none d-lg-flex flex-column justify-content-between text-bg-primary">
+                <header class="d-flex align-items-center gap-3">
+                    <img class="login-mark rounded-3 bg-white p-1" src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="">
                     <div>
-                        <p class="brand-school-name mb-0">Hindustani Covenant Church High School</p>
-                        <p class="brand-school-sub mb-0">Solapur &bull; Est. Excellence in Education</p>
+                        <p class="fw-semibold mb-0">Hindustani Covenant Church High School</p>
+                        <p class="small mb-0 opacity-75">Solapur &bull; Est. Excellence in Education</p>
                     </div>
                 </header>
 
-                <div class="brand-body d-flex flex-column position-relative my-auto py-4">
-                    <div class="brand-badge-pill mb-3">
-                        <i class="fa-solid fa-graduation-cap" aria-hidden="true"></i> Administrative Portal
-                    </div>
-                    <h2 class="brand-heading mb-3">Campus Automation &amp; <span class="brand-accent">Academic Records</span></h2>
-                    <p class="brand-lead mb-4">Streamlined management of student marks, automated progress reports, instant WhatsApp communication, and administration.</p>
-
-                    <div class="brand-features-list">
-                        <div class="brand-feature-item">
-                            <div class="feature-icon"><i class="fa-solid fa-file-invoice" aria-hidden="true"></i></div>
-                            <div>
-                                <strong>Automated Progress Reports</strong>
-                                <span>Instant marksheets, grading calculations &amp; unit tests</span>
-                            </div>
-                        </div>
-                        <div class="brand-feature-item">
-                            <div class="feature-icon"><i class="fa-brands fa-whatsapp" aria-hidden="true"></i></div>
-                            <div>
-                                <strong>Direct Parent WhatsApp Dispatch</strong>
-                                <span>One-click delivery of PDF report cards and official notices</span>
-                            </div>
-                        </div>
-                        <div class="brand-feature-item">
-                            <div class="feature-icon"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i></div>
-                            <div>
-                                <strong>Secure Role-Based Access</strong>
-                                <span>Protected sessions, audit trails, and multi-tier admin control</span>
-                            </div>
-                        </div>
-                    </div>
+                <div class="login-pitch">
+                    <p class="mb-2">
+                        <span class="badge rounded-pill text-bg-light text-primary">
+                            <i class="fa-solid fa-graduation-cap me-1" aria-hidden="true"></i>Administrative portal
+                        </span>
+                    </p>
+                    <h2 class="login-heading fw-semibold">Campus automation and <span class="login-accent text-nowrap">academic records</span></h2>
+                    <p class="login-lead opacity-75">Streamlined management of student marks, automated progress reports, instant WhatsApp communication, and administration.</p>
+                    <ul class="login-features list-unstyled d-grid mb-0">
+                        <li class="d-flex align-items-start gap-3">
+                            <span class="login-icon rounded-3 bg-white bg-opacity-10 d-inline-flex align-items-center justify-content-center flex-shrink-0">
+                                <i class="fa-solid fa-file-invoice" aria-hidden="true"></i>
+                            </span>
+                            <span>
+                                <span class="fw-semibold d-block">Automated progress reports</span>
+                                <span class="small opacity-75">Instant marksheets, grading calculations and unit tests</span>
+                            </span>
+                        </li>
+                        <li class="d-flex align-items-start gap-3">
+                            <span class="login-icon rounded-3 bg-white bg-opacity-10 d-inline-flex align-items-center justify-content-center flex-shrink-0">
+                                <i class="fa-brands fa-whatsapp" aria-hidden="true"></i>
+                            </span>
+                            <span>
+                                <span class="fw-semibold d-block">Direct parent WhatsApp dispatch</span>
+                                <span class="small opacity-75">One-click delivery of PDF report cards and official notices</span>
+                            </span>
+                        </li>
+                        <li class="d-flex align-items-start gap-3">
+                            <span class="login-icon rounded-3 bg-white bg-opacity-10 d-inline-flex align-items-center justify-content-center flex-shrink-0">
+                                <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
+                            </span>
+                            <span>
+                                <span class="fw-semibold d-block">Secure role-based access</span>
+                                <span class="small opacity-75">Protected sessions, audit trails, and multi-tier admin control</span>
+                            </span>
+                        </li>
+                    </ul>
                 </div>
 
-                <footer class="brand-footer d-flex align-items-center justify-content-between pt-3 position-relative">
-                    <span class="brand-footer-text">&copy; <?= date('Y') ?> HCC High School</span>
-                    <span class="brand-status-pill"><span class="status-indicator"></span> System Online</span>
+                <footer class="d-flex align-items-center justify-content-between small border-top border-light border-opacity-25 pt-3">
+                    <span class="opacity-75">&copy; <?= date('Y') ?> HCC High School</span>
+                    <span class="badge rounded-pill text-bg-success">Online</span>
                 </footer>
             </aside>
 
-            <!-- Form side -->
-            <main class="col-lg-6 auth-panel d-flex flex-column align-items-center justify-content-center p-3 p-sm-4 p-lg-5" aria-label="Admin login">
-                <div class="auth-mobile-brand d-lg-none">
-                    <img src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="">
-                    <div>
-                        <strong>Hindustani Covenant Church High School</strong>
-                        <span>Admin Portal · Solapur</span>
-                    </div>
-                </div>
-
-                <div class="auth-stage">
-                <div class="auth-card">
-                    <div class="auth-card-header mb-4">
-                        <div class="auth-pill-badge mb-2">
-                            <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
-                            <span>Admin Portal</span>
-                        </div>
-                        <h1 class="auth-title">Welcome back</h1>
-                        <p class="auth-subtitle mb-0">Sign in with your administrator credentials to continue.</p>
-                    </div>
-
-                    <?php if ($success !== ''): ?>
-                        <div class="alert auth-alert auth-alert--success d-flex" role="status">
-                            <span class="auth-alert-icon" aria-hidden="true">
-                                <i class="fa-solid <?= htmlspecialchars($successIcon, ENT_QUOTES, 'UTF-8') ?>"></i>
-                            </span>
-                            <div class="auth-alert-body">
-                                <strong class="auth-alert-title"><?= htmlspecialchars($successTitle, ENT_QUOTES, 'UTF-8') ?></strong>
-                                <div><?= htmlspecialchars($success, ENT_QUOTES, 'UTF-8') ?></div>
-                            </div>
-                        </div>
-                    <?php endif; ?>
-
-                    <?php if ($error): ?>
-                        <div class="alert auth-alert auth-alert--<?= htmlspecialchars($errorTone, ENT_QUOTES, 'UTF-8') ?> d-flex" role="alert">
-                            <span class="auth-alert-icon" aria-hidden="true">
-                                <i class="fa-solid <?= htmlspecialchars($errorIcon, ENT_QUOTES, 'UTF-8') ?>"></i>
-                            </span>
-                            <div class="auth-alert-body">
-                                <?php if ($errorTitle !== ''): ?>
-                                    <strong class="auth-alert-title"><?= htmlspecialchars($errorTitle, ENT_QUOTES, 'UTF-8') ?></strong>
-                                <?php endif; ?>
-                                <div><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>
-                            </div>
-                        </div>
-                    <?php endif; ?>
-
-                    <?php 
-                        $attemptsCount = max((int)($_SESSION['login_attempts'] ?? 0), (int)($ipAttempts ?? 0));
-                        if (!$locked && $attemptsCount >= 3): 
-                    ?>
-                        <div class="alert alert-warning auth-alert auth-alert--notice" role="alert">
-                            <i class="fa-solid fa-triangle-exclamation flex-shrink-0" aria-hidden="true"></i>
-                            <span>Notice: <?= max(0, 5 - $attemptsCount) ?> attempt(s) remaining before a 15-minute lockout.</span>
-                        </div>
-                    <?php endif; ?>
-
-                    <!-- Google Sign-In Option -->
-                    <div class="google-auth-box">
-                        <a href="<?= htmlspecialchars($googleAuthUrl) ?>" class="btn-google-signin" id="googleSignInBtn" title="Sign in with your Google Account">
-                            <svg class="google-icon" viewBox="0 0 48 48" width="20" height="20" aria-hidden="true">
-                                <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
-                                <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
-                                <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.79l7.97-6.2z"/>
-                                <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
-                            </svg>
-                            <span>Sign in with Google</span>
-                        </a>
-
-                        <div class="auth-divider">
-                            <span>or sign in with username</span>
+            <main class="login-main col-lg-7 d-flex justify-content-center" aria-label="Admin login">
+                <div class="login-wrap">
+                    <div class="login-mobile-brand d-lg-none">
+                        <img class="login-mark rounded-3 border bg-white" src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="">
+                        <div>
+                            <p class="fw-semibold mb-0 lh-sm">Hindustani Covenant Church High School</p>
+                            <p class="small text-secondary mb-0">Admin portal &middot; Solapur</p>
                         </div>
                     </div>
 
-                    <form method="POST" action="login.php" id="loginForm" class="auth-form" autocomplete="on">
-                        <?= csrfField() ?>
-                        <div class="auth-field-group mb-3">
-                            <label for="username" class="auth-field-label">Username</label>
-                            <div class="auth-input-wrap">
-                                <i class="fa-solid fa-user auth-input-icon" aria-hidden="true"></i>
-                                <input type="text" class="auth-input" id="username" name="username" required
-                                    placeholder="Enter your username" autofocus autocomplete="username"
-                                    autocapitalize="none" spellcheck="false"
-                                    value="<?= htmlspecialchars($usernameVal, ENT_QUOTES, 'UTF-8') ?>"
-                                    <?= $locked ? 'disabled' : '' ?>>
-                            </div>
-                        </div>
+                    <div class="card shadow-sm login-card">
+                        <div class="card-body">
+                            <header class="login-head">
+                                <p class="login-kicker">Administrator access</p>
+                                <h1 class="login-title">Sign in</h1>
+                                <p class="login-intro">Use your school account to open the admin panel.</p>
+                            </header>
 
-                        <div class="auth-field-group mb-4">
-                            <div class="auth-label-row">
-                                <label for="password" class="auth-field-label mb-0">Password</label>
-                                <a href="forgot_password.php" class="auth-forgot-link">Forgot password?</a>
+                            <?php if ($success !== ''): ?>
+                                <div class="alert alert-success login-alert d-flex gap-2" role="status">
+                                    <i class="fa-solid <?= htmlspecialchars($successIcon, ENT_QUOTES, 'UTF-8') ?> mt-1" aria-hidden="true"></i>
+                                    <div>
+                                        <div class="fw-semibold"><?= htmlspecialchars($successTitle, ENT_QUOTES, 'UTF-8') ?></div>
+                                        <div><?= htmlspecialchars($success, ENT_QUOTES, 'UTF-8') ?></div>
+                                    </div>
+                                </div>
+                            <?php endif; ?>
+
+                            <?php if ($error): ?>
+                                <div class="alert alert-<?= htmlspecialchars($errorTone, ENT_QUOTES, 'UTF-8') ?> login-alert d-flex gap-2" role="alert">
+                                    <i class="fa-solid <?= htmlspecialchars($errorIcon, ENT_QUOTES, 'UTF-8') ?> mt-1" aria-hidden="true"></i>
+                                    <div>
+                                        <?php if ($errorTitle !== ''): ?>
+                                            <div class="fw-semibold"><?= htmlspecialchars($errorTitle, ENT_QUOTES, 'UTF-8') ?></div>
+                                        <?php endif; ?>
+                                        <div><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></div>
+                                    </div>
+                                </div>
+                            <?php endif; ?>
+
+                            <?php
+                                $attemptsCount = max((int)($_SESSION['login_attempts'] ?? 0), (int)($ipAttempts ?? 0));
+                                if (!$locked && $attemptsCount >= 3):
+                            ?>
+                                <div class="alert alert-warning login-alert d-flex align-items-center gap-2" role="alert">
+                                    <i class="fa-solid fa-triangle-exclamation flex-shrink-0" aria-hidden="true"></i>
+                                    <span>Notice: <?= max(0, 5 - $attemptsCount) ?> attempt(s) remaining before a 15-minute lockout.</span>
+                                </div>
+                            <?php endif; ?>
+
+                            <a href="<?= htmlspecialchars($googleAuthUrl) ?>" class="btn btn-outline-secondary w-100 d-inline-flex align-items-center justify-content-center gap-2" id="googleSignInBtn" title="Sign in with your Google Account">
+                                <svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true">
+                                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+                                    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+                                    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.79l7.97-6.2z"/>
+                                    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+                                </svg>
+                                <span>Sign in with Google</span>
+                            </a>
+
+                            <div class="login-divider d-flex align-items-center">
+                                <hr class="flex-grow-1 m-0">
+                                <span>or</span>
+                                <hr class="flex-grow-1 m-0">
                             </div>
-                            <div class="auth-input-wrap">
-                                <i class="fa-solid fa-lock auth-input-icon" aria-hidden="true"></i>
-                                <input type="password" class="auth-input auth-input--pw" id="password" name="password" required
-                                    placeholder="Enter your password" autocomplete="current-password"
-                                    <?= $locked ? 'disabled' : '' ?>>
-                                <button type="button" class="auth-pw-toggle" id="pwToggle" aria-label="Show password" title="Show / hide password">
-                                    <i class="fa-solid fa-eye" id="pwIcon" aria-hidden="true"></i>
+
+                            <form method="POST" action="login.php" id="loginForm" autocomplete="on">
+                                <?= csrfField() ?>
+                                <div class="login-field">
+                                    <label for="username" class="form-label">Username</label>
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="fa-solid fa-user" aria-hidden="true"></i></span>
+                                        <input type="text" class="form-control" id="username" name="username" required
+                                            placeholder="Enter your username" autofocus autocomplete="username"
+                                            autocapitalize="none" spellcheck="false"
+                                            value="<?= htmlspecialchars($usernameVal, ENT_QUOTES, 'UTF-8') ?>"
+                                            <?= $locked ? 'disabled' : '' ?>>
+                                    </div>
+                                </div>
+
+                                <div class="login-field">
+                                    <div class="login-field-head d-flex justify-content-between align-items-baseline gap-2">
+                                        <label for="password" class="form-label mb-0">Password</label>
+                                        <a href="forgot_password.php" class="login-forgot">Forgot password?</a>
+                                    </div>
+                                    <div class="input-group">
+                                        <span class="input-group-text"><i class="fa-solid fa-lock" aria-hidden="true"></i></span>
+                                        <input type="password" class="form-control" id="password" name="password" required
+                                            placeholder="Enter your password" autocomplete="current-password"
+                                            <?= $locked ? 'disabled' : '' ?>>
+                                        <button type="button" class="btn btn-outline-secondary" id="pwToggle" aria-label="Show password" title="Show / hide password">
+                                            <i class="fa-solid fa-eye" id="pwIcon" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+                                    <div class="form-text text-warning-emphasis" id="capsNote" hidden>
+                                        <i class="fa-solid fa-circle-info" aria-hidden="true"></i> Caps Lock is on
+                                    </div>
+                                </div>
+
+                                <button type="submit" class="btn btn-primary w-100 d-inline-flex align-items-center justify-content-center gap-2" id="loginBtn" <?= $locked ? 'disabled' : '' ?>>
+                                    <i class="fa-solid fa-arrow-right-to-bracket btn-ico" aria-hidden="true"></i>
+                                    <i class="fa-solid fa-spinner fa-spin btn-spin" aria-hidden="true"></i>
+                                    <span><?= $locked ? 'Temporarily locked' : 'Sign in' ?></span>
                                 </button>
-                            </div>
-                            <div class="caps-note mt-2" id="capsNote" hidden>
-                                <i class="fa-solid fa-circle-info" aria-hidden="true"></i> Caps Lock is active
-                            </div>
+                            </form>
                         </div>
-
-                        <button type="submit" class="btn btn-login w-100" id="loginBtn" <?= $locked ? 'disabled' : '' ?>>
-                            <i class="fa-solid fa-arrow-right-to-bracket btn-ico" aria-hidden="true"></i>
-                            <i class="fa-solid fa-spinner fa-spin btn-spin" aria-hidden="true"></i>
-                            <span><?= $locked ? 'Temporarily locked' : 'Sign In to Dashboard' ?></span>
-                        </button>
-                    </form>
-
-                    <div class="auth-card-footer mt-4">
-                        <div class="auth-security-badge">
-                            <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
-                            <span>Authorized personnel only</span>
-                        </div>
-                        <span class="auth-help-note">Contact the school office</span>
                     </div>
-                </div>
-
-                <p class="auth-copy text-center text-muted small mt-4 mb-0">&copy; <?= date('Y') ?> Hindustani Covenant Church High School, Solapur. All rights reserved.</p>
                 </div>
             </main>
         </div>

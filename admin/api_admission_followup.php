@@ -273,19 +273,31 @@ if ($action === 'get') {
             $conversationMessages = $msgStmt->fetchAll(PDO::FETCH_ASSOC);
         }
 
-        // If whatsapp_messages is empty for this chat, load from admission_enquiry_messages
-        if (empty($conversationMessages)) {
-            $emStmt = $db->prepare("
-                SELECT id, 'text' as msg_type, 
-                       CASE WHEN message_type = 'incoming_message' THEN 0 ELSE 1 END as from_me,
-                       body, 'delivered' as status, created_at as received_at, admin_name as sender_name
-                FROM admission_enquiry_messages
-                WHERE enquiry_id = ?
-                ORDER BY id ASC
-            ");
-            $emStmt->execute([$id]);
-            $conversationMessages = $emStmt->fetchAll(PDO::FETCH_ASSOC);
+        // Always merge admission_enquiry_messages into conversationMessages so all persistent messages appear
+        $emStmt = $db->prepare("
+            SELECT id, 'text' as msg_type, 
+                   CASE WHEN message_type = 'incoming_message' THEN 0 ELSE 1 END as from_me,
+                   body, 'delivered' as status, created_at as received_at, admin_name as sender_name, metadata
+            FROM admission_enquiry_messages
+            WHERE enquiry_id = ?
+            ORDER BY id ASC
+        ");
+        $emStmt->execute([$id]);
+        $enqMessages = $emStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $existingBodies = [];
+        foreach ($conversationMessages as $cm) {
+            $b = trim((string)($cm['body'] ?? ''));
+            if ($b !== '') $existingBodies[mb_strtolower($b)] = true;
         }
+        foreach ($enqMessages as $em) {
+            $b = trim((string)($em['body'] ?? ''));
+            if ($b !== '' && !isset($existingBodies[mb_strtolower($b)])) {
+                $conversationMessages[] = $em;
+                $existingBodies[mb_strtolower($b)] = true;
+            }
+        }
+        usort($conversationMessages, fn($a, $b) => strcmp((string)($a['received_at'] ?? ''), (string)($b['received_at'] ?? '')));
 
         // If no suggested message yet, generate a default based on category
         if (empty($enquiry['suggested_message'])) {

@@ -73,6 +73,44 @@ const row = (o) => ({ index: 0, title: 'Parent A', preview: 'hello', time: '12:4
   const c = R.previewMsgId(PARENT + '@c.us', row({ time: '12:41' }));
   t('IL8', 'preview id is stable for the same row and changes with time', a === b && a !== c && a.startsWith('preview:'));
 }
+{
+  const now = new Date(2026, 10, 11, 11, 4, 44).getTime();
+  const at = (y, m, d, h, min, s) => Math.floor(new Date(y, m, d, h, min, s || 0).getTime() / 1000);
+  const thu = R.parseWaTime('Thursday', now);
+  t('IL22', 'a weekday label is that day at noon, not the scrape second',
+    thu.parsed === true && thu.precision === 'day' && thu.hasDate === true && thu.unix === at(2026, 10, 5, 12, 0));
+  const yest = R.parseWaTime('Yesterday', now);
+  t('IL23', 'Yesterday is the previous calendar day', yest.parsed === true && yest.unix === at(2026, 10, 10, 12, 0));
+  const monthEnd = R.parseWaTime('Yesterday', new Date(2026, 11, 1, 9, 0, 0).getTime());
+  t('IL24', 'Yesterday still resolves on the first of a month', monthEnd.parsed === true && monthEnd.unix === at(2026, 10, 30, 12, 0));
+  const clock = R.parseWaTime('9:54 am', now);
+  t('IL25', 'a sidebar clock is today at that minute', clock.parsed === true && clock.precision === 'minute' && clock.unix === at(2026, 10, 11, 9, 54));
+  const midnight = R.parseWaTime('12:19 am', now);
+  t('IL26', '12 am is midnight, not noon', midnight.parsed === true && midnight.unix === at(2026, 10, 11, 0, 19));
+  const bubble = R.parseWaTime('[10:38:16 am, 22/10/2026] Parent: ', now);
+  t('IL27', 'a bubble clock keeps its date and seconds', bubble.parsed === true && bubble.precision === 'second' && bubble.unix === at(2026, 9, 22, 10, 38, 16));
+  const marks = R.parseWaTime('[\u200E10:38 am, 22\u200E/\u200E10\u200E/\u200E2026] Name: ', now);
+  t('IL28', 'invisible marks in the bubble clock still parse', marks.parsed === true && marks.unix === at(2026, 9, 22, 10, 38));
+  const dotted = R.parseWaTime('10.38 am, 22.10.2026', now);
+  t('IL29', 'dot time and dot date still parse', dotted.parsed === true && dotted.unix === at(2026, 9, 22, 10, 38));
+  const swapped = R.parseWaTime('10:38, 9/15/2026', now);
+  t('IL30', 'a month past 12 is read as day/month', swapped.parsed === true && swapped.unix === at(2026, 8, 15, 10, 38));
+}
+{
+  const now = Date.now();
+  const quiet = new Map([['parent a', now + 60000]]);
+  const seen = row({ unread: true, unreadCount: 1 });
+  const stuck = R.planListActions(
+    [seen],
+    { primed: true, prevSigs: new Map([['parent a', R.rowSignature(seen)]]), quietUnread: quiet },
+    { limit: 3, now }
+  );
+  t('IL20', 'a chat already read is not opened again just because its badge is still there', stuck.toOpen.length === 0);
+  const prev = new Map([['parent a', R.rowSignature(row({}))]]);
+  const fresh = row({ unread: true, unreadCount: 1, time: '12:55', rowText: 'Parent A 12:55 new text', preview: 'new text' });
+  const again = R.planListActions([fresh], { primed: true, prevSigs: prev, quietUnread: quiet }, { limit: 3, now });
+  t('IL21', 'a new line still opens while the old badge is quiet', again.toOpen.length === 1 && again.toOpen[0].reason === 'changed');
+}
 
 // ---- bridge-level with a fake page ------------------------------------------------
 function makeFakePage(listRows) {
@@ -125,6 +163,17 @@ function makeBridge(page) {
 const typedOrEnter = (keys) => keys.filter(k => k.startsWith('type:') || k === 'press:Enter' || k.startsWith('char:'));
 
 (async () => {
+  {
+    const b = makeBridge(makeFakePage([]));
+    const hit = b.bubbleTime({ time_raw: '[10:38 am, 22/10/2026] Parent: ', clock_raw: '10:38' });
+    const expectBubble = Math.floor(new Date(2026, 9, 22, 10, 38, 0).getTime() / 1000);
+    t('IL31', 'an opened bubble keeps the date in data-pre-plain-text', hit.parsed === true && hit.unix === expectBubble);
+    const photo = b.bubbleTime({ clock_raw: '9:54 am' });
+    const photoDate = new Date(photo.unix * 1000);
+    const today = new Date();
+    t('IL32', 'a photo that only shows a clock uses today at that minute',
+      photo.parsed === true && photo.precision === 'minute' && photoDate.getHours() === 9 && photoDate.getMinutes() === 54 && photoDate.getDate() === today.getDate());
+  }
   // IL9: unread row with a phone that cannot be opened -> list preview stored, nothing typed
   {
     const rows = [row({ title: '+91 99990 00001', phone: PARENT, unread: true, unreadCount: 1, preview: 'Is admission open?', rowText: '+91 99990 00001 12:50 Is admission open? 1' })];
@@ -134,7 +183,7 @@ const typedOrEnter = (keys) => keys.filter(k => k.startsWith('type:') || k === '
     const ingest = b.posts.filter(p => p.endpoint === 'api_whatsapp_ingest.php');
     const msg = ingest.length ? ingest[ingest.length - 1].data[0] : null;
     t('IL9', 'unopenable unread chat: list preview is stored as incoming',
-      !!msg && msg.from_me === false && msg.body === 'Is admission open?' && msg.wa_chat_id === PARENT + '@c.us' && msg.metadata && msg.metadata.preview_only === true,
+      !!msg && msg.from_me === false && msg.body === 'Is admission open?' && msg.wa_chat_id === PARENT + '@c.us' && msg.metadata && msg.metadata.preview_only === true && msg.timestamp_parsed === true && msg.metadata.time_precision === 'minute',
       JSON.stringify(msg));
     t('IL10', 'opening never typed digits or pressed Enter in a composer', typedOrEnter(page.keys).length === 0, JSON.stringify(page.keys));
     const queuePosts = b.posts.filter(p => /outbound|send/i.test(p.endpoint));
@@ -161,8 +210,19 @@ const typedOrEnter = (keys) => keys.filter(k => k.startsWith('type:') || k === '
     const b = makeBridge(page);
     await b.ingestVisibleChats(3);
     const ingest = b.posts.filter(p => p.endpoint === 'api_whatsapp_ingest.php');
-    t('IL14', 'chat with no number is not given a guessed id from its preview', ingest.length === 0);
+    const msg = ingest.length ? ingest[0].data[0] : null;
+    t('IL14', 'a name-only chat is stored under a title id, not a made-up phone',
+      !!msg && msg.wa_chat_id === 'title:some-group@lid' && msg.from_me === false && !/@c\.us$/.test(msg.wa_chat_id),
+      JSON.stringify(msg && msg.wa_chat_id));
     t('IL15', 'no typing for that chat either', typedOrEnter(page.keys).length === 0, JSON.stringify(page.keys));
+  }
+  {
+    const rows = [row({ title: 'Parents Group', unread: true, preview: 'Ravi: hi', groupHint: true })];
+    const page = makeFakePage(rows);
+    const b = makeBridge(page);
+    await b.ingestVisibleChats(3);
+    const ingest = b.posts.filter(p => p.endpoint === 'api_whatsapp_ingest.php');
+    t('IL14b', 'a group row is not stored as an incoming chat', ingest.length === 0);
   }
   // IL16: a row that opens is read from the open thread, not from the preview
   {

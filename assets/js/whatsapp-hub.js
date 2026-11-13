@@ -1132,9 +1132,9 @@
                     name: st.name,
                     parent_phone: st.parent_phone || '',
                     class_label: classLabel,
-                    academic_year: st.academic_year || year,
+                    academic_year: st.academic_year || academicYear,
                     semester: st.semester || semester,
-                    division: st.division || division
+                    division: st.division || (classKey.split('|')[2] || '')
                 };
                 hubTplLib.open({
                     hubMode: true,

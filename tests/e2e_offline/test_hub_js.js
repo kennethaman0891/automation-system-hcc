@@ -67,7 +67,7 @@ t('H13', 'icon button has real add icon and never prints raw names', /\n\s+add: 
 t('H14', 'profile online dot follows session (not static Connected)', !/title="Connected & Online"/.test(c1) && /id="profile-session-dot"/.test(c1));
 t('H15', 'decorative toolbar toasts removed (communities/status/channels)', !/id="btn-communities"/.test(c1) && !/id="btn-status"/.test(c1) && !/id="btn-channels"/.test(c1));
 
-t('H16', 'offline vs waiting QR copy (no dead image)', /Bridge offline — start it for QR/.test(c2) && /Waiting for QR…/.test(c2) && /bridge_running === false/.test(c2));
+t('H16', 'offline vs waiting QR copy (no dead image)', /Bridge offline — restarting/.test(c2) && /Waiting for QR…/.test(c2) && /bridge_running === false/.test(c2));
 const startSh = fs.readFileSync(path.join(__dirname, '../../automation/start-bridge.sh'), 'utf8');
 t('H17', 'start-bridge picks a working node + keeps single-instance guard', /node_ok\(\)/.test(startSh) && /pgrep -f "node whatsapp-bridge.js"/.test(startSh) && !/while true/.test(startSh));
 

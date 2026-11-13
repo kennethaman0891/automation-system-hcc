@@ -31,7 +31,7 @@
 .air-status-pill.ok { background: #dcfce7; color: #166534; }
 .air-status-pill.bad { background: #fee2e2; color: #991b1b; }
 .air-chat-list, .air-msg-list, .air-draft-list {
-  max-height: 260px; overflow: auto; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px;
+  max-height: 420px; overflow: auto; background: #fff; border: 1px solid #e2e8f0; border-radius: 8px;
 }
 .air-chat-item, .air-msg-item {
   display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: start;

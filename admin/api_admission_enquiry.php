@@ -569,10 +569,12 @@ if ($action === 'list') {
     $dataSql = "
         SELECT ae.*, 
                (SELECT COUNT(*) FROM admission_enquiry_messages WHERE enquiry_id = ae.id) as message_count,
-               (SELECT MAX(created_at) FROM admission_enquiry_messages WHERE enquiry_id = ae.id) as last_interaction_at
+               (SELECT body FROM admission_enquiry_messages WHERE enquiry_id = ae.id ORDER BY id DESC LIMIT 1) as last_message_body,
+               (SELECT message_type FROM admission_enquiry_messages WHERE enquiry_id = ae.id ORDER BY id DESC LIMIT 1) as last_message_type,
+               COALESCE((SELECT MAX(created_at) FROM admission_enquiry_messages WHERE enquiry_id = ae.id), ae.updated_at, ae.created_at) as last_interaction_at
         FROM admission_enquiries ae
         WHERE $whereSql
-        ORDER BY ae.id DESC
+        ORDER BY last_interaction_at DESC, ae.id DESC
         LIMIT ? OFFSET ?
     ";
     $dStmt = $db->prepare($dataSql);
@@ -607,7 +609,7 @@ if ($action === 'get') {
         waJsonResponse(['success' => false, 'error' => 'Enquiry not found.'], 404);
     }
 
-    // Fetch conversation & interaction timeline
+    // 1. Fetch conversation & interaction timeline from admission_enquiry_messages
     $mStmt = $db->prepare("
         SELECT id, enquiry_id, message_type, body, ai_draft_body, staff_edited_body, 
                old_status, new_status, follow_up_date, admin_id, admin_name, metadata, created_at
@@ -616,7 +618,114 @@ if ($action === 'get') {
         ORDER BY id ASC
     ");
     $mStmt->execute([$id]);
-    $timeline = $mStmt->fetchAll(PDO::FETCH_ASSOC);
+    $messages = $mStmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $knownWaMsgIds = [];
+    $knownBodies = [];
+    foreach ($messages as $m) {
+        $meta = !empty($m['metadata']) ? (is_array($m['metadata']) ? $m['metadata'] : json_decode($m['metadata'], true)) : [];
+        if (!empty($meta['wa_msg_id'])) {
+            $knownWaMsgIds[(string)$meta['wa_msg_id']] = true;
+        }
+        $bTrim = trim((string)($m['body'] ?? ''));
+        if ($bTrim !== '') {
+            $knownBodies[mb_strtolower($bTrim)] = true;
+        }
+    }
+
+    $timeline = $messages;
+
+    // 2. Unify with admission_followup_history events (calls, tours, status updates, manual send confirmations)
+    try {
+        $hStmt = $db->prepare("
+            SELECT id, enquiry_id, action, title, details, performed_by, manual_sent_confirmed, delivery_verified, created_at
+            FROM admission_followup_history
+            WHERE enquiry_id = ?
+            ORDER BY id ASC
+        ");
+        $hStmt->execute([$id]);
+        $history = $hStmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($history as $h) {
+            $act = (string)($h['action'] ?? '');
+            $details = trim((string)($h['details'] ?? ''));
+            // If action is note_added and details match an already listed incoming message, skip duplicate
+            if ($act === 'note_added' && isset($knownBodies[mb_strtolower($details)])) {
+                continue;
+            }
+            // If action is created and details mention captured enquiry, skip if original query is already first item
+            if ($act === 'created' && count($timeline) > 0 && strpos($details, 'Enquiry captured automatically') !== false) {
+                continue;
+            }
+            $timeline[] = [
+                'id' => 'h_' . $h['id'],
+                'enquiry_id' => $id,
+                'message_type' => 'history_event',
+                'history_action' => $act,
+                'body' => $details !== '' ? $details : ($h['title'] ?? 'Follow-up event'),
+                'ai_draft_body' => null,
+                'staff_edited_body' => null,
+                'old_status' => null,
+                'new_status' => null,
+                'follow_up_date' => null,
+                'admin_id' => null,
+                'admin_name' => $h['performed_by'] ?: 'System',
+                'metadata' => json_encode(['title' => $h['title'], 'action' => $act, 'manual_sent' => $h['manual_sent_confirmed']]),
+                'created_at' => $h['created_at']
+            ];
+        }
+    } catch (Throwable $e) {}
+
+    // 3. Unify with any WhatsApp replica messages for this chat_id (two-way WhatsApp stream)
+    if (!empty($enquiry['chat_id'])) {
+        try {
+            $wStmt = $db->prepare("
+                SELECT id, wa_msg_id, from_me, sender_name, msg_type, body, timestamp, received_at
+                FROM whatsapp_messages
+                WHERE chat_id = ?
+                ORDER BY id ASC
+            ");
+            $wStmt->execute([(int)$enquiry['chat_id']]);
+            $waRows = $wStmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($waRows as $w) {
+                $wMid = (string)($w['wa_msg_id'] ?? '');
+                $wBody = trim((string)($w['body'] ?? ''));
+                if ($wMid !== '' && isset($knownWaMsgIds[$wMid])) {
+                    continue;
+                }
+                if ($wBody !== '' && isset($knownBodies[mb_strtolower($wBody)])) {
+                    continue;
+                }
+                if ($wBody === '') continue;
+
+                $wCreatedAt = !empty($w['received_at']) ? $w['received_at'] : (!empty($w['timestamp']) ? date('Y-m-d H:i:s', (int)$w['timestamp']) : date('Y-m-d H:i:s'));
+                $timeline[] = [
+                    'id' => 'wa_' . $w['id'],
+                    'enquiry_id' => $id,
+                    'message_type' => !empty($w['from_me']) ? 'outgoing_message' : 'incoming_message',
+                    'history_action' => null,
+                    'body' => $wBody,
+                    'ai_draft_body' => null,
+                    'staff_edited_body' => null,
+                    'old_status' => null,
+                    'new_status' => null,
+                    'follow_up_date' => null,
+                    'admin_id' => null,
+                    'admin_name' => !empty($w['from_me']) ? ($w['sender_name'] ?: 'School Staff') : ($enquiry['parent_name'] ?: 'Parent'),
+                    'metadata' => json_encode(['wa_msg_id' => $wMid, 'source' => 'whatsapp_sync']),
+                    'created_at' => $wCreatedAt
+                ];
+                if ($wMid !== '') $knownWaMsgIds[$wMid] = true;
+                if ($wBody !== '') $knownBodies[mb_strtolower($wBody)] = true;
+            }
+        } catch (Throwable $e) {}
+    }
+
+    // Chronological timeline sort: oldest to newest
+    usort($timeline, function ($a, $b) {
+        $c = strcmp((string)($a['created_at'] ?? ''), (string)($b['created_at'] ?? ''));
+        if ($c !== 0) return $c;
+        return ((int)($a['id'] ?? 0)) <=> ((int)($b['id'] ?? 0));
+    });
 
     // Fetch matching existing student/parent records
     $matches = checkDuplicatesAndMatches($db, $enquiry['phone_e164'], $enquiry['student_name'], $enquiry['academic_year'], $enquiry['interested_class'], $enquiry['id']);

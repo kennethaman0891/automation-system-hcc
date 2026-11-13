@@ -72,9 +72,17 @@ $googleAvatar = trim($userInfo['picture'] ?? '');
 $db = getDB();
 
 // 5. Match or Auto-Provision User in database
-// Priority 1: Match by google_id
 $user = null;
-if ($googleId !== '') {
+
+// Priority 0: Logged-in admin/teacher connecting their Google Account
+if (!empty($_SESSION['admin_id'])) {
+    $stmt = $db->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
+    $stmt->execute([(int)$_SESSION['admin_id']]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+// Priority 1: Match by google_id
+if (!$user && $googleId !== '') {
     $stmt = $db->prepare("SELECT * FROM users WHERE google_id = ? LIMIT 1");
     $stmt->execute([$googleId]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -206,6 +214,8 @@ try {
 
 rcLogAudit('login_google_success', 'auth', "Google login success for: {$googleEmail} (User ID: {$userId})");
 
-// 8. Redirect to Dashboard with active workspace
-header('Location: dashboard.php?google_signin=1');
+// 8. Redirect to requested destination or Dashboard with active workspace
+$redirect = $_SESSION['oauth_redirect'] ?? 'dashboard.php?google_signin=1';
+unset($_SESSION['oauth_redirect']);
+header('Location: ' . $redirect);
 exit;

@@ -1,12 +1,11 @@
 <?php
 /**
- * HCC Automation System — Dedicated Custom Dispatch Hub
- * Reusable 2-Pane WhatsApp Dispatch Cockpit with live message preview,
- * sequential stepper, phone auto-saving, and batch automation.
- *
- * NOTE: The data source, fields, and message format in this file are modular
- * and can be customized with your exact database tables and content.
+ * HCC Automation System — Dedicated Custom Dispatch Hub (Deprecated)
+ * Redirected to the primary WhatsApp Hub (whatsapp_share.php)
  */
+header('Location: whatsapp_share.php', true, 301);
+exit;
+
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/auth_check.php';
 

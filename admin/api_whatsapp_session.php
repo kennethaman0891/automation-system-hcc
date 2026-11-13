@@ -92,24 +92,15 @@ switch ($action) {
                 'expires_at' => $session['qr_expires_at']
             ]);
         } else {
-            if ($isBridgeRunning && !$isSyncing) {
-                $tmpDir = getenv('WHATSAPP_IPC_DIR');
-                if (!$tmpDir || !is_dir($tmpDir)) {
-                    $tmpDir = (DIRECTORY_SEPARATOR !== '\\' && is_dir('/tmp')) ? '/tmp' : sys_get_temp_dir();
-                }
-                $flagPath = rtrim($tmpDir, '/\\') . DIRECTORY_SEPARATOR . 'whatsapp_qr_refresh_default';
-                // UI polls every few seconds — do not thrash the bridge with refresh flags.
-                if (!is_file($flagPath) || (time() - (int)@filemtime($flagPath)) >= 20) {
-                    @file_put_contents($flagPath, time());
-                }
-            }
-
+            // Do not write a refresh flag here. The page polls every few seconds,
+            // and each flag made the bridge click the QR and replace a code that
+            // was still being scanned. The bridge publishes the next code itself.
             waJsonResponse([
                 'success' => false,
                 'bridge_running' => $isBridgeRunning,
                 'is_syncing' => $isSyncing,
-                'error' => $isSyncing ? 'QR scanned. Synchronizing chats with phone...' : ($isBridgeRunning ? 'No valid QR code. Refresh requested.' : 'WhatsApp bridge is offline.'),
-                'action' => $isSyncing ? 'syncing' : 'refresh_qr'
+                'error' => $isSyncing ? 'QR scanned. Synchronizing chats with phone...' : ($isBridgeRunning ? 'Waiting for a QR code.' : 'WhatsApp bridge is offline.'),
+                'action' => $isSyncing ? 'syncing' : 'wait'
             ], $isBridgeRunning ? 404 : 503);
         }
         break;
@@ -172,6 +163,56 @@ switch ($action) {
         waJsonResponse(['success' => true]);
         break;
 
+    case 'qr_push':
+        // Small update while the QR is on screen or the moment a scan succeeds.
+        // Does not rewrite cookies or localStorage.
+        if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+            waJsonResponse(['success' => false, 'error' => 'Method not allowed'], 405);
+        }
+        $qrPayload = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($qrPayload)) {
+            $qrPayload = [];
+        }
+        $qrCode = array_key_exists('qr_code', $qrPayload) ? $qrPayload['qr_code'] : null;
+        if ($qrCode === '') {
+            $qrCode = null;
+        }
+        $qrExpires = null;
+        if (!empty($qrPayload['qr_expires_at'])) {
+            $qrTs = strtotime((string)$qrPayload['qr_expires_at']);
+            if ($qrTs) {
+                $qrExpires = date('Y-m-d H:i:s', $qrTs);
+            }
+        }
+        $qrConnected = !empty($qrPayload['is_connected']) ? 1 : 0;
+        $qrSyncing = !empty($qrPayload['is_syncing']) ? 1 : 0;
+        $qrConnectedAt = null;
+        if ($qrConnected && !empty($qrPayload['connected_at'])) {
+            $qrConnTs = strtotime((string)$qrPayload['connected_at']);
+            if ($qrConnTs) {
+                $qrConnectedAt = date('Y-m-d H:i:s', $qrConnTs);
+            }
+        }
+        $qrPoll = date('Y-m-d H:i:s');
+        $qrStmt = $db->prepare("INSERT INTO whatsapp_sessions
+                (session_name, qr_code, qr_expires_at, is_connected, connected_at, last_poll_at, is_syncing, created_at, updated_at)
+                VALUES ('default', ?, ?, ?, ?, ?, ?, NOW(), NOW())
+                ON DUPLICATE KEY UPDATE
+                    qr_code = VALUES(qr_code),
+                    qr_expires_at = VALUES(qr_expires_at),
+                    is_connected = VALUES(is_connected),
+                    connected_at = IF(VALUES(is_connected) = 1, COALESCE(connected_at, VALUES(connected_at)), connected_at),
+                    last_poll_at = VALUES(last_poll_at),
+                    is_syncing = VALUES(is_syncing),
+                    updated_at = NOW()");
+        try {
+            $qrStmt->execute([$qrCode, $qrExpires, $qrConnected, $qrConnectedAt, $qrPoll, $qrSyncing]);
+        } catch (Throwable $e) {
+            waJsonResponse(['success' => false, 'error' => 'QR update failed'], 500);
+        }
+        waJsonResponse(['success' => true]);
+        break;
+
     case 'poll':
         $payload = json_decode(file_get_contents('php://input'), true);
         if (!is_array($payload)) {
@@ -199,6 +240,37 @@ switch ($action) {
         $db->prepare('UPDATE whatsapp_sessions SET ' . implode(', ', $sets) . " WHERE session_name = 'default'")
            ->execute($params);
         waJsonResponse(['success' => true]);
+        break;
+
+    case 'ensure':
+        // The page asks for this when the heartbeat is stale. The bridge
+        // process exits and launchd starts it again. Apache must not spawn
+        // Chrome itself (it runs as a different user than the LaunchAgent).
+        if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+            waJsonResponse(['success' => false, 'error' => 'Method not allowed'], 405);
+        }
+        $ensureStmt = $db->prepare("SELECT last_poll_at FROM whatsapp_sessions WHERE session_name = 'default'");
+        $ensureStmt->execute();
+        $ensureRow = $ensureStmt->fetch(PDO::FETCH_ASSOC);
+        $ensurePollTs = !empty($ensureRow['last_poll_at']) ? strtotime($ensureRow['last_poll_at']) : 0;
+        $ensureRunning = (time() - $ensurePollTs) < 90;
+        if ($ensureRunning) {
+            waJsonResponse(['success' => true, 'restarting' => false, 'bridge_running' => true]);
+        }
+        $ensureTmp = getenv('WHATSAPP_IPC_DIR');
+        if (!$ensureTmp || !is_dir($ensureTmp)) {
+            $ensureTmp = (DIRECTORY_SEPARATOR !== '\\' && is_dir('/tmp')) ? '/tmp' : sys_get_temp_dir();
+        }
+        $ensureFlag = rtrim($ensureTmp, '/\\') . DIRECTORY_SEPARATOR . 'whatsapp_bridge_restart_default';
+        if (!is_file($ensureFlag) || (time() - (int)@filemtime($ensureFlag)) >= 45) {
+            @file_put_contents($ensureFlag, (string)time());
+        }
+        waJsonResponse([
+            'success' => true,
+            'restarting' => true,
+            'bridge_running' => false,
+            'message' => 'WhatsApp bridge is starting. The QR will appear here.'
+        ]);
         break;
 
     case 'refresh_qr':
