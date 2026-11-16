@@ -36,24 +36,62 @@ $url = ($type === 'thumbnail' && $msg['thumbnail_url']) ? $msg['thumbnail_url'] 
 $localPath = ($type === 'thumbnail' && $msg['thumbnail_path']) ? $msg['thumbnail_path'] : $msg['local_path'];
 $mime = ($type === 'thumbnail' && $msg['mime_type']) ? $msg['mime_type'] : $msg['media_mime'];
 
-if ($localPath && file_exists($localPath)) {
-    // Serve local file
-    $finfo = finfo_open(FILEINFO_MIME_TYPE);
-    $detectedMime = finfo_file($finfo, $localPath);
-    finfo_close($finfo);
-    
-    header('Content-Type: ' . ($detectedMime ?: ($mime ?: 'application/octet-stream')));
-    header('Content-Length: ' . filesize($localPath));
-    header('Cache-Control: public, max-age=31536000, immutable');
-    header('X-Content-Type-Options: nosniff');
-    readfile($localPath);
-    exit;
+if ($localPath) {
+    $baseStorage = realpath(__DIR__ . '/../storage/whatsapp');
+    $resolvedLocalPath = ($baseStorage !== false && strpos((string)$localPath, "\0") === false)
+        ? realpath((string)$localPath)
+        : false;
+
+    if ($resolvedLocalPath !== false) {
+        if ($baseStorage === false || !str_starts_with($resolvedLocalPath, $baseStorage . DIRECTORY_SEPARATOR) || !is_file($resolvedLocalPath)) {
+            waJsonResponse(['success' => false, 'error' => 'Forbidden media path'], 403);
+        }
+        if (is_readable($resolvedLocalPath)) {
+            $finfo = finfo_open(FILEINFO_MIME_TYPE);
+            $detectedMime = $finfo ? (string)finfo_file($finfo, $resolvedLocalPath) : '';
+            if ($finfo) {
+                finfo_close($finfo);
+            }
+
+            $rawMime = $detectedMime ?: ($mime ?: 'application/octet-stream');
+            $effectiveMime = strtolower(trim(explode(';', str_replace(["\r", "\n", "\0"], '', (string)$rawMime), 2)[0]));
+
+            $safeInlineMimes = [
+                'image/jpeg',
+                'image/png',
+                'image/webp',
+                'image/gif',
+                'audio/mpeg',
+                'audio/ogg',
+                'video/mp4',
+                'application/pdf',
+            ];
+
+            header('X-Content-Type-Options: nosniff');
+            if (in_array($effectiveMime, $safeInlineMimes, true)) {
+                header('Content-Type: ' . $effectiveMime);
+                header('Content-Disposition: inline');
+            } else {
+                header('Content-Type: application/octet-stream');
+                $safeName = preg_replace('/[^A-Za-z0-9._-]/', '_', basename($resolvedLocalPath)) ?: 'media.bin';
+                header('Content-Disposition: attachment; filename="' . $safeName . '"');
+            }
+            header('Content-Length: ' . filesize($resolvedLocalPath));
+            header('Cache-Control: private, max-age=3600');
+            readfile($resolvedLocalPath);
+            exit;
+        }
+    }
 }
 
 if ($url) {
+    $cleanUrl = trim((string)$url);
+    if (preg_match('/[\r\n\0]/', $cleanUrl) || !preg_match('#^https://#i', $cleanUrl) || !filter_var($cleanUrl, FILTER_VALIDATE_URL)) {
+        waJsonResponse(['success' => false, 'error' => 'Invalid media redirect URL'], 400);
+    }
     // Proxy from WhatsApp CDN (with auth if needed)
     // For now, redirect to CDN URL (in production, stream with proper auth headers)
-    header('Location: ' . $url);
+    header('Location: ' . $cleanUrl);
     exit;
 }
 

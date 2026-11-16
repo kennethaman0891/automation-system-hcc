@@ -1,31 +1,34 @@
 <?php
 /* Bulk Results — dedicated print/download view (handles huge data). */
 // Security headers — must run before ANY output.
+$cspNonce = bin2hex(random_bytes(16));
 if (!headers_sent()) {
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: SAMEORIGIN');
     header('Referrer-Policy: strict-origin-when-cross-origin');
     header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
-    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'");
+    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-{$cspNonce}'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'");
 }
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/auth_check.php';
 
+$activeYear = rcGetActiveAcademicYear();
 // Accept both individual parameters and composite classKey
 $classKey = trim($_GET['class'] ?? '');
 if ($classKey !== '' && $classKey !== 'all') {
     $c = rcParseClassKey(urldecode($classKey));
-    $year     = trim($_GET['year'] ?? ($c['academic_year'] ?: '2024-25'));
+    $year     = trim($_GET['year'] ?? ($c['academic_year'] ?: $activeYear));
     $std      = trim($_GET['std'] ?? ($c['std'] ?: '1'));
     $division = trim($_GET['division'] ?? ($c['division'] ?: 'A'));
     $semester = trim($_GET['semester'] ?? ($c['semester'] ?: 'Sem 1'));
 } else {
-    $year     = trim($_GET['year'] ?? '2024-25');
+    $year     = trim($_GET['year'] ?? $activeYear);
     $std      = trim($_GET['std'] ?? '1');
     $division = trim($_GET['division'] ?? 'A');
     $semester = trim($_GET['semester'] ?? 'Sem 1');
     $classKey = rcBuildClassKey($year, $std, $division, $semester);
 }
+if ($year === '') $year = $activeYear;
 
 $search   = trim($_GET['search'] ?? '');
 
@@ -355,7 +358,7 @@ $today = date('d-m-Y');
 
     <script src="../assets/js/print-toolbar.js"></script>
     <script src="<?= BASE_URL ?>assets/js/whatsapp-share.js?v=<?= filemtime(__DIR__ . '/../assets/js/whatsapp-share.js') ?>"></script>
-    <script>
+    <script nonce="<?= $cspNonce ?>">
     // Toggle Digital Signature vs Blank Blocks for Physical Signing
     let isDigitalOn = <?= $digitalSign ? 'true' : 'false' ?>;
     document.getElementById('toggleDigitalSignBtn')?.addEventListener('click', function () {
@@ -385,7 +388,7 @@ $today = date('d-m-Y');
     });
 
     document.getElementById('whatsappClassSummaryBtn')?.addEventListener('click', function () {
-        const students = <?= json_encode($students, JSON_UNESCAPED_UNICODE) ?>;
+        const students = <?= json_encode($students, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
         const total = students.length;
         let pass = 0;
         let sumPct = 0;
@@ -406,10 +409,10 @@ $today = date('d-m-Y');
         }));
 
         const msg = HCCWhatsApp.templates.classSummary({
-            schoolName: <?= json_encode($schoolName) ?>,
-            principalName: <?= json_encode($settings['principal_name'] ?? 'The Principal') ?>,
-            className: <?= json_encode("STD {$romanStd} {$division}") ?>,
-            semester: <?= json_encode($semester) ?>,
+            schoolName: <?= json_encode($schoolName, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+            principalName: <?= json_encode($settings['principal_name'] ?? 'The Principal', JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+            className: <?= json_encode("STD {$romanStd} {$division}", JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+            semester: <?= json_encode($semester, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
             totalStudents: total,
             passed: pass,
             failed: fail,
@@ -419,10 +422,10 @@ $today = date('d-m-Y');
         });
 
         HCCWhatsApp.openModal({
-            studentName: <?= json_encode("STD {$romanStd} {$division} Marksheet Summary") ?>,
+            studentName: <?= json_encode("STD {$romanStd} {$division} Marksheet Summary", JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
             roll: 'ALL',
-            className: <?= json_encode("STD {$romanStd} {$division}") ?>,
-            classKey: <?= json_encode($classKey) ?>,
+            className: <?= json_encode("STD {$romanStd} {$division}", JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+            classKey: <?= json_encode($classKey, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
             messageText: msg
         });
     });

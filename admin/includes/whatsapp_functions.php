@@ -57,6 +57,25 @@ if (!function_exists('waRequireBridgeOrAuth')) {
     }
 }
 
+if (!function_exists('waVerifyCSRF')) {
+    /**
+     * Validate CSRF token for session-authenticated mutating requests.
+     * Reads X-CSRF-Token header, $_POST['csrf_token'], or optional JSON body token.
+     */
+    function waVerifyCSRF(?array $jsonBody = null): void {
+        if (session_status() === PHP_SESSION_NONE) session_start();
+        $sessionToken = (string)($_SESSION['csrf_token'] ?? '');
+        $provided = (string)(
+            $_SERVER['HTTP_X_CSRF_TOKEN']
+            ?? $_POST['csrf_token']
+            ?? ($jsonBody['csrf_token'] ?? '')
+        );
+        if ($sessionToken === '' || $provided === '' || !hash_equals($sessionToken, $provided)) {
+            waJsonResponse(['success' => false, 'error' => 'Invalid or missing CSRF token'], 403);
+        }
+    }
+}
+
 if (!function_exists('waJsonResponse')) {
     function waJsonResponse(array $data, int $status = 200): void {
         http_response_code($status);
@@ -152,47 +171,54 @@ if (!function_exists('waValidateWhatsAppPhone')) {
     }
 }
 
+if (!function_exists('waValidatePhone')) {
+    function waValidatePhone(string $phone): array {
+        return waValidateWhatsAppPhone($phone);
+    }
+}
+
 if (!function_exists('waGetOrCreateChat')) {
     function waGetOrCreateChat(PDO $db, string $waChatId, string $chatType = 'individual', ?string $name = null, ?string $avatar = null): int {
-        $stmt = $db->prepare("SELECT id FROM whatsapp_chats WHERE wa_chat_id = ?");
-        $stmt->execute([$waChatId]);
-        $existing = $stmt->fetchColumn();
-        if ($existing) return (int)$existing;
-        
+        $waLid = str_contains($waChatId, '@lid') ? $waChatId : null;
         $stmt = $db->prepare("
-            INSERT INTO whatsapp_chats (wa_chat_id, chat_type, name, avatar_url, last_activity_at)
-            VALUES (?, ?, ?, ?, NOW())
+            INSERT INTO whatsapp_chats (wa_chat_id, wa_lid, chat_type, name, avatar_url, last_activity_at)
+            VALUES (?, ?, ?, ?, ?, NOW())
+            ON DUPLICATE KEY UPDATE
+                id = LAST_INSERT_ID(id),
+                wa_lid = COALESCE(wa_lid, VALUES(wa_lid)),
+                name = COALESCE(NULLIF(VALUES(name), ''), name),
+                avatar_url = COALESCE(NULLIF(VALUES(avatar_url), ''), avatar_url),
+                last_activity_at = GREATEST(last_activity_at, NOW())
         ");
-        $stmt->execute([$waChatId, $chatType, $name, $avatar]);
+        $stmt->execute([$waChatId, $waLid, $chatType, $name, $avatar]);
         return (int)$db->lastInsertId();
     }
 }
 
 if (!function_exists('waGetOrCreateContact')) {
     function waGetOrCreateContact(PDO $db, string $waId, ?string $phoneE164 = null, ?string $name = null, ?string $pushName = null, ?string $avatar = null, string $source = 'whatsapp'): int {
-        $stmt = $db->prepare("SELECT id FROM whatsapp_contacts WHERE wa_id = ?");
-        $stmt->execute([$waId]);
-        $existing = $stmt->fetchColumn();
-        if ($existing) {
-            // Update known fields
-            $updates = [];
-            $params = [];
-            if ($phoneE164) { $updates[] = 'phone_e164 = ?'; $params[] = $phoneE164; }
-            if ($name) { $updates[] = 'name = ?'; $params[] = $name; }
-            if ($pushName) { $updates[] = 'push_name = ?'; $params[] = $pushName; }
-            if ($avatar) { $updates[] = 'avatar_url = ?'; $params[] = $avatar; }
-            if ($updates) {
-                $params[] = $waId;
-                $db->prepare("UPDATE whatsapp_contacts SET " . implode(', ', $updates) . ", updated_at = NOW() WHERE wa_id = ?")->execute($params);
+        $isLid = str_contains($waId, '@lid');
+        $waLid = $isLid ? $waId : null;
+        if ($isLid && $phoneE164 !== null) {
+            $lidDigits = preg_replace('/\D/', '', $waId);
+            $phoneDigits = preg_replace('/\D/', '', $phoneE164);
+            if ($lidDigits !== '' && $phoneDigits === $lidDigits) {
+                $phoneE164 = null;
             }
-            return (int)$existing;
         }
-        
         $stmt = $db->prepare("
-            INSERT INTO whatsapp_contacts (wa_id, phone_e164, name, push_name, avatar_url, source)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO whatsapp_contacts (wa_id, wa_lid, phone_e164, name, push_name, avatar_url, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                id = LAST_INSERT_ID(id),
+                wa_lid = COALESCE(wa_lid, VALUES(wa_lid)),
+                phone_e164 = COALESCE(NULLIF(VALUES(phone_e164), ''), phone_e164),
+                name = COALESCE(NULLIF(VALUES(name), ''), name),
+                push_name = COALESCE(NULLIF(VALUES(push_name), ''), push_name),
+                avatar_url = COALESCE(NULLIF(VALUES(avatar_url), ''), avatar_url),
+                updated_at = NOW()
         ");
-        $stmt->execute([$waId, $phoneE164, $name, $pushName, $avatar, $source]);
+        $stmt->execute([$waId, $waLid, $phoneE164, $name, $pushName, $avatar, $source]);
         return (int)$db->lastInsertId();
     }
 }
@@ -257,32 +283,24 @@ if (!function_exists('waSyncRosterToChats')) {
                 updated_at = NOW()
         ");
 
-        $updReportCardPhone = $db->prepare("
-            UPDATE report_card 
-            SET parent_phone = ? 
-            WHERE academic_year = ? AND std = ? AND division = ? AND semester = ? AND roll_no = ? AND (parent_phone IS NULL OR parent_phone = '')
-        ");
-
         foreach ($students as $stu) {
             $rollNo = trim((string)$stu['roll_no']);
             $studentName = trim((string)$stu['student_name']);
             $rawPhone = trim((string)($stu['parent_phone'] ?? ''));
 
-            // If phone is missing or incomplete, generate a deterministic valid 10-digit Indian mobile
-            $cleanDigits = preg_replace('/\D/', '', $rawPhone);
-            if (strlen($cleanDigits) < 10) {
-                // Generate deterministic 10-digit mobile: 98 + 2-digit STD + 2-digit Div ASCII + 4-digit Roll
-                $cleanDigits = sprintf("98%02d%02d%04d", (int)$std, ord(strtoupper($division)), (int)$rollNo);
-                $rawPhone = $cleanDigits;
-                // Persist back to report_card so the roster remains consistent
-                $updReportCardPhone->execute([$cleanDigits, $academicYear, $std, $division, $semester, $rollNo]);
+            // Strict validation: never fabricate fake phone numbers or mutate report_card
+            $vPhone = waValidateWhatsAppPhone($rawPhone);
+            if (!$vPhone['ok']) {
+                continue;
             }
 
-            $waId = waPhoneToWAID($cleanDigits);
-            $phoneE164 = waPhoneToE164($cleanDigits);
+            $cleanDigits = $vPhone['digits'];
+            $waId = $cleanDigits . '@c.us';
+            $phoneE164 = $vPhone['e164'];
             $displayName = $studentName;
             $pushName = 'Parent of ' . $studentName;
-            $avatarUrl = 'https://ui-avatars.com/api/?name=' . urlencode($studentName) . '&background=128C7E&color=fff&size=128';
+            // Local initials fallback rendered by UI; avoid external avatar APIs
+            $avatarUrl = null;
 
             $metaJson = json_encode([
                 'academic_year' => $academicYear,
@@ -330,7 +348,7 @@ if (!function_exists('waSyncRosterToChats')) {
         $cleanYear = preg_replace('/\W/', '', $academicYear);
         $groupChatId = sprintf("group_%s_std%s_%s@g.us", $cleanYear, $std, strtolower($division));
         $groupName = sprintf("STD %s-%s Official (%s)", $std, strtoupper($division), $academicYear);
-        $groupAvatar = 'https://ui-avatars.com/api/?name=' . urlencode("STD {$std}-{$division}") . '&background=075E54&color=fff&size=128';
+        $groupAvatar = null;
         $groupMeta = json_encode([
             'academic_year' => $academicYear,
             'std' => $std,
@@ -432,7 +450,9 @@ if (!function_exists('waInsertMessage')) {
             (int)($msg['timestamp'] ?? time()),
             $metaVal
         ]);
-        $msgId = (int)$db->lastInsertId();
+        $rawInsertId = (int)$db->lastInsertId();
+        $wasInserted = $rawInsertId > 0;
+        $msgId = $rawInsertId;
         // ON DUPLICATE KEY yields lastInsertId=0 — resolve the real row id.
         if ($msgId <= 0) {
             $find = $db->prepare('SELECT id FROM whatsapp_messages WHERE wa_msg_id = ? LIMIT 1');
@@ -469,13 +489,31 @@ if (!function_exists('waInsertMessage')) {
             }
         }
 
+        $isBlankSync = (
+            ($msg['msg_type'] ?? 'text') === 'system'
+            && trim((string)($msg['body'] ?? '')) === ''
+            && str_starts_with((string)($msg['wa_msg_id'] ?? ''), 'chat_sync_')
+        );
+
         if ($msgId > 0) {
-            // Update chat's last_message_id and last_activity_at
-            $db->prepare("
-                UPDATE whatsapp_chats 
-                SET last_message_id = ?, last_activity_at = FROM_UNIXTIME(?), unread_count = unread_count + IF(? = 0, 1, 0)
-                WHERE id = ?
-            ")->execute([$msgId, (int)($msg['timestamp'] ?? time()), $fromMe, $msg['chat_id']]);
+            $msgTs = (int)($msg['timestamp'] ?? time());
+            if ($isBlankSync) {
+                $db->prepare("
+                    UPDATE whatsapp_chats
+                    SET last_activity_at = COALESCE(last_activity_at, FROM_UNIXTIME(?))
+                    WHERE id = ?
+                ")->execute([$msgTs, $msg['chat_id']]);
+            } else {
+                // Only increment unread_count for genuinely newly-inserted incoming messages
+                $incUnread = ($wasInserted && $fromMe === 0) ? 1 : 0;
+                $db->prepare("
+                    UPDATE whatsapp_chats 
+                    SET last_message_id = ?,
+                        last_activity_at = GREATEST(COALESCE(last_activity_at, FROM_UNIXTIME(?)), FROM_UNIXTIME(?)),
+                        unread_count = unread_count + ?
+                    WHERE id = ?
+                ")->execute([$msgId, $msgTs, $msgTs, $incUnread, $msg['chat_id']]);
+            }
         }
         
         return $msgId;
@@ -672,13 +710,19 @@ if (!function_exists('waFailStaleOutbound')) {
      */
     function waFailStaleOutbound(PDO $db, int $maxAgeSec = 120): array {
         $maxAgeSec = max(30, min(3600, $maxAgeSec));
+        $procAgeSec = max(300, $maxAgeSec);
         $st = $db->prepare("
             UPDATE whatsapp_outbound_queue
             SET status = 'failed',
                 error_message = 'not sent (bridge was offline) — press Retry',
                 updated_at = NOW()
-            WHERE status IN ('queued', 'processing')
-              AND created_at < (NOW() - INTERVAL {$maxAgeSec} SECOND)
+            WHERE (
+                status = 'queued'
+                AND GREATEST(created_at, COALESCE(scheduled_at, created_at)) < (NOW() - INTERVAL {$maxAgeSec} SECOND)
+            ) OR (
+                status = 'processing'
+                AND GREATEST(created_at, updated_at) < (NOW() - INTERVAL {$procAgeSec} SECOND)
+            )
         ");
         $st->execute();
         return ['failed' => $st->rowCount()];

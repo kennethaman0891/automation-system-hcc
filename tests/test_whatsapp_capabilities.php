@@ -15,6 +15,10 @@ $root = dirname(__DIR__);
 require_once $root . '/config/database.php';
 require_once $root . '/includes/functions.php';
 require_once $root . '/admin/includes/whatsapp_functions.php';
+require_once __DIR__ . '/lib_cli_session.php';
+
+$cliSess = hccCreateCliAdminSession();
+register_shutdown_function(function () use (&$cliSess) { hccCleanupCliSession($cliSess); });
 
 $passed = 0;
 $failed = 0;
@@ -30,14 +34,19 @@ function cap(string $id, string $name, string $status, string $detail = ''): voi
 }
 
 function httpPost(string $url, string $body, array $headers = []): array {
+    global $cliSess;
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => $body,
-        CURLOPT_HTTPHEADER => array_merge(['Content-Type: application/json', 'Accept: application/json'], $headers),
+        CURLOPT_HTTPHEADER => array_merge([
+            'Content-Type: application/json',
+            'Accept: application/json',
+            'X-CSRF-Token: ' . ($cliSess['csrf_token'] ?? ''),
+        ], $headers),
         CURLOPT_TIMEOUT => 20,
-        CURLOPT_COOKIE => 'qa_test=1',
+        CURLOPT_COOKIE => $cliSess['cookie_header'] ?? '',
     ]);
     $raw = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -47,18 +56,14 @@ function httpPost(string $url, string $body, array $headers = []): array {
 }
 
 function httpGet(string $url): array {
+    global $cliSess;
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 15,
-        CURLOPT_COOKIE => 'qa_test=1',
-        CURLOPT_HTTPHEADER => ['Accept: application/json', 'X-Admin-Test: 1'],
+        CURLOPT_COOKIE => $cliSess['cookie_header'] ?? '',
+        CURLOPT_HTTPHEADER => ['Accept: application/json'],
     ]);
-    // Prefer query qa_test for waRequireAuth
-    $sep = str_contains($url, '?') ? '&' : '?';
-    if (!str_contains($url, 'qa_test=')) {
-        curl_setopt($ch, CURLOPT_URL, $url . $sep . 'qa_test=1');
-    }
     $raw = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
@@ -67,7 +72,7 @@ function httpGet(string $url): array {
 
 $db = waGetDB();
 $secret = defined('WHATSAPP_BRIDGE_SECRET') ? WHATSAPP_BRIDGE_SECRET : '';
-$base = 'http://127.0.0.1/hcc/admin';
+$base = hccResolveAdminBase('http://127.0.0.1/hcc/admin', $cliSess);
 $testDigits = '9111111999'; // obvious fake
 $testWa = '91' . $testDigits . '@c.us';
 $testE164 = '+91' . $testDigits;
@@ -92,7 +97,7 @@ $cleanup = function () use ($db, $testWa, $testE164, $tag): void {
 $cleanup();
 
 // --- PAIRING / SESSION / WATCH ---
-$st = httpGet($base . '/api_whatsapp_session.php?action=status&qa_test=1');
+$st = httpGet($base . '/api_whatsapp_session.php?action=status');
 if (($st['json']['success'] ?? false) === true) {
     $sess = $st['json']['session'] ?? [];
     $bridge = !empty($st['json']['bridge_running']) || !empty($sess['bridge_running']);
@@ -181,8 +186,6 @@ if (!$chatId) {
 
 // --- SEND: enqueue then cancel (bridge is disconnected so it will not send; still cancel) ---
 $_SERVER['HTTP_HOST'] = '127.0.0.1';
-$_GET['qa_test'] = '1';
-// Use HTTP with qa_test
 $sendBody = json_encode([
     'chat_id' => $chatId,
     'msg_type' => 'text',
@@ -190,7 +193,7 @@ $sendBody = json_encode([
     'priority' => 10,
     'dispatch_method' => 'auto',
 ]);
-$send = httpPost($base . '/api_whatsapp_send.php?qa_test=1', $sendBody);
+$send = httpPost($base . '/api_whatsapp_send.php', $sendBody);
 $queueId = (int)($send['json']['queue_id'] ?? 0);
 $tempMsg = (string)($send['json']['temp_msg_id'] ?? '');
 if ($send['code'] === 200 && $queueId > 0) {
@@ -201,7 +204,7 @@ if ($send['code'] === 200 && $queueId > 0) {
 
 // Immediately cancel so a future reconnect cannot send it
 if ($queueId > 0) {
-    $upd = httpPost($base . '/api_whatsapp_outbound_update.php?qa_test=1', json_encode([
+    $upd = httpPost($base . '/api_whatsapp_outbound_update.php', json_encode([
         'id' => $queueId,
         'status' => 'cancelled',
         'error_message' => 'capability test cancel — never send',
@@ -267,7 +270,7 @@ if ($queueId > 0) {
        ->execute([$chatId, 'text', $tag . ' track timestamps', 10, 'processing', 1]);
     $qid2 = (int)$db->lastInsertId();
     $iso = gmdate('Y-m-d\TH:i:s.000\Z');
-    $u = httpPost($base . '/api_whatsapp_outbound_update.php?qa_test=1', json_encode([
+    $u = httpPost($base . '/api_whatsapp_outbound_update.php', json_encode([
         'id' => $qid2,
         'status' => 'sent',
         'sent_at' => $iso,
@@ -292,7 +295,7 @@ waInsertMessage($db, [
 ]);
 $idMe = (int)$db->query("SELECT id FROM whatsapp_messages WHERE wa_msg_id = " . $db->quote($delMe))->fetchColumn();
 
-$d1 = httpPost($base . '/api_whatsapp_chat_actions.php?qa_test=1', json_encode([
+$d1 = httpPost($base . '/api_whatsapp_chat_actions.php', json_encode([
     'chat_id' => $chatId, 'action' => 'delete_message', 'msg_id' => $idMe, 'for_everyone' => false,
 ]));
 $gone = (int)$db->query("SELECT COUNT(*) FROM whatsapp_messages WHERE id = {$idMe}")->fetchColumn();
@@ -308,7 +311,7 @@ waInsertMessage($db, [
     'msg_type' => 'text', 'body' => 'delete everyone', 'status' => 'sent', 'timestamp' => time() - 20,
 ]);
 $idEv = (int)$db->query("SELECT id FROM whatsapp_messages WHERE wa_msg_id = " . $db->quote($delEv))->fetchColumn();
-$d2 = httpPost($base . '/api_whatsapp_chat_actions.php?qa_test=1', json_encode([
+$d2 = httpPost($base . '/api_whatsapp_chat_actions.php', json_encode([
     'chat_id' => $chatId, 'action' => 'delete_message', 'msg_id' => $idEv, 'for_everyone' => true,
 ]));
 $revPendingRow = $db->query("SELECT status, msg_type FROM whatsapp_messages WHERE id = {$idEv}")->fetch(PDO::FETCH_ASSOC);
@@ -322,7 +325,7 @@ if ($d2['code'] === 200 && ($revPendingRow['status'] ?? '') === 'revoke_pending'
 $bridgeSrc = @file_get_contents($root . '/automation/whatsapp-bridge.js') ?: '';
 $hasHelper = (bool)preg_match('/async\s+revokeForEveryone\s*\(/', $bridgeSrc);
 if ($d2Qid > 0 && $hasHelper) {
-    $mock = httpPost($base . '/api_whatsapp_outbound_update.php?qa_test=1', json_encode([
+    $mock = httpPost($base . '/api_whatsapp_outbound_update.php', json_encode([
         'id' => $d2Qid,
         'status' => 'sent',
         'sent_at' => gmdate('Y-m-d\TH:i:s\Z'),
@@ -338,7 +341,7 @@ if ($d2Qid > 0 && $hasHelper) {
 }
 
 // Filter API health (watch privacy)
-$f = httpGet($base . '/api_whatsapp_bridge_filter.php?qa_test=1');
+$f = httpGet($base . '/api_whatsapp_bridge_filter.php');
 if (($f['json']['success'] ?? false) === true) {
     $kw = $f['json']['data']['admission_keywords'] ?? $f['json']['admission_keywords'] ?? [];
     cap('W2', 'Bridge privacy filter API', 'PASS', 'keywords=' . (is_array($kw) ? count($kw) : 0));

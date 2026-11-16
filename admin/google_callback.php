@@ -64,12 +64,20 @@ if (!$userInfo || empty($userInfo['email'])) {
     exit;
 }
 
+$emailVerified = $userInfo['email_verified'] ?? false;
+if (!in_array($emailVerified, [true, 1, '1', 'true'], true)) {
+    error_log('HCC [Google OAuth] Unverified Google email rejected for sub=' . ($userInfo['sub'] ?? 'unknown'));
+    header('Location: login.php?oauth_code=profile');
+    exit;
+}
+
 $googleEmail  = strtolower(trim($userInfo['email']));
 $googleId     = trim($userInfo['sub'] ?? '');
 $googleName   = trim($userInfo['name'] ?? ($userInfo['given_name'] ?? 'Teacher'));
 $googleAvatar = trim($userInfo['picture'] ?? '');
 
 $db = getDB();
+$settings = getAllSettings();
 
 // 5. Match or Auto-Provision User in database
 $user = null;
@@ -121,7 +129,30 @@ if ($user) {
     $userName = $user['full_name'] ?: $googleName;
     $loginUsername = $user['username'] ?? '';
 } else {
-    // New teacher: Auto-register with editor privileges
+    // Only allow auto-provisioning when an explicit domain allowlist is configured and matches.
+    $allowedDomainRaw = strtolower(trim((string)($settings['google_allowed_domain'] ?? '')));
+    $allowedDomains = [];
+    if ($allowedDomainRaw !== '') {
+        foreach (explode(',', $allowedDomainRaw) as $domPart) {
+            $domClean = ltrim(strtolower(trim($domPart)), '@');
+            if ($domClean !== '' && preg_match('/^[a-z0-9.-]+\.[a-z]{2,}$/', $domClean)) {
+                $allowedDomains[] = $domClean;
+            }
+        }
+    }
+    $emailDomain = str_contains($googleEmail, '@')
+        ? strtolower(trim((string)substr((string)strrchr($googleEmail, '@'), 1)))
+        : '';
+    $isDomainAllowed = ($emailDomain !== '' && in_array($emailDomain, $allowedDomains, true));
+
+    if (!$isDomainAllowed) {
+        rcLogAudit('login_google_denied', 'auth', "Unauthorized Google login attempt for: {$googleEmail}");
+        error_log("HCC [Google OAuth] Denied unapproved Google account: {$googleEmail}");
+        header('Location: login.php?err=google_not_authorized');
+        exit;
+    }
+
+    // Explicitly allowlisted domain user: provision with editor privileges
     $baseUsername = strtolower(preg_replace('/[^a-zA-Z0-9_]/', '', explode('@', $googleEmail)[0]));
     if ($baseUsername === '') $baseUsername = 'teacher';
     
@@ -165,7 +196,7 @@ $folderUrl = null;
 $subfolders = [];
 
 try {
-    $workspace = $client->ensureUserWorkspace($accessToken, $userName, '2024-25');
+    $workspace = $client->ensureUserWorkspace($accessToken, $userName, rcGetActiveAcademicYear());
     if (!empty($workspace['teacher_folder_id'])) {
         $folderId  = $workspace['teacher_folder_id'];
         $folderUrl = $workspace['teacher_folder_url'];
@@ -215,7 +246,10 @@ try {
 rcLogAudit('login_google_success', 'auth', "Google login success for: {$googleEmail} (User ID: {$userId})");
 
 // 8. Redirect to requested destination or Dashboard with active workspace
-$redirect = $_SESSION['oauth_redirect'] ?? 'dashboard.php?google_signin=1';
+$redirect = trim((string)($_SESSION['oauth_redirect'] ?? ''));
 unset($_SESSION['oauth_redirect']);
+if ($redirect === '' || preg_match('#^(?:[a-z][a-z0-9+.-]*:|//)#i', $redirect) || preg_match('/[\r\n\0]/', $redirect)) {
+    $redirect = 'dashboard.php?google_signin=1';
+}
 header('Location: ' . $redirect);
 exit;

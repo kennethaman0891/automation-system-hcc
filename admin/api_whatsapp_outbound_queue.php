@@ -40,9 +40,9 @@ switch ($action) {
             $dueClause = ($status === 'queued')
                 ? ' AND (q.scheduled_at IS NULL OR q.scheduled_at <= NOW())'
                 : '';
-            // Fresh window: only rows created in the last 120s (same as fail threshold).
+            // Fresh window: only rows whose created_at or scheduled_at is within the last 120s.
             $freshClause = ($status === 'queued')
-                ? " AND q.created_at >= (NOW() - INTERVAL 120 SECOND) AND q.origin = 'manual_ui' AND q.approved_by IS NOT NULL AND q.approved_by > 0"
+                ? " AND GREATEST(q.created_at, COALESCE(q.scheduled_at, q.created_at)) >= (NOW() - INTERVAL 120 SECOND) AND q.origin = 'manual_ui' AND q.approved_by IS NOT NULL AND q.approved_by > 0"
                 : '';
             $stmt = $db->prepare("
                 SELECT q.*, c.wa_chat_id, c.name as chat_name

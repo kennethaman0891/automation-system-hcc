@@ -11,9 +11,19 @@ $adminUser = sanitize($_SESSION['admin_name'] ?? 'Admin');
 // Ensure tables
 rcEnsureNotificationsTable();
 
-// Academic Year Selection
-$sourceYear = trim($_GET['source_year'] ?? '2024-25');
-$targetYear = trim($_GET['target_year'] ?? '2025-26');
+// Academic Year Selection (dynamic active academic year + computed target year)
+$activeYear = rcGetActiveAcademicYear();
+$sourceYear = trim($_GET['source_year'] ?? $activeYear);
+if ($sourceYear === '') $sourceYear = $activeYear;
+
+$computedNextYear = $sourceYear;
+if (preg_match('/^(\d{4})-(\d{2,4})$/', $sourceYear, $ym)) {
+    $y1 = (int)$ym[1] + 1;
+    $y2 = strlen($ym[2]) === 2 ? sprintf('%02d', ((int)$ym[2] + 1) % 100) : (string)((int)$ym[2] + 1);
+    $computedNextYear = "{$y1}-{$y2}";
+}
+$targetYear = trim($_GET['target_year'] ?? $computedNextYear);
+if ($targetYear === '') $targetYear = $computedNextYear;
 $activeClass = trim($_GET['class'] ?? ''); // e.g. "1|A|Sem 1"
 
 $error = '';
@@ -115,11 +125,11 @@ if ($activeClass !== '') {
             'sem' => $acSem,
             'target_std' => ((int)$acStd >= 10) ? 'Graduated' : (string)((int)$acStd + 1),
             'target_div' => $acDiv,
-            'target_sem' => $acSem,
+            'target_sem' => ($acSem === 'Sem 2' ? 'Sem 1' : $acSem),
         ];
         $checklistStudents = rcGetClassStudentsForPromotion($sourceYear, $acStd, $acDiv, $acSem);
         if ($activeClassMeta['target_std'] !== 'Graduated') {
-            $targetSubjectsPreview = rcGetStandardSubjects($activeClassMeta['target_std'], $targetYear, $acDiv, $acSem);
+            $targetSubjectsPreview = rcGetStandardSubjects($activeClassMeta['target_std'], $targetYear, $acDiv, $activeClassMeta['target_sem']);
         }
     }
 }

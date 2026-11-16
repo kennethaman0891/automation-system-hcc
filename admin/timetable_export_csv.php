@@ -58,9 +58,16 @@ if ($schoolName === '') {
     $schoolName = 'HINDUSTANI COVENANT CHURCH HIGH SCHOOL & JR. COLLEGE, SOLAPUR.';
 }
 
-$title = $timetable['title'] ?? 'FIRST SEMESTER EXAMINATION TIME-TABLE (WRITTEN EXAM)';
-$standardsLabel = $timetable['standards_label'] ?? 'STD V-X October 2026';
-$academicYear = $timetable['academic_year'] ?? '2026-2027';
+$defaultAcademicYear = '2025-26';
+try {
+    if (function_exists('rcGetActiveAcademicYear')) {
+        $defaultAcademicYear = rcGetActiveAcademicYear();
+    }
+} catch (Throwable $e) {}
+
+$title = trim((string)($timetable['title'] ?? '')) ?: 'EXAMINATION TIME-TABLE (WRITTEN EXAM)';
+$academicYear = trim((string)($timetable['academic_year'] ?? '')) ?: $defaultAcademicYear;
+$standardsLabel = trim((string)($timetable['standards_label'] ?? '')) ?: ('Academic Year ' . $academicYear);
 $notes = $timetable['notes'] ?? '';
 
 // 3. Fetch columns
@@ -104,21 +111,36 @@ if (!headers_sent()) {
 
 $output = fopen('php://output', 'w');
 
+// Formula-injection-safe CSV writer helper (neutralizes leading =, +, -, @, \t, \r)
+$safeCell = static function ($val): string {
+    if (function_exists('rcCsvSafeCell')) {
+        return rcCsvSafeCell($val);
+    }
+    $str = (string)$val;
+    if ($str !== '' && (preg_match('/^[\t\r\n ]*[=+\-@]/u', $str) || $str[0] === "\t" || $str[0] === "\r")) {
+        return "'" . $str;
+    }
+    return $str;
+};
+$writeSafeCsvRow = static function ($handle, array $cells) use ($safeCell): void {
+    fputcsv($handle, array_map($safeCell, $cells));
+};
+
 // Write UTF-8 BOM for Microsoft Excel compatibility
 fwrite($output, "\xEF\xBB\xBF");
 
 // Write Institutional Header
-fputcsv($output, [strtoupper($schoolName)]);
-fputcsv($output, [strtoupper($title)]);
-fputcsv($output, [strtoupper($standardsLabel) . ' - ACADEMIC YEAR: ' . $academicYear]);
-fputcsv($output, []); // Blank separator line
+$writeSafeCsvRow($output, [strtoupper($schoolName)]);
+$writeSafeCsvRow($output, [strtoupper($title)]);
+$writeSafeCsvRow($output, [strtoupper($standardsLabel) . ' - ACADEMIC YEAR: ' . $academicYear]);
+$writeSafeCsvRow($output, []); // Blank separator line
 
 // Write Table Grid Column Headers
 $headers = ['DAY', 'DATE', 'TIME'];
 foreach ($columns as $col) {
     $headers[] = strtoupper($col['column_name']);
 }
-fputcsv($output, $headers);
+$writeSafeCsvRow($output, $headers);
 
 // Write Table Data Rows
 foreach ($rows as $row) {
@@ -142,12 +164,12 @@ foreach ($rows as $row) {
         }
     }
 
-    fputcsv($output, $rowOutput);
+    $writeSafeCsvRow($output, $rowOutput);
 }
 
 // Write Instructions / Notes
-fputcsv($output, []);
-fputcsv($output, ['IMPORTANT INSTRUCTIONS / NOTICE:']);
+$writeSafeCsvRow($output, []);
+$writeSafeCsvRow($output, ['IMPORTANT INSTRUCTIONS / NOTICE:']);
 if (!empty(trim($notes))) {
     $noteLines = preg_split('/\r\n|\r|\n/', trim($notes));
     $idx = 1;
@@ -155,21 +177,21 @@ if (!empty(trim($notes))) {
         $cleanLine = trim($line);
         $cleanLine = preg_replace('/^(\d+[\.\)]|\-|\*)\s*/', '', $cleanLine);
         if ($cleanLine !== '') {
-            fputcsv($output, [$idx . '. ' . $cleanLine]);
+            $writeSafeCsvRow($output, [$idx . '. ' . $cleanLine]);
             $idx++;
         }
     }
 } else {
-    fputcsv($output, ['1. Students must be present in their respective classrooms 15 minutes before exam commencement.']);
-    fputcsv($output, ['2. Borrowing of writing material / stationery is strictly prohibited in the examination hall.']);
-    fputcsv($output, ['3. School uniform and valid Student Identity Card / Hall Ticket are compulsory.']);
-    fputcsv($output, ['4. Students arriving more than 15 minutes late will not be permitted to take the examination.']);
+    $writeSafeCsvRow($output, ['1. Students must be present in their respective classrooms 15 minutes before exam commencement.']);
+    $writeSafeCsvRow($output, ['2. Borrowing of writing material / stationery is strictly prohibited in the examination hall.']);
+    $writeSafeCsvRow($output, ['3. School uniform and valid Student Identity Card / Hall Ticket are compulsory.']);
+    $writeSafeCsvRow($output, ['4. Students arriving more than 15 minutes late will not be permitted to take the examination.']);
 }
 
 // Write Institutional Signatures
-fputcsv($output, []);
-fputcsv($output, ['SIGNATURES:']);
-fputcsv($output, ['EXAM IN-CHARGE', '', 'SUPERVISOR', '', 'HEADMISTRESS / PRINCIPAL']);
+$writeSafeCsvRow($output, []);
+$writeSafeCsvRow($output, ['SIGNATURES:']);
+$writeSafeCsvRow($output, ['EXAM IN-CHARGE', '', 'SUPERVISOR', '', 'HEADMISTRESS / PRINCIPAL']);
 
 fclose($output);
 exit;

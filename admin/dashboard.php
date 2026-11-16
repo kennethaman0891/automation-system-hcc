@@ -41,6 +41,55 @@ try {
     $waEnquiries = (int)$waDb->query("SELECT COUNT(*) FROM admission_enquiries WHERE status NOT IN ('CLOSED', 'ENROLLED')")->fetchColumn();
 } catch (Throwable $e) {}
 
+/* ── Daily Operations Hub Live Badge Counts (all fail-soft) ── */
+$activeAcYear = rcGetActiveAcademicYear();
+$atRiskCount = 0;
+$unsignedParentCount = 0;
+$inboundAiCount = 0;
+$subsTodayCount = 0;
+$seatingPlansCount = 0;
+try {
+    $opsDb = $waDb ?? getDB();
+    $rcUnsigned = (int)$opsDb->query("SELECT COUNT(*) FROM (SELECT 1 FROM report_card WHERE parents_sign = 0 GROUP BY academic_year, std, division, semester, roll_no) t")->fetchColumn();
+    $utUnsigned = (int)$opsDb->query("SELECT COUNT(*) FROM (SELECT 1 FROM unit_test_results WHERE parents_sign = 0 GROUP BY academic_year, std, division, test_type, roll_no) u")->fetchColumn();
+    $unsignedParentCount = $rcUnsigned + $utUnsigned;
+} catch (Throwable $e) {}
+try {
+    $opsDb = $opsDb ?? getDB();
+    // Count students flagged with High FA (>=65%) / Low SA (<35%) OR overall failing/drop across terms in active year
+    $diagStmt = $opsDb->prepare("
+        SELECT COUNT(DISTINCT CONCAT(std,'|',division,'|',roll_no))
+        FROM report_card
+        WHERE academic_year = ?
+          AND fa_max > 0 AND sa_max > 0
+          AND (
+              ((fa_obtained / fa_max) >= 0.65 AND (sa_obtained / sa_max) < 0.35)
+              OR (((fa_obtained + sa_obtained) / (fa_max + sa_max) * 100) < (CASE WHEN CAST(std AS UNSIGNED) >= 9 THEN 35 ELSE 33 END))
+          )
+    ");
+    $diagStmt->execute([$activeAcYear]);
+    $atRiskCount = (int)$diagStmt->fetchColumn();
+} catch (Throwable $e) {}
+try {
+    $opsDb = $opsDb ?? getDB();
+    $hasInboundTbl = $opsDb->query("SHOW TABLES LIKE 'inbound_signal_cards'")->fetchColumn();
+    if ($hasInboundTbl) {
+        try {
+            $inboundAiCount = (int)$opsDb->query("SELECT COUNT(*) FROM inbound_signal_cards WHERE status IN ('pending','open','new')")->fetchColumn();
+        } catch (Throwable $inner) {
+            $inboundAiCount = (int)$opsDb->query("SELECT COUNT(*) FROM inbound_signal_cards")->fetchColumn();
+        }
+    }
+} catch (Throwable $e) {}
+try {
+    $opsDb = $opsDb ?? getDB();
+    $subsTodayCount = (int)$opsDb->query("SELECT COUNT(*) FROM daily_substitutions WHERE sub_date = CURDATE()")->fetchColumn();
+} catch (Throwable $e) {}
+try {
+    $opsDb = $opsDb ?? getDB();
+    $seatingPlansCount = (int)$opsDb->query("SELECT COUNT(*) FROM exam_seating_plans WHERE exam_date >= CURDATE()")->fetchColumn();
+} catch (Throwable $e) {}
+
 /* Mark-as-read endpoint for the header bell (same contract as results.php). */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'mark_notifs_read') {
     if (!verifyCSRFToken()) {
@@ -358,6 +407,69 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
                                 <a href="whatsapp_share.php?doc_type=announcement" class="dash-wa-chip"><i class="fas fa-bullhorn" aria-hidden="true"></i> School Notices</a>
                             </div>
                         </div>
+                    </div>
+                </section>
+
+                <!-- Daily Office & Academic Operations Hub -->
+                <section class="dash-section" aria-label="Daily Office and Academic Operations Hub">
+                    <div class="dash-section-head" style="flex-wrap:wrap;gap:10px;">
+                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                            <h2><i class="fas fa-bolt"></i> Daily Office &amp; Academic Operations Hub</h2>
+                            <span class="dash-count"><?= sanitize($activeAcYear) ?></span>
+                        </div>
+                        <a href="whatsapp_share.php" class="dash-wa-chip" style="text-decoration:none;">
+                            <i class="fa-solid fa-robot" aria-hidden="true"></i>
+                            Inbound AI Action Cards: <strong><?= (int)$inboundAiCount ?></strong>
+                        </a>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;">
+                        <a href="at_risk_radar.php" class="panel" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;justify-content:space-between;padding:16px 18px;border-left:4px solid #b91c1c;">
+                            <div>
+                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                                    <span style="width:36px;height:36px;border-radius:10px;background:#fef2f2;color:#b91c1c;display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-radar fa-wave-square"></i></span>
+                                    <span class="dash-count" style="background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;"><?= (int)$atRiskCount ?> Alerts</span>
+                                </div>
+                                <strong style="display:block;font-size:0.96rem;margin-bottom:4px;">At-Risk Student Radar</strong>
+                                <small style="color:var(--muted);line-height:1.4;display:block;">Flags &ge;12% UT-to-Sem drops &amp; High FA / Fail SA patterns with 1-click PTM invite.</small>
+                            </div>
+                            <div style="margin-top:12px;font-size:0.78rem;font-weight:700;color:var(--brand);">Open Radar <i class="fas fa-arrow-right"></i></div>
+                        </a>
+
+                        <a href="parent_sign_chase.php" class="panel" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;justify-content:space-between;padding:16px 18px;border-left:4px solid #d97706;">
+                            <div>
+                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                                    <span style="width:36px;height:36px;border-radius:10px;background:#fffbeb;color:#b45309;display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-signature"></i></span>
+                                    <span class="dash-count" style="background:#fffbeb;color:#b45309;border:1px solid #fde68a;"><?= (int)$unsignedParentCount ?> Unsigned</span>
+                                </div>
+                                <strong style="display:block;font-size:0.96rem;margin-bottom:4px;">Parent-Sign Morning Queue</strong>
+                                <small style="color:var(--muted);line-height:1.4;display:block;">Never Sent / Sent Unopened / Opened Unsigned chase list &amp; assembly sheet.</small>
+                            </div>
+                            <div style="margin-top:12px;font-size:0.78rem;font-weight:700;color:var(--brand);">Open Queue <i class="fas fa-arrow-right"></i></div>
+                        </a>
+
+                        <a href="substitute_allocator.php" class="panel" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;justify-content:space-between;padding:16px 18px;border-left:4px solid #0284c7;">
+                            <div>
+                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                                    <span style="width:36px;height:36px;border-radius:10px;background:#f0f9ff;color:#0369a1;display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-user-clock"></i></span>
+                                    <span class="dash-count" style="background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd;"><?= (int)$subsTodayCount ?> Today</span>
+                                </div>
+                                <strong style="display:block;font-size:0.96rem;margin-bottom:4px;">Substitute Teacher Desk</strong>
+                                <small style="color:var(--muted);line-height:1.4;display:block;">Detect period collisions, assign free teachers &amp; stage WhatsApp slip notices.</small>
+                            </div>
+                            <div style="margin-top:12px;font-size:0.78rem;font-weight:700;color:var(--brand);">Manage Substitutions <i class="fas fa-arrow-right"></i></div>
+                        </a>
+
+                        <a href="exam_seating.php" class="panel" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;justify-content:space-between;padding:16px 18px;border-left:4px solid #15803d;">
+                            <div>
+                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                                    <span style="width:36px;height:36px;border-radius:10px;background:#f0fdf4;color:#15803d;display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-chair"></i></span>
+                                    <span class="dash-count" style="background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;"><?= (int)$seatingPlansCount ?> Upcoming</span>
+                                </div>
+                                <strong style="display:block;font-size:0.96rem;margin-bottom:4px;">Exam Hall Seating Planner</strong>
+                                <small style="color:var(--muted);line-height:1.4;display:block;">Alternate-bench Std mixing, room matrix printouts &amp; desk slip stickers.</small>
+                            </div>
+                            <div style="margin-top:12px;font-size:0.78rem;font-weight:700;color:var(--brand);">Open Seating Planner <i class="fas fa-arrow-right"></i></div>
+                        </a>
                     </div>
                 </section>
 
@@ -808,7 +920,7 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
             "waContacts" => (int)$waContacts,
             "waSent"     => (int)$waSent,
             "waPending"  => (int)$waPending
-        ], JSON_UNESCAPED_UNICODE) ?>
+        ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>
     </script>
     <script src="<?= BASE_URL ?>assets/js/admin.js?v=<?= (is_file(__DIR__ . '/../assets/js/admin.js') ? filemtime(__DIR__ . '/../assets/js/admin.js') : 0) ?>"></script>
 </body>

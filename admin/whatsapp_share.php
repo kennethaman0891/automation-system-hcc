@@ -901,6 +901,7 @@ if ($selectedRollsParam !== '') {
                                 <i class="fa-brands fa-whatsapp"></i>
                                 <p>Select a student from the list to preview and send their message.</p>
                             </div>
+                            <div id="waHubLiveThread" class="wa-hub-live-thread" style="display:none;"></div>
                             <div class="wa-phone-bubble is-editable" id="mockBubbleText" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true" aria-label="Editable WhatsApp message">
                                 Select a student from the list to preview their personalized WhatsApp message here.
                             </div>
@@ -1018,6 +1019,10 @@ if ($selectedRollsParam !== '') {
                     var closeBtn = document.getElementById('waLinkClose');
                     var dismissed = false;
                     var logoutPending = false;
+                    function waCsrfToken() {
+                        var m = document.querySelector('meta[name="csrf-token"]');
+                        return m && m.content ? m.content : '';
+                    }
 
                     document.addEventListener('hcc:whatsapp-logout', function () {
                         logoutPending = true;
@@ -1064,7 +1069,10 @@ if ($selectedRollsParam !== '') {
                                 fab.style.display = 'none';
                                 chip.style.display = 'inline-flex';
                                 var phone = sess.phone_number ? String(sess.phone_number) : '';
-                                chipText.textContent = phone ? ('WhatsApp linked · ' + phone) : 'WhatsApp linked';
+                                var domSuffix = sess.dom_health_status && sess.dom_health_status !== 'ok'
+                                    ? (' · DOM: ' + String(sess.dom_health_status))
+                                    : '';
+                                chipText.textContent = (phone ? ('WhatsApp linked · ' + phone) : 'WhatsApp linked') + domSuffix;
                                 return;
                             }
                             if (!sess || !sess.is_connected) logoutPending = false;
@@ -1096,7 +1104,11 @@ if ($selectedRollsParam !== '') {
                                 if (!bridgeAlive) {
                                     if (Date.now() - ensureAt > 60000) {
                                         ensureAt = Date.now();
-                                        fetch('api_whatsapp_session.php?action=ensure', { method: 'POST', cache: 'no-store' }).catch(function () {});
+                                        fetch('api_whatsapp_session.php?action=ensure', {
+                                            method: 'POST',
+                                            headers: { 'X-CSRF-Token': waCsrfToken() },
+                                            cache: 'no-store'
+                                        }).catch(function () {});
                                     }
                                     spin.innerHTML = '<span style="color:#0284c7;font-size:0.85rem;"><i class="fa-solid fa-circle-notch fa-spin"></i> Starting bridge…</span>';
                                     statusEl.innerHTML = '<span style="color:#0284c7;font-weight:600;">Starting the WhatsApp bridge</span><br><span style="color:#64748b;font-size:0.75rem;">It starts on its own on this Mac. The QR will show here. You do not need to run a command.</span>';
@@ -1124,7 +1136,10 @@ if ($selectedRollsParam !== '') {
                             spin.style.display = 'inline';
                             spin.innerHTML = '<span style="color:#0284c7;font-size:0.85rem;"><i class="fa-solid fa-circle-notch fa-spin"></i> Generating fresh QR code…</span>';
                             try {
-                                await fetch('api_whatsapp_session.php?action=refresh_qr', { method: 'POST' });
+                                await fetch('api_whatsapp_session.php?action=refresh_qr', {
+                                    method: 'POST',
+                                    headers: { 'X-CSRF-Token': waCsrfToken() }
+                                });
                                 lastQr = '';
                                 setTimeout(tick, 2000);
                             } catch (e) {}
@@ -1161,7 +1176,10 @@ if ($selectedRollsParam !== '') {
                         try {
                             var r = await fetch('api_whatsapp_pair.php?action=request', {
                                 method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'X-CSRF-Token': waCsrfToken()
+                                },
                                 body: JSON.stringify({ phone: phone })
                             }).then(function (x) { return x.json(); });
 
@@ -1260,13 +1278,13 @@ if ($selectedRollsParam !== '') {
             "academicYear"  => $year,
             "schoolTagline" => $schoolTagline ?: "Excellence in Academic & Moral Education",
             "principalName" => $settings["principal_name"] ?? "PRINCIPAL"
-        ], JSON_UNESCAPED_UNICODE) ?>
+        ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>
     </script>
     <script src="<?= BASE_URL ?>assets/js/admin.js?v=<?= (is_file(__DIR__ . '/../assets/js/admin.js') ? filemtime(__DIR__ . '/../assets/js/admin.js') : 0) ?>"></script>
 
     <script>
     document.addEventListener('DOMContentLoaded', async function () {
-        const classKey = <?= json_encode($classKey) ?>;
+        const classKey = <?= json_encode($classKey, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
         const waHubEl = document.getElementById('waApp');
         const waContainerEl = document.getElementById('waAppContainer');
         const waAppReplicaEl = document.getElementById('waAppReplica');
@@ -1313,6 +1331,13 @@ if ($selectedRollsParam !== '') {
 
         if (btnViewHub) btnViewHub.addEventListener('click', () => setView('hub'));
         if (btnViewReplica) btnViewReplica.addEventListener('click', () => setView('replica'));
+        document.addEventListener('hcc:open-replica-chat', (e) => {
+            setView('replica');
+            const cid = e && e.detail && e.detail.chatId;
+            if (cid && window.WhatsAppStore) {
+                window.WhatsAppStore.setActiveChat(cid);
+            }
+        });
 
         // Toggle Fullscreen WhatsApp
         function toggleFullscreen() {

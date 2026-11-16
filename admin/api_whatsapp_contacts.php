@@ -36,17 +36,15 @@ if ($search !== '') {
             $roll = (string)($stu['roll_no'] ?? '');
             $name = trim((string)($stu['student_name'] ?? "Student {$roll}"));
             $rawPhone = trim((string)($stu['parent_phone'] ?? ''));
-            $cleanDigits = preg_replace('/\D/', '', $rawPhone);
-            if (strlen($cleanDigits) < 10) {
-                $cleanDigits = '98765' . str_pad($roll, 5, '0', STR_PAD_LEFT);
+            $vPhone = waValidateWhatsAppPhone($rawPhone);
+            if (!$vPhone['ok']) {
+                continue;
             }
-            if (strlen($cleanDigits) === 10) {
-                $cleanDigits = '91' . $cleanDigits;
-            }
-            $phoneE164 = '+' . $cleanDigits;
+            $cleanDigits = $vPhone['digits'];
+            $phoneE164 = $vPhone['e164'];
             $waId = $cleanDigits . '@c.us';
             $classKey = "{$stu['academic_year']}|{$stu['std']}|{$stu['division']}|{$stu['semester']}";
-            $avatar = "https://api.dicebear.com/7.x/initials/svg?seed=" . urlencode($name);
+            $avatar = null;
 
             $insC = $db->prepare("
                 INSERT INTO whatsapp_contacts 

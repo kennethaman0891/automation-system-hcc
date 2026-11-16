@@ -5,6 +5,24 @@
  * Call Simulation Modal, Student Contact Drawer, PDF Preview Lightbox, App Shell
  */
 
+// ============ SHARED SAFETY HELPERS (XSS hardening) ============
+
+// Escape any dynamic value before it is interpolated into shadowRoot.innerHTML.
+function waEscHtml(value) {
+  if (value === null || value === undefined) return '';
+  return String(value).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+}
+
+// Only allow http(s), blob: and same-site /hcc/ paths inside the PDF preview iframe.
+// Anything else (javascript:, data:, vbscript:, //evil.com) returns ''.
+function waSafePreviewUrl(url) {
+  const u = String(url || '').trim();
+  if (!u) return '';
+  if (/^(https?:\/\/|blob:)/i.test(u)) return u;
+  if (/^\/hcc\//.test(u) && !u.startsWith('//')) return u;
+  return '';
+}
+
 // ============ CONVERSATION HEADER ============
 
 class WaConversationHeader extends HTMLElement {
@@ -1414,7 +1432,13 @@ class WaConversationMessages extends HTMLElement {
     const container = this.shadowRoot.querySelector('#msg-container');
     if (!container) return;
 
-    if (!messages || messages.length === 0) {
+    const visible = (messages || []).filter(m => !(
+      m && m.msg_type === 'system'
+      && !String(m.body || '').trim()
+      && String(m.wa_msg_id || '').startsWith('chat_sync_')
+    ));
+
+    if (visible.length === 0) {
       container.innerHTML = `
         <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;padding:48px 24px;color:#8696a0;text-align:center;">
           <div style="background:#ffffff;padding:12px 18px;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,0.08);max-width:320px;">
@@ -1427,7 +1451,7 @@ class WaConversationMessages extends HTMLElement {
     }
 
     // Sort by timestamp asc
-    const sorted = [...messages].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    const sorted = [...visible].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
     const grouped = this.groupMessagesByDate(sorted);
 
     let html = '';
@@ -1444,6 +1468,7 @@ class WaConversationMessages extends HTMLElement {
   }
 
   addMessage(msg) {
+    if (!msg || (msg.msg_type === 'system' && !String(msg.body || '').trim() && String(msg.wa_msg_id || '').startsWith('chat_sync_'))) return;
     if (String(msg.chat_id) !== String(this.store?.activeChatId)) return;
     const container = this.shadowRoot.querySelector('#msg-container');
     if (!container) return;
@@ -1916,6 +1941,8 @@ class WaComposer extends HTMLElement {
         <wa-icon-button id="btn-attach" icon="attach" tooltip="Attach"></wa-icon-button>
         <!-- Message templates library -->
         <button type="button" class="wa-tpl-btn" id="btn-templates" title="Message templates">Templates</button>
+        <!-- Result-Day Co-Pilot (Send-on-Press safe) -->
+        <button type="button" class="wa-tpl-btn" id="btn-result-copilot" title="Draft marks-aware reply for teacher review" style="background:#eef2ff;color:#4338ca;border-color:#c7d2fe;">📊 Co-Pilot</button>
         
         <!-- Expanding Textarea Pill -->
         <div class="wa-input-pill">
@@ -1976,6 +2003,44 @@ class WaComposer extends HTMLElement {
         lib.open({ chat_ids: selected });
       } else {
         console.warn('wa-template-library not mounted');
+      }
+    });
+
+    this.copilotBtn = this.shadowRoot.querySelector('#btn-result-copilot');
+    this.copilotBtn?.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const chatId = this.store?.activeChatId;
+      if (!chatId) {
+        alert('Select a chat first to draft a Result Co-Pilot reply.');
+        return;
+      }
+      const origLabel = this.copilotBtn.textContent;
+      this.copilotBtn.disabled = true;
+      this.copilotBtn.textContent = '⏳ Drafting...';
+      try {
+        const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+        const res = await fetch('/hcc/admin/api_admission_ai_review.php?action=result_copilot_draft', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+          body: JSON.stringify({ chat_id: chatId })
+        });
+        const data = await res.json();
+        if (data && data.success && data.draft_text) {
+          if (this.textarea) {
+            this.textarea.value = data.draft_text;
+            this.updateTextareaHeight();
+            this.updateSendButtonState();
+            this.textarea.focus();
+          }
+        } else {
+          alert(data?.error || 'Could not generate a student result draft for this chat.');
+        }
+      } catch (err) {
+        alert('Result Co-Pilot failed to contact server.');
+      } finally {
+        this.copilotBtn.disabled = false;
+        this.copilotBtn.textContent = origLabel;
       }
     });
 
@@ -2297,7 +2362,7 @@ class WaComposer extends HTMLElement {
     container.style.display = 'flex';
     container.innerHTML = this.attachments.map((a, i) => `
       <div class="wa-attachment-chip">
-        <span>📎 ${a.name || a.type}</span>
+        <span>📎 ${waEscHtml(a.name || a.type)}</span>
         <button class="wa-chip-remove" data-idx="${i}">&times;</button>
       </div>
     `).join('');
@@ -2746,8 +2811,9 @@ class WaCallModal extends HTMLElement {
   }
 
   render() {
-    const name = this.chat?.name || 'Student Parent';
-    const phone = this.chat?.wa_chat_id || this.chat?.phone_e164 || '';
+    const rawName = this.chat?.name || 'Student Parent';
+    const name = waEscHtml(rawName);
+    const phone = waEscHtml(this.chat?.wa_chat_id || this.chat?.phone_e164 || '');
     const isVideo = this.callType === 'video';
 
     this.shadowRoot.innerHTML = `
@@ -2908,14 +2974,15 @@ class WaContactDrawer extends HTMLElement {
   render() {
     const chat = this.chat || {};
     const student = chat.student_data || chat.metadata?.student_data || {};
-    const name = chat.name || student.name || 'Student Name';
-    const phone = chat.phone_e164 || chat.wa_chat_id || student.parent_phone || '+91 98765 43210';
-    const rollNo = student.roll_no || '1';
-    const className = student.class_name || 'STD V A';
-    const academicYear = student.academic_year || '2025-26';
-    const percentage = student.percentage ? `${student.percentage}%` : '93.83%';
-    const grade = student.grade || 'A1';
-    const attendance = student.attendance ? `${student.attendance}%` : '94.5% (186/196 days)';
+    const rawName = chat.name || student.name || 'No student record linked';
+    const name = waEscHtml(rawName);
+    const phone = waEscHtml(chat.phone_e164 || chat.wa_chat_id || student.parent_phone || '—');
+    const rollNo = waEscHtml(student.roll_no || chat.linked_student_roll || '—');
+    const className = waEscHtml(student.class_name || chat.linked_class_key || 'No student record linked');
+    const academicYear = waEscHtml(student.academic_year || '—');
+    const percentage = waEscHtml(student.percentage ? `${student.percentage}%` : '—');
+    const grade = waEscHtml(student.grade || '—');
+    const attendance = waEscHtml(student.attendance ? `${student.attendance}%` : '—');
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -3104,7 +3171,7 @@ class WaContactDrawer extends HTMLElement {
 
     this.shadowRoot.querySelector('#drawer-preview-rc')?.addEventListener('click', () => {
       this.dispatchEvent(new CustomEvent('preview-pdf', {
-        detail: { url: '', title: `Report_Card_${name.replace(/\s+/g, '_')}.pdf` },
+        detail: { url: '', title: `Report_Card_${String(rawName).replace(/\s+/g, '_')}.pdf` },
         bubbles: true,
         composed: true
       }));
@@ -3257,7 +3324,7 @@ class WaPdfPreviewModal extends HTMLElement {
       
       <div class="wa-pdf-modal-box">
         <div class="wa-pdf-topbar">
-          <div class="wa-pdf-top-title">📄 ${this.pdfTitle || 'Student Report Card'}</div>
+          <div class="wa-pdf-top-title">📄 ${waEscHtml(this.pdfTitle || 'Student Report Card')}</div>
           <div class="wa-pdf-top-controls">
             <button class="wa-pdf-top-btn" id="btn-zoom-out" title="Zoom Out">🔍 -</button>
             <span style="font-size:13px;" id="zoom-val">100%</span>
@@ -3269,55 +3336,13 @@ class WaPdfPreviewModal extends HTMLElement {
         </div>
         
         <div class="wa-pdf-viewer-body">
-          ${this.pdfUrl ? `
-            <iframe src="${this.pdfUrl}" style="width:100%;height:100%;border:none;"></iframe>
+          ${waSafePreviewUrl(this.pdfUrl) ? `
+            <iframe src="${waEscHtml(waSafePreviewUrl(this.pdfUrl))}" style="width:100%;height:100%;border:none;"></iframe>
           ` : `
-            <div class="wa-mock-paper" id="paper-preview">
-              <div class="wa-rc-school-head">
-                <div class="wa-rc-school-title">HINDUSTANI COVENANT CHURCH HIGH SCHOOL</div>
-                <div class="wa-rc-school-sub">Excellence in Academic &amp; Moral Education · Pune, Maharashtra</div>
-                <div style="font-size:14px;font-weight:bold;margin-top:8px;color:#005c4b;">PROGRESS REPORT CARD · ACADEMIC YEAR 2025-26</div>
-              </div>
-              
-              <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:16px;">
-                <div>
-                  <div><b>Student:</b> Asabe Madhura Shankar</div>
-                  <div><b>Class:</b> STD V Division A</div>
-                </div>
-                <div>
-                  <div><b>Roll No:</b> 1</div>
-                  <div><b>Semester:</b> Semester I</div>
-                </div>
-              </div>
-              
-              <table class="wa-rc-table">
-                <thead>
-                  <tr>
-                    <th style="text-align:left">Subject</th>
-                    <th>Max Marks</th>
-                    <th>Marks Obtained</th>
-                    <th>Grade</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr><td style="text-align:left">English</td><td>100</td><td>94</td><td>A1</td></tr>
-                  <tr><td style="text-align:left">Mathematics</td><td>100</td><td>98</td><td>A1</td></tr>
-                  <tr><td style="text-align:left">General Science</td><td>100</td><td>92</td><td>A1</td></tr>
-                  <tr><td style="text-align:left">Social Studies</td><td>100</td><td>91</td><td>A1</td></tr>
-                  <tr><td style="text-align:left">Hindi / Marathi</td><td>100</td><td>94</td><td>A1</td></tr>
-                </tbody>
-              </table>
-              
-              <div style="margin-top:24px;display:flex;justify-content:space-between;font-weight:bold;">
-                <div>Total: 469 / 500</div>
-                <div>Percentage: 93.83%</div>
-                <div>Result: PASSED (Grade A1)</div>
-              </div>
-              
-              <div style="margin-top:60px;display:flex;justify-content:space-between;font-size:12px;">
-                <div>Class Teacher's Signature</div>
-                <div>Principal's Signature</div>
-              </div>
+            <div class="wa-mock-paper" id="paper-preview" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#475569;">
+              <div style="font-size:28px;margin-bottom:10px;">📄</div>
+              <div style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:6px;">No Document Preview Loaded</div>
+              <div style="font-size:13px;max-width:340px;">Generate or attach a student report card PDF from Results or Unit Tests to preview it here.</div>
             </div>
           `}
         </div>
@@ -5109,7 +5134,7 @@ class WaEnquiryDrawer extends HTMLElement {
           // Copy text into composer input
           const composer = document.querySelector('wa-composer') || document.querySelector('wa-app')?.shadowRoot?.querySelector('wa-composer');
           if (composer) {
-            const inp = composer.shadowRoot?.querySelector('#composer-input');
+            const inp = composer.shadowRoot?.querySelector('#composer-textarea');
             if (inp) {
               inp.value = txt;
               inp.focus();

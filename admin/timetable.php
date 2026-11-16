@@ -20,7 +20,13 @@ try {
 $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High School';
 $adminUser = sanitize($_SESSION['admin_name'] ?? 'Admin');
 $adminRole = ucfirst($_SESSION['admin_role'] ?? 'Administrator');
-$csrfToken = $_SESSION['csrf_token'] ?? '';
+$csrfToken = generateCSRFToken();
+$activeAcademicYear = '2025-26';
+try {
+    if (function_exists('rcGetActiveAcademicYear')) {
+        $activeAcademicYear = rcGetActiveAcademicYear();
+    }
+} catch (\Throwable $e) {}
 
 // Generate user initials
 $adminInitials = 'A';
@@ -38,7 +44,7 @@ if (!empty($nameParts[0])) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="Design, manage and publish examination schedules for HCC High School">
-    <meta name="csrf-token" content="<?= sanitize($csrfToken) ?>">
+    <meta name="csrf-token" content="<?= htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') ?>">
     <title><?= sanitize($pageTitle) ?> | <?= sanitize($schoolName) ?></title>
     
     <link rel="icon" href="<?= BASE_URL ?>assets/images/hcclogo.jpg">
@@ -52,8 +58,6 @@ if (!empty($nameParts[0])) {
     <link rel="stylesheet" href="<?= BASE_URL ?>assets/css/timetable.css?v=<?= is_file(__DIR__ . '/../assets/css/timetable.css') ? filemtime(__DIR__ . '/../assets/css/timetable.css') : 1 ?>">
 </head>
 <body>
-    <div class="sidebar-overlay" id="sidebarOverlay"></div>
-
     <div class="admin-layout">
         <!-- Sidebar Navigation -->
         <?php require_once __DIR__ . '/includes/sidebar.php'; ?>
@@ -126,7 +130,8 @@ if (!empty($nameParts[0])) {
             if (typeof TimetableMatrixController === 'function') {
                 window.hccTimetableApp = new TimetableMatrixController('timetableMatrixApp', {
                     apiBase: 'api_timetable.php',
-                    csrfToken: '<?= sanitize($csrfToken) ?>'
+                    csrfToken: <?= e_js($csrfToken) ?>,
+                    defaultAcademicYear: <?= e_js($activeAcademicYear) ?>
                 });
             } else {
                 console.error('TimetableMatrixController failed to load.');

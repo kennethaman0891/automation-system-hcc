@@ -185,12 +185,18 @@ echo "PASS: Repeated parent text did not duplicate the timeline.\n";
 
 // 4. Test API listing and get endpoints
 echo "[5/6] Verifying API endpoints for UI rendering...\n";
-// Create a fake test session cookie for QA admin test
+require_once __DIR__ . '/lib_cli_session.php';
 $cookieFile = tempnam(sys_get_temp_dir(), 'hcc_test_cookie_');
-$loginCh = curl_init('http://127.0.0.1/hcc/admin/api_admission_enquiry.php?action=list&search=' . urlencode($testPhoneDigits));
+$cliSess = hccCreateCliAdminSession($cookieFile, '127.0.0.1');
+register_shutdown_function(function () use (&$cliSess, $cookieFile) {
+    hccCleanupCliSession($cliSess);
+    @unlink($cookieFile);
+});
+$apiBase = hccResolveAdminBase('http://127.0.0.1/hcc/admin', $cliSess, $cookieFile);
+$loginCh = curl_init($apiBase . '/api_admission_enquiry.php?action=list&search=' . urlencode($testPhoneDigits));
 curl_setopt_array($loginCh, [
     CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_HTTPHEADER => ['X-Admin-Test: 1', 'Accept: application/json'],
+    CURLOPT_HTTPHEADER => ['Accept: application/json'],
     CURLOPT_COOKIEJAR => $cookieFile,
     CURLOPT_COOKIEFILE => $cookieFile,
     CURLOPT_TIMEOUT => 10
@@ -210,10 +216,10 @@ assert($foundInList, "Enquiry #{$enquiryId} should appear in api_admission_enqui
 echo "PASS: Enquiry appears in api_admission_enquiry.php?action=list\n";
 
 // Test get endpoint
-$getCh = curl_init("http://127.0.0.1/hcc/admin/api_admission_enquiry.php?action=get&id={$enquiryId}");
+$getCh = curl_init($apiBase . "/api_admission_enquiry.php?action=get&id={$enquiryId}");
 curl_setopt_array($getCh, [
     CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_HTTPHEADER => ['X-Admin-Test: 1', 'Accept: application/json'],
+    CURLOPT_HTTPHEADER => ['Accept: application/json'],
     CURLOPT_COOKIEJAR => $cookieFile,
     CURLOPT_COOKIEFILE => $cookieFile,
     CURLOPT_TIMEOUT => 10
@@ -226,10 +232,10 @@ assert(count($getJson['timeline']) === 2, 'Timeline should contain both messages
 echo "PASS: Full conversation timeline retrieved with both messages.\n";
 
 // 5. Test admission_followup.php get
-$fuCh = curl_init("http://127.0.0.1/hcc/admin/api_admission_followup.php?action=get&id={$enquiryId}");
+$fuCh = curl_init($apiBase . "/api_admission_followup.php?action=get&id={$enquiryId}");
 curl_setopt_array($fuCh, [
     CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_HTTPHEADER => ['X-Admin-Test: 1', 'Accept: application/json'],
+    CURLOPT_HTTPHEADER => ['Accept: application/json'],
     CURLOPT_COOKIEJAR => $cookieFile,
     CURLOPT_COOKIEFILE => $cookieFile,
     CURLOPT_TIMEOUT => 10

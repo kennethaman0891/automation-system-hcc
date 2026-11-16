@@ -1,11 +1,12 @@
 <?php
 /* Public Parent View — Official Student Report Card */
+$cspNonce = bin2hex(random_bytes(16));
 if (!headers_sent()) {
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: SAMEORIGIN');
     header('Referrer-Policy: strict-origin-when-cross-origin');
     header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
-    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'");
+    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-{$cspNonce}'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'");
 }
 require_once __DIR__ . '/includes/functions.php';
 
@@ -18,8 +19,16 @@ if ($classKey === '' || $roll === '' || $token === '') {
     die('Invalid link. Required parameters are missing.');
 }
 
-// Verify tamper-proof HMAC signature
-if (!rcVerifyParentToken('card', [$classKey, $roll], $token)) {
+// Verify tamper-proof URL-safe HMAC signature (handling decoded or pre-encoded classKey)
+$tokenValid = rcVerifyParentToken('card', [$classKey, $roll], $token);
+if (!$tokenValid && strpos($classKey, '%') !== false) {
+    $decodedKey = urldecode($classKey);
+    if (rcVerifyParentToken('card', [$decodedKey, $roll], $token)) {
+        $classKey = $decodedKey;
+        $tokenValid = true;
+    }
+}
+if (!$tokenValid) {
     http_response_code(403);
     die('Access denied: Invalid or expired security token. Please request a fresh link from the school.');
 }
@@ -32,7 +41,7 @@ if (!$report) {
 
 $settings = getAllSettings();
 $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High School';
-$schoolTagline = $settings['school_tagline'] ?? '';
+$schoolTagline = $settings['school_tagline'] ?? 'Excellence in Academic & Moral Education';
 $schoolLogo = $settings['logo'] ?? 'assets/images/hcclogo.jpg';
 
 $c = rcParseClassKey(urldecode($classKey));
@@ -106,10 +115,10 @@ $today = date('d-m-Y');
 
     <div class="parent-toolbar no-print">
         <div class="school-seal-badge">
-            <i class="fas fa-check-circle" style="color:#16a34a;"></i> Official Verified School Document
+            <i class="fas fa-shield-halved" style="color:#16a34a;"></i> Cryptographically Verified Official Record
         </div>
         <div style="display:flex;gap:8px;">
-            <button class="btn-whatsapp" type="button" onclick="window.print()">
+            <button class="btn-whatsapp" id="printCardBtn" type="button">
                 <i class="fas fa-print"></i> Print / Save PDF
             </button>
         </div>
@@ -117,7 +126,7 @@ $today = date('d-m-Y');
 
     <div class="parent-sheet">
         <div class="print-hdr">
-            <img src="<?= e_attr(BASE_URL . safeLogoSrc($schoolLogo)) ?>" alt="School Logo" onerror="this.style.display='none'">
+            <img src="<?= e_attr(BASE_URL . safeLogoSrc($schoolLogo)) ?>" alt="School Logo">
             <h1><?= sanitize($schoolName) ?></h1>
             <?php if ($schoolTagline): ?><h2><?= sanitize($schoolTagline) ?></h2><?php endif; ?>
         </div>
@@ -198,7 +207,7 @@ $today = date('d-m-Y');
                 <div class="details-grid">
                     <div><strong>Teacher Remark</strong><span><?= sanitize($report['remark'] ?: 'Good conduct and satisfactory progress.') ?></span></div>
                     <div><strong>Issue Date</strong><span><?= $today ?></span></div>
-                    <div><strong>Verification</strong><span style="color:#16a34a;font-weight:700;">Digitally Certified</span></div>
+                    <div><strong>Verification</strong><span style="color:#16a34a;font-weight:700;">Cryptographically Verified Official Record (<code><?= sanitize(substr($token, 0, 10)) ?>&hellip;</code>)</span></div>
                 </div>
             </div>
         </div>
@@ -209,5 +218,11 @@ $today = date('d-m-Y');
         </div>
     </div>
 
+    <script nonce="<?= $cspNonce ?>">
+    (function () {
+        var btn = document.getElementById('printCardBtn');
+        if (btn) btn.addEventListener('click', function () { window.print(); });
+    })();
+    </script>
 </body>
 </html>

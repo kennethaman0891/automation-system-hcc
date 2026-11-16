@@ -28,20 +28,20 @@
 
     function gradeOf(p, std) {
         if (std >= 9) {
-            if (p >= 75) return 'Distinction';
-            if (p >= 60) return 'Grade I';
-            if (p >= 45) return 'Grade II';
-            if (p >= 35) return 'Pass';
+            if (p >= 75.0) return 'Distinction';
+            if (p >= 60.0) return 'Grade I';
+            if (p >= 45.0) return 'Grade II';
+            if (p >= 35.0) return 'Pass';
             return 'Fail';
         }
-        if (p >= 91) return 'A1';
-        if (p >= 81) return 'A2';
-        if (p >= 71) return 'B1';
-        if (p >= 61) return 'B2';
-        if (p >= 51) return 'C1';
-        if (p >= 41) return 'C2';
-        if (p >= 33) return 'D';
-        if (p >= 21) return 'E1';
+        if (p >= 90.5) return 'A1';
+        if (p >= 80.5) return 'A2';
+        if (p >= 70.5) return 'B1';
+        if (p >= 60.5) return 'B2';
+        if (p >= 50.5) return 'C1';
+        if (p >= 40.5) return 'C2';
+        if (p >= 33.0) return 'D';
+        if (p >= 21.0) return 'E1';
         return 'E2';
     }
 
@@ -101,7 +101,7 @@
             }
         }
 
-        var pct = max > 0 ? (obt / max * 100) : 0;
+        var pct = max > 0 ? Math.round((obt / max) * 10000) / 100 : 0;
         var grade = gradeOf(pct, std);
         var passThreshold = std >= 9 ? 35 : 33;
         var passed = pct >= passThreshold;

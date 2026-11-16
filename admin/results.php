@@ -9,19 +9,21 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church English Me
 $adminUser = sanitize($_SESSION['admin_name'] ?? 'Admin');
 
 // Current Filter Parameters
+$activeYear = rcGetActiveAcademicYear();
 $classParam = trim($_GET['class'] ?? '');
 if ($classParam !== '' && $classParam !== 'all') {
     $parsed = rcParseClassKey(urldecode($classParam));
-    $year     = trim($_GET['year'] ?? ($parsed['academic_year'] ?: '2024-25'));
+    $year     = trim($_GET['year'] ?? ($parsed['academic_year'] ?: $activeYear));
     $std      = trim($_GET['std'] ?? ($parsed['std'] ?: '1'));
     $division = trim($_GET['division'] ?? ($parsed['division'] ?: 'A'));
     $semester = trim($_GET['semester'] ?? ($parsed['semester'] ?: 'Sem 1'));
 } else {
-    $year     = trim($_GET['year'] ?? '2024-25');
+    $year     = trim($_GET['year'] ?? $activeYear);
     $std      = trim($_GET['std'] ?? '1');
     $division = trim($_GET['division'] ?? 'A');
     $semester = trim($_GET['semester'] ?? 'Sem 1');
 }
+if ($year === '') $year = $activeYear;
 $classKey = rcBuildClassKey($year, $std, $division, $semester);
 $search   = trim($_GET['search'] ?? '');
 
@@ -78,14 +80,14 @@ if (isset($_GET['action']) && $_GET['action'] === 'export_excel') {
     $sheet->setTitle("STD $std $division");
 
     // Title
-    $sheet->setCellValue('A1', $schoolName);
+    $sheet->setCellValue('A1', rcCsvSafeCell($schoolName));
     $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(14);
     $sheet->getStyle('A1')->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER);
 
     // Meta row
-    $sheet->setCellValue('A2', "STD:- " . $romanStd . " " . $division);
-    $sheet->setCellValue('D2', "SEMESTER :- " . strtoupper($romanSem));
-    $sheet->setCellValue('H2', "YEAR :- " . $year);
+    $sheet->setCellValue('A2', rcCsvSafeCell("STD:- " . $romanStd . " " . $division));
+    $sheet->setCellValue('D2', rcCsvSafeCell("SEMESTER :- " . strtoupper($romanSem)));
+    $sheet->setCellValue('H2', rcCsvSafeCell("YEAR :- " . $year));
     $sheet->getStyle('A2:H2')->getFont()->setBold(true);
 
     // Header Row 3
@@ -95,11 +97,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'export_excel') {
     foreach ($expSubjects as $s) {
         $isSingle = ((float)$s['sa_max'] <= 0.0);
         if ($isSingle) {
-            $sheet->setCellValue($colLetter . '3', $s['subject_name']);
+            $sheet->setCellValue($colLetter . '3', rcCsvSafeCell($s['subject_name']));
             $colLetter++;
         } else {
             $startCol = $colLetter;
-            $sheet->setCellValue($colLetter . '3', $s['subject_name']);
+            $sheet->setCellValue($colLetter . '3', rcCsvSafeCell($s['subject_name']));
             $colLetter++; $colLetter++;
             $endCol = $colLetter;
             $sheet->mergeCells("{$startCol}3:{$endCol}3");
@@ -129,41 +131,43 @@ if (isset($_GET['action']) && $_GET['action'] === 'export_excel') {
     }
     $sheet->setCellValue($totCol . '4', $expMaxTotal);
 
-    // Data rows
+    // Data rows (preserve blank unentered marks instead of forcing 0, neutralize CSV formula injection)
     $rowIdx = 5;
     foreach ($expStudents as $stu) {
         $rRoll = (string)$stu['roll_no'];
-        $sheet->setCellValue('A' . $rowIdx, $stu['roll_no']);
-        $sheet->setCellValue('B' . $rowIdx, $stu['student_name']);
+        $sheet->setCellValue('A' . $rowIdx, rcCsvSafeCell($stu['roll_no']));
+        $sheet->setCellValue('B' . $rowIdx, rcCsvSafeCell($stu['student_name']));
         $cLet = 'C';
         foreach ($expSubjects as $s) {
             $isSingle = ((float)$s['sa_max'] <= 0.0);
             $sKey = mb_strtolower($s['subject_name']);
             $mk = $expMarks[$rRoll][$sKey] ?? null;
-            $faV = ($mk !== null && $mk['fa_obtained'] !== null) ? (float)$mk['fa_obtained'] : 0;
-            $saV = ($mk !== null && $mk['sa_obtained'] !== null) ? (float)$mk['sa_obtained'] : 0;
+            $hasFa = ($mk !== null && $mk['fa_obtained'] !== null);
+            $hasSa = ($mk !== null && $mk['sa_obtained'] !== null);
+            $faV = $hasFa ? (float)$mk['fa_obtained'] : '';
+            $saV = $hasSa ? (float)$mk['sa_obtained'] : '';
             if ($isSingle) {
-                $sheet->setCellValue($cLet . $rowIdx, $faV);
+                $sheet->setCellValue($cLet . $rowIdx, $hasFa ? $faV : '');
                 $cLet++;
             } else {
-                $sheet->setCellValue($cLet . $rowIdx, $faV); $cLet++;
-                $sheet->setCellValue($cLet . $rowIdx, $saV); $cLet++;
-                $sheet->setCellValue($cLet . $rowIdx, $faV + $saV); $cLet++;
+                $sheet->setCellValue($cLet . $rowIdx, $hasFa ? $faV : ''); $cLet++;
+                $sheet->setCellValue($cLet . $rowIdx, $hasSa ? $saV : ''); $cLet++;
+                $sheet->setCellValue($cLet . $rowIdx, ($hasFa || $hasSa) ? ((float)($mk['fa_obtained'] ?? 0) + (float)($mk['sa_obtained'] ?? 0)) : ''); $cLet++;
             }
         }
         $sheet->setCellValue($totCol . $rowIdx, $stu['obtained']);
         $sheet->setCellValue($pctCol . $rowIdx, $stu['percentage'] !== null ? $stu['percentage'] : '-');
-        $sheet->setCellValue($grdCol . $rowIdx, $stu['grade']);
+        $sheet->setCellValue($grdCol . $rowIdx, rcCsvSafeCell($stu['grade']));
         $sheet->setCellValue($statCol . $rowIdx, !empty($stu['passed']) ? 'PASS' : 'FAIL');
-        $sheet->setCellValue($rmkCol . $rowIdx, rcDisplayRemark($stu['remark'] ?? '', $stu['percentage'] ?? 0));
-        $sheet->setCellValue($attnCol . $rowIdx, $stu['attendance']);
+        $sheet->setCellValue($rmkCol . $rowIdx, rcCsvSafeCell(rcDisplayRemark($stu['remark'] ?? '', $stu['percentage'] ?? 0)));
+        $sheet->setCellValue($attnCol . $rowIdx, rcCsvSafeCell($stu['attendance']));
         $sheet->setCellValue($signCol . $rowIdx, ($digitalSign && !empty($stu['parents_sign'])) ? 'Signed' : '');
         $rowIdx++;
     }
 
     $sheet->mergeCells("A1:{$signCol}1");
 
-    $filename = "STD_{$std}_{$division}_{$semester}_{$year}.xlsx";
+    $filename = preg_replace('/[^A-Za-z0-9_.-]/', '_', "STD_{$std}_{$division}_{$semester}_{$year}.xlsx");
     header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     header('Content-Disposition: attachment; filename="' . $filename . '"');
     $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
@@ -267,7 +271,21 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
             }
             $res = rcSaveBulkMarks($ck, $bulk);
 
-            // Remarks
+            // Remarks (resolve actual student percentage before formula remark evaluation)
+            $pctMap = [];
+            if ($ck !== '') {
+                $cParsed = rcParseClassKey(urldecode($ck));
+                if ($cParsed['std'] !== '') {
+                    try {
+                        $pStmt = $db->prepare("SELECT roll_no, SUM(fa_obtained + sa_obtained) AS obt, SUM(fa_max + sa_max) AS maxt FROM report_card WHERE academic_year=? AND std=? AND division=? AND semester=? GROUP BY roll_no");
+                        $pStmt->execute([$cParsed['academic_year'], $cParsed['std'], $cParsed['division'], $cParsed['semester']]);
+                        foreach ($pStmt->fetchAll(PDO::FETCH_ASSOC) as $pr) {
+                            $mTot = (float)($pr['maxt'] ?? 0);
+                            $pctMap[(string)$pr['roll_no']] = $mTot > 0 ? round(((float)$pr['obt'] / $mTot) * 100, 2) : 0;
+                        }
+                    } catch (\Throwable $e) {}
+                }
+            }
             $rmIn = $_POST['remarks'] ?? [];
             if (!is_array($rmIn)) $rmIn = [];
             $rm = [];
@@ -275,33 +293,42 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 if (!is_string($text) && !is_numeric($text)) continue;
                 $roll = trim((string)$roll);
                 if ($roll === '') continue;
-                $rm[$roll] = rcDisplayRemark((string)$text, 0);
+                $rm[$roll] = rcDisplayRemark((string)$text, $pctMap[$roll] ?? 0);
             }
             $rmSaved = 0;
+            $rmErr = '';
             if (!empty($rm) && $ck !== '') {
                 $rmRes = rcSaveBulkRemarks($ck, $rm);
-                if ($rmRes['ok']) $rmSaved = (int)$rmRes['saved'];
+                if ($rmRes['ok']) {
+                    $rmSaved = (int)$rmRes['saved'];
+                } else {
+                    $rmErr = $rmRes['error'] !== '' ? $rmRes['error'] : 'Remarks save failed.';
+                }
             }
 
             // Attendance
             $attIn = $_POST['attendance'] ?? [];
+            $attErr = '';
             if (is_array($attIn) && !empty($attIn) && $ck !== '') {
-                $c = rcParseClassKey(urldecode($ck));
-                try {
-                    $updAtt = $db->prepare("UPDATE report_card SET attendance=? WHERE academic_year=? AND std=? AND division=? AND semester=? AND roll_no=?");
-                    foreach ($attIn as $roll => $attVal) {
-                        $updAtt->execute([trim((string)$attVal), $c['academic_year'], $c['std'], $c['division'], $c['semester'], trim((string)$roll)]);
-                    }
-                } catch (\Throwable $e) {}
+                $attRes = rcSaveBulkAttendance($ck, $attIn);
+                if (!$attRes['ok']) {
+                    $attErr = $attRes['error'] !== '' ? $attRes['error'] : 'Attendance save failed.';
+                }
             }
 
             if ($res['ok']) {
                 $n = (int)$res['saved'];
                 $success = 'Marks saved for ' . $n . ' student' . ($n !== 1 ? 's' : '') . '.';
                 if ($rmSaved > 0) $success .= ' Remarks updated for ' . $rmSaved . ' student' . ($rmSaved !== 1 ? 's' : '') . '.';
+                if ($rmErr !== '' || $attErr !== '') {
+                    $error = trim($rmErr . ' ' . $attErr);
+                }
                 $classKey = $ck;
             } else {
                 $error = $res['error'] !== '' ? $res['error'] : 'Save failed.';
+                if ($attErr !== '' && stripos($error, 'locked') === false) {
+                    $error .= ' ' . $attErr;
+                }
                 if ($ck !== '') $classKey = $ck;
             }
         }
@@ -1118,7 +1145,7 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
                 // Academic-year options. The picker is a real <select>, so adding more
                 // sessions later only means extending this list. The current selection is
                 // always included so a stale/bookmarked year can never be dropped.
-                $yearOptions = ['2025-26', '2024-25'];
+                $yearOptions = rcGetAcademicYearOptions();
                 if ($year !== '' && !in_array($year, $yearOptions, true)) {
                     array_unshift($yearOptions, $year);
                 }
@@ -1769,7 +1796,8 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;');
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
         }
 
         function closeModal() {
@@ -2008,7 +2036,7 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
                                     <div style="font-size:0.68rem;font-weight:700;color:#64748b;text-transform:uppercase;margin-top:2px;">Grade</div>
                                 </div>
                                 <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:9px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.03);">
-                                    <div style="font-size:1.35rem;font-weight:900;color:#0f172a;line-height:1.1;">${summary.grand_total_obtained || 0}/${summary.grand_total_max || 0}</div>
+                                    <div style="font-size:1.35rem;font-weight:900;color:#0f172a;line-height:1.1;">${escapeHtml(summary.grand_total_obtained ?? 0)}/${escapeHtml(summary.grand_total_max ?? 0)}</div>
                                     <div style="font-size:0.68rem;font-weight:700;color:#64748b;text-transform:uppercase;margin-top:2px;">Total Marks</div>
                                 </div>
                                 <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:9px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.03);">
@@ -2278,7 +2306,10 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
                     windowWidth: 800
                 });
                 const imgData1 = canvas1.toDataURL('image/jpeg', 0.95);
-                pdf.addImage(imgData1, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+                const p1Props = pdf.getImageProperties(imgData1);
+                let p1W = 210, p1H = (p1Props.height * 210) / p1Props.width;
+                if (p1H > 297) { p1H = 297; p1W = (p1Props.width * 297) / p1Props.height; }
+                pdf.addImage(imgData1, 'JPEG', (210 - p1W) / 2, 0, p1W, p1H, undefined, 'FAST');
 
                 // Render Page 2
                 if (exportBtn) exportBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Converting Page 2...';
@@ -2292,7 +2323,10 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
                     windowWidth: 800
                 });
                 const imgData2 = canvas2.toDataURL('image/jpeg', 0.95);
-                pdf.addImage(imgData2, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+                const p2Props = pdf.getImageProperties(imgData2);
+                let p2W = 210, p2H = (p2Props.height * 210) / p2Props.width;
+                if (p2H > 297) { p2H = 297; p2W = (p2Props.width * 297) / p2Props.height; }
+                pdf.addImage(imgData2, 'JPEG', (210 - p2W) / 2, 0, p2W, p2H, undefined, 'FAST');
 
                 const rollStr = String(student.roll || '0').padStart(2, '0');
                 const safeName = (student.name || 'Student').replace(/[^a-zA-Z0-9_\-]/g, '_');
@@ -2431,17 +2465,17 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
                     const pctNum = Number(summary.percentage) || 0;
                     document.getElementById('kpiGrid').innerHTML = `
                         <div class="kpi-card"><div class="kpi-value">${pctNum.toFixed(1)}%</div><div class="kpi-label">Percentage</div></div>
-                        <div class="kpi-card"><div class="kpi-value" style="color:var(--brand);">${summary.grade || '—'}</div><div class="kpi-label">Grade</div></div>
-                        <div class="kpi-card"><div class="kpi-value">${summary.grand_total_obtained || 0}/${summary.grand_total_max || 0}</div><div class="kpi-label">Total Marks</div></div>
+                        <div class="kpi-card"><div class="kpi-value" style="color:var(--brand);">${escapeHtml(summary.grade || '—')}</div><div class="kpi-label">Grade</div></div>
+                        <div class="kpi-card"><div class="kpi-value">${escapeHtml(summary.grand_total_obtained ?? 0)}/${escapeHtml(summary.grand_total_max ?? 0)}</div><div class="kpi-label">Total Marks</div></div>
                         <div class="kpi-card"><div class="kpi-value" style="color:${summary.passed ? '#16a34a' : '#dc2626'};">${summary.passed ? 'PASS' : 'FAIL'}</div><div class="kpi-label">Status</div></div>
                     `;
 
                     // 2. Meta Cards in Overview Tab
                     document.getElementById('metaCards').innerHTML = `
-                        <div class="meta-card"><strong>Attendance</strong><span>${summary.attendance || '—'}</span></div>
-                        <div class="meta-card"><strong>Remark</strong><span>${summary.remark || '—'}</span></div>
+                        <div class="meta-card"><strong>Attendance</strong><span>${escapeHtml(summary.attendance || '—')}</span></div>
+                        <div class="meta-card"><strong>Remark</strong><span>${escapeHtml(summary.remark || '—')}</span></div>
                         <div class="meta-card"><strong>Parents Signature</strong><span>${summary.parents_sign ? '<span style="color:#16a34a;font-weight:700;">✓ Confirmed</span>' : '<span style="color:#dc2626;">Not Signed</span>'}</span></div>
-                        <div class="meta-card"><strong>Class Rank / Percentile</strong><span>${classComp.percentile !== undefined ? classComp.percentile + 'th Percentile' : '—'}</span></div>
+                        <div class="meta-card"><strong>Class Rank / Percentile</strong><span>${classComp.percentile !== undefined ? escapeHtml(classComp.percentile) + 'th Percentile' : '—'}</span></div>
                     `;
 
                     if (typeof Chart === 'undefined') {
@@ -2610,9 +2644,53 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
             toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#0f172a;color:#ffffff;padding:12px 18px;border-radius:10px;box-shadow:0 10px 25px rgba(0,0,0,0.3);display:flex;align-items:center;gap:12px;z-index:99999;font-size:0.84rem;font-weight:600;border:1px solid rgba(255,255,255,0.15);';
             document.body.appendChild(toast);
         }
-        toast.innerHTML = `<i class="fa-brands fa-google-drive" style="color:#4285F4;font-size:1.25rem;"></i> <span>Auto-filed to your Google Drive!</span> <a href="${driveUrl}" target="_blank" rel="noopener" style="color:#60a5fa;text-decoration:underline;font-weight:700;">Open in Drive &rarr;</a>`;
+        toast.textContent = '';
+        const icon = document.createElement('i');
+        icon.className = 'fa-brands fa-google-drive';
+        icon.style.cssText = 'color:#4285F4;font-size:1.25rem;';
+        const span = document.createElement('span');
+        span.textContent = 'Auto-filed to your Google Drive!';
+        toast.appendChild(icon);
+        toast.appendChild(span);
+        if (typeof driveUrl === 'string' && /^https:\/\//i.test(driveUrl)) {
+            const link = document.createElement('a');
+            link.href = driveUrl;
+            link.target = '_blank';
+            link.rel = 'noopener';
+            link.style.cssText = 'color:#60a5fa;text-decoration:underline;font-weight:700;';
+            link.textContent = 'Open in Drive \u2192';
+            toast.appendChild(link);
+        }
         toast.style.display = 'flex';
         setTimeout(() => { if (toast) toast.style.display = 'none'; }, 6000);
+    }
+
+    function showResultsErrorToast(message) {
+        if (!message) return;
+        let toast = document.getElementById('resultsErrorToast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'resultsErrorToast';
+            toast.setAttribute('role', 'alert');
+            toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#991b1b;color:#ffffff;padding:12px 18px;border-radius:10px;box-shadow:0 12px 28px rgba(153,27,27,0.35);display:flex;align-items:center;gap:10px;z-index:99999;font-size:0.86rem;font-weight:700;border:1px solid #fecaca;max-width:440px;';
+            document.body.appendChild(toast);
+        }
+        toast.textContent = '';
+        const icon = document.createElement('i');
+        icon.className = 'fas fa-exclamation-triangle';
+        const span = document.createElement('span');
+        span.textContent = String(message);
+        toast.appendChild(icon);
+        toast.appendChild(span);
+        toast.style.display = 'flex';
+        clearTimeout(toast._timer);
+        toast._timer = setTimeout(() => { if (toast) toast.style.display = 'none'; }, 6500);
+    }
+    const initialResultsError = <?= json_encode($error, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE) ?>;
+    if (initialResultsError) {
+        document.addEventListener('DOMContentLoaded', function () {
+            showResultsErrorToast(initialResultsError);
+        });
     }
     </script>
     <script src="<?= BASE_URL ?>assets/js/results-matrix.js?v=<?= (is_file(__DIR__ . '/../assets/js/results-matrix.js') ? filemtime(__DIR__ . '/../assets/js/results-matrix.js') : 0) ?>"></script>
@@ -2632,7 +2710,7 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
             'hdrSem'        => $romanSem,
             'hdrYear'       => $year,
             'schoolTagline' => 'Excellence in Academic & Moral Education'
-        ], JSON_UNESCAPED_UNICODE) ?>
+        ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>
     </script>
     <script src="<?= BASE_URL ?>assets/js/hcc-bridge.js?v=<?= (is_file(__DIR__ . '/../assets/js/hcc-bridge.js') ? filemtime(__DIR__ . '/../assets/js/hcc-bridge.js') : 0) ?>"></script>
 </body>

@@ -282,18 +282,41 @@ class WhatsAppStore extends EventTarget {
   }
   
   async saveMessage(message) {
+    if (!message || message.id == null) return;
+    const isBlankSync = (
+      message.msg_type === 'system'
+      && !String(message.body || '').trim()
+      && String(message.wa_msg_id || '').startsWith('chat_sync_')
+    );
+    if (isBlankSync) return;
+
     if (!this.messages.has(message.chat_id)) {
       this.messages.set(message.chat_id, new Map());
     }
-    this.messages.get(message.chat_id).set(message.id, message);
+    const msgMap = this.messages.get(message.chat_id);
+    const alreadyHad = msgMap.has(message.id);
+    msgMap.set(message.id, message);
     await this.put('messages', message);
     
-    // Update chat's last message
+    // Update chat's last message + preview
     const chat = this.chats.get(message.chat_id);
     if (chat) {
+      const ts = message.timestamp || Math.floor(Date.now() / 1000);
+      const mType = message.msg_type || message.type || 'text';
       chat.last_message_id = message.id;
-      chat.last_activity_at = new Date((message.timestamp || Math.floor(Date.now() / 1000)) * 1000).toISOString();
-      if (!message.from_me && message.status !== 'read') {
+      chat.last_message = {
+        id: message.id,
+        wa_msg_id: message.wa_msg_id || null,
+        body: message.body || '',
+        msg_type: mType,
+        type: mType,
+        from_me: !!message.from_me,
+        timestamp: ts,
+        status: message.status || (message.from_me ? 'sent' : 'delivered')
+      };
+      chat.last_activity_at = new Date(ts * 1000).toISOString();
+      const isActive = this.activeChatId != null && String(this.activeChatId) === String(message.chat_id);
+      if (!alreadyHad && !message.from_me && message.status !== 'read' && !isActive) {
         chat.unread_count = (chat.unread_count || 0) + 1;
       }
       await this.saveChat(chat);
@@ -1449,13 +1472,26 @@ class WhatsAppStore extends EventTarget {
       }
       if (!response || !response.success || !Array.isArray(response.data)) return;
       let sawInbound = false;
+      const msgMap = this.messages.get(chatId)
+        || this.messages.get(Number(chatId))
+        || this.messages.get(String(chatId));
       for (const msg of response.data) {
-        if (!msg || msg.id == null || msg.from_me) continue;
+        if (!msg || msg.id == null) continue;
         msg.chat_id = chatId;
-        const msgMap = this.messages.get(chatId)
-          || this.messages.get(Number(chatId))
-          || this.messages.get(String(chatId));
-        if (msgMap && (msgMap.has(msg.id) || msgMap.has(Number(msg.id)) || msgMap.has(String(msg.id)))) continue;
+        const existing = msgMap
+          ? (msgMap.get(msg.id) || msgMap.get(Number(msg.id)) || msgMap.get(String(msg.id)))
+          : null;
+        if (existing) {
+          if (
+            existing.status !== msg.status
+            || existing.media_url !== msg.media_url
+            || existing.body !== msg.body
+          ) {
+            await this.updateMessage(existing.id, msg);
+          }
+          continue;
+        }
+        if (msg.from_me) continue;
         await this.saveMessage(msg);
         sawInbound = true;
       }

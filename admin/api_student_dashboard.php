@@ -41,7 +41,7 @@ foreach ($report['rows'] as $row) {
     $faPct = $faMax > 0 ? round(($faObt / $faMax) * 100, 1) : 0;
     $saPct = $saMax > 0 ? round(($saObt / $saMax) * 100, 1) : 0;
     $totalPct = $subjTotal > 0 ? round(($subjObt / $subjTotal) * 100, 1) : 0;
-    $grade = calculateGrade($totalPct);
+    $grade = calculateGrade($totalPct, $report['std']);
     $subjects[] = [
         'subject' => $row['subject_name'],
         'fa_max' => $faMax,
@@ -118,28 +118,23 @@ while ($r = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $subjectAvgs[$r['subject_name']] = round((float)$r['avg_pct'], 1);
 }
 
-// Grade distribution
+// Grade distribution aligned with institutional Std-aware CBSE / SSC scale
+$isSeniorCohort = ((int)$c['std'] >= 9);
+$gradeDist = $isSeniorCohort
+    ? ['Distinction' => 0, 'Grade I' => 0, 'Grade II' => 0, 'Pass' => 0, 'Fail' => 0]
+    : ['A1' => 0, 'A2' => 0, 'B1' => 0, 'B2' => 0, 'C1' => 0, 'C2' => 0, 'D' => 0, 'E1' => 0, 'E2' => 0];
 $stmt = $db->prepare("
-    SELECT grade, COUNT(*) AS cnt
-    FROM (
-        SELECT roll_no,
-            CASE 
-                WHEN SUM(fa_obtained+sa_obtained)/SUM(fa_max+sa_max)*100 >= 90 THEN 'A'
-                WHEN SUM(fa_obtained+sa_obtained)/SUM(fa_max+sa_max)*100 >= 75 THEN 'B'
-                WHEN SUM(fa_obtained+sa_obtained)/SUM(fa_max+sa_max)*100 >= 60 THEN 'C'
-                WHEN SUM(fa_obtained+sa_obtained)/SUM(fa_max+sa_max)*100 >= 45 THEN 'D'
-                ELSE 'F'
-            END AS grade
-        FROM report_card
-        WHERE academic_year=? AND std=? AND division=? AND semester=?
-        GROUP BY roll_no
-    ) t
-    GROUP BY grade
+    SELECT roll_no, SUM(fa_obtained+sa_obtained)/SUM(fa_max+sa_max)*100 AS pct
+    FROM report_card
+    WHERE academic_year=? AND std=? AND division=? AND semester=?
+    GROUP BY roll_no
+    HAVING SUM(fa_max+sa_max) > 0
 ");
 $stmt->execute([$c['academic_year'], $c['std'], $c['division'], $c['semester']]);
-$gradeDist = ['A' => 0, 'B' => 0, 'C' => 0, 'D' => 0, 'F' => 0];
 while ($r = $stmt->fetch(PDO::FETCH_ASSOC)) {
-    $gradeDist[$r['grade']] = (int)$r['cnt'];
+    $g = calculateGrade((float)$r['pct'], $c['std']);
+    if (!isset($gradeDist[$g])) $gradeDist[$g] = 0;
+    $gradeDist[$g]++;
 }
 
 $classComparatives = [
@@ -151,7 +146,7 @@ $classComparatives = [
 ];
 
 // ──────────────────────────────────────────────
-// 4. HISTORICAL — all terms for this student
+// 4. HISTORICAL — all terms for this student (filter by roll_no AND student_name)
 // ──────────────────────────────────────────────
 $stmt = $db->prepare("
     SELECT academic_year, std, division, semester,
@@ -159,11 +154,11 @@ $stmt = $db->prepare("
            SUM(fa_max+sa_max) AS maxtotal,
            COUNT(*) AS subject_count
     FROM report_card
-    WHERE roll_no=?
+    WHERE roll_no=? AND student_name=?
     GROUP BY academic_year, std, division, semester
     ORDER BY academic_year, semester
 ");
-$stmt->execute([$roll]);
+$stmt->execute([$roll, $report['name']]);
 $historical = [];
 while ($r = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $pct = $r['maxtotal'] > 0 ? round(($r['obtained'] / $r['maxtotal']) * 100, 1) : 0;
@@ -171,9 +166,9 @@ while ($r = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $subjStmt = $db->prepare("
         SELECT subject_name, fa_max, fa_obtained, sa_max, sa_obtained
         FROM report_card
-        WHERE roll_no=? AND academic_year=? AND std=? AND division=? AND semester=?
+        WHERE roll_no=? AND student_name=? AND academic_year=? AND std=? AND division=? AND semester=?
     ");
-    $subjStmt->execute([$roll, $r['academic_year'], $r['std'], $r['division'], $r['semester']]);
+    $subjStmt->execute([$roll, $report['name'], $r['academic_year'], $r['std'], $r['division'], $r['semester']]);
     $termSubjects = [];
     $faPctSum = 0; $saPctSum = 0; $subjCount = 0;
     while ($sr = $subjStmt->fetch(PDO::FETCH_ASSOC)) {
@@ -195,7 +190,7 @@ while ($r = $stmt->fetch(PDO::FETCH_ASSOC)) {
         'division' => $r['division'],
         'semester' => $r['semester'],
         'percentage' => $pct,
-        'grade' => calculateGrade($pct),
+        'grade' => calculateGrade($pct, $r['std']),
         'fa_pct_avg' => $subjCount > 0 ? round($faPctSum / $subjCount, 1) : 0,
         'sa_pct_avg' => $subjCount > 0 ? round($saPctSum / $subjCount, 1) : 0,
         'subjects' => $termSubjects,

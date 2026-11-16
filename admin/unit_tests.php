@@ -10,10 +10,14 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church English Me
 $adminUser = sanitize($_SESSION['admin_name'] ?? 'Admin');
 
 // Current Filter Parameters
-$year     = trim($_GET['year'] ?? '2025-26');
-$std      = trim($_GET['std'] ?? '1');
-$division = trim($_GET['division'] ?? 'A');
-$testType = trim($_GET['test_type'] ?? 'Unit Test 2');
+$activeYear = rcGetActiveAcademicYear();
+$year       = trim($_GET['year'] ?? $activeYear);
+if ($year === '') $year = $activeYear;
+$std        = trim($_GET['std'] ?? '1');
+$division   = trim($_GET['division'] ?? 'A');
+$testType   = trim($_GET['test_type'] ?? 'Unit Test 2');
+$yearOptions = rcGetAcademicYearOptions();
+if (!in_array($year, $yearOptions, true)) array_unshift($yearOptions, $year);
 
 $romanMap = ['1'=>'I','2'=>'II','3'=>'III','4'=>'IV','5'=>'V','6'=>'VI','7'=>'VII','8'=>'VIII','9'=>'IX','10'=>'X'];
 $romanStd = $romanMap[(string)$std] ?? $std;
@@ -31,15 +35,15 @@ if (isset($_GET['action']) && $_GET['action'] === 'export_excel') {
     $sheet->setTitle("STD $std $division");
 
     // Title
-    $sheet->setCellValue('A1', $schoolName);
+    $sheet->setCellValue('A1', rcCsvSafeCell($schoolName));
     $sheet->mergeCells('A1:L1');
     $sheet->getStyle('A1')->getFont()->setBold(true)->setSize(14);
     $sheet->getStyle('A1')->getAlignment()->setHorizontal(\PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER);
 
     // Meta row
-    $sheet->setCellValue('A2', "STD:- " . $std . " " . $division);
-    $sheet->setCellValue('D2', "UNIT TEST :- " . strtoupper($testType));
-    $sheet->setCellValue('H2', "YEAR :- " . $year);
+    $sheet->setCellValue('A2', rcCsvSafeCell("STD:- " . $std . " " . $division));
+    $sheet->setCellValue('D2', rcCsvSafeCell("UNIT TEST :- " . strtoupper($testType)));
+    $sheet->setCellValue('H2', rcCsvSafeCell("YEAR :- " . $year));
     $sheet->getStyle('A2:H2')->getFont()->setBold(true);
 
     // Header Row 3
@@ -47,7 +51,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'export_excel') {
     $sheet->setCellValue('B3', 'Name of the Students');
     $colLetter = 'C';
     foreach ($data['subjects'] as $s) {
-        $sheet->setCellValue($colLetter . '3', $s['subject_name']);
+        $sheet->setCellValue($colLetter . '3', rcCsvSafeCell($s['subject_name']));
         $colLetter++;
     }
     $sheet->setCellValue($colLetter . '3', 'Total'); $totCol = $colLetter++;
@@ -68,28 +72,31 @@ if (isset($_GET['action']) && $_GET['action'] === 'export_excel') {
     // Data rows
     $rowIdx = 5;
     foreach ($data['students'] as $stu) {
-        $sheet->setCellValue('A' . $rowIdx, $stu['roll_no']);
-        $sheet->setCellValue('B' . $rowIdx, $stu['student_name']);
+        $sheet->setCellValue('A' . $rowIdx, rcCsvSafeCell($stu['roll_no']));
+        $sheet->setCellValue('B' . $rowIdx, rcCsvSafeCell($stu['student_name']));
         $cLet = 'C';
         foreach ($data['subjects'] as $s) {
             $sName = $s['subject_name'];
             $sm = $stu['subjects'][$sName] ?? null;
             if ($sm && $sm['is_absent']) {
                 $sheet->setCellValue($cLet . $rowIdx, '-');
+            } elseif ($sm && $sm['marks_obtained'] !== null) {
+                $sheet->setCellValue($cLet . $rowIdx, (float)$sm['marks_obtained']);
             } else {
-                $sheet->setCellValue($cLet . $rowIdx, $sm['marks_obtained'] ?? 0);
+                $sheet->setCellValue($cLet . $rowIdx, '');
             }
             $cLet++;
         }
-        $sheet->setCellValue($totCol . $rowIdx, $stu['total_obtained']);
+        $sheet->setCellValue($totCol . $rowIdx, !empty($stu['has_entered']) ? $stu['total_obtained'] : '');
         $sheet->setCellValue($pctCol . $rowIdx, $stu['percentage'] !== null ? $stu['percentage'] : '-');
-        $sheet->setCellValue($grdCol . $rowIdx, $stu['grade']);
-        $sheet->setCellValue($rmkCol . $rowIdx, $stu['remark']);
-        $sheet->setCellValue($attnCol . $rowIdx, $stu['attendance']);
+        $sheet->setCellValue($grdCol . $rowIdx, rcCsvSafeCell($stu['grade']));
+        $sheet->setCellValue($rmkCol . $rowIdx, rcCsvSafeCell($stu['remark']));
+        $sheet->setCellValue($attnCol . $rowIdx, rcCsvSafeCell($stu['attendance']));
+        $sheet->setCellValue($signCol . $rowIdx, !empty($stu['parents_sign']) ? 'Yes' : 'No');
         $rowIdx++;
     }
 
-    $filename = "STD_{$std}_{$division}_{$testType}_{$year}.xlsx";
+    $filename = preg_replace('/[^A-Za-z0-9_.-]/', '_', "STD_{$std}_{$division}_{$testType}_{$year}.xlsx");
     header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     header('Content-Disposition: attachment; filename="' . $filename . '"');
     $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
@@ -147,7 +154,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // 2. Sync Roster from Active Cohort
         elseif ($action === 'sync_roster') {
-            $sourceYear = trim($_POST['source_year'] ?? '2024-25');
+            $sourceYear = trim($_POST['source_year'] ?? '');
+            if ($sourceYear === '') $sourceYear = $year;
             $res = rcSyncUnitTestRoster($sourceYear, $std, $division, $testType, $adminUser);
             if ($res['ok']) {
                 $success = $res['message'];
@@ -192,6 +200,13 @@ $matrixData = rcGetUnitTestClassData($year, $std, $division, $testType);
 $students   = $matrixData['students'];
 $subjects   = $matrixData['subjects'];
 $totalMax   = $matrixData['total_max'];
+
+// Resolve cohort semester dynamically from report_card instead of hardcoding 'Sem 1'
+$preferSem = in_array($testType, ['Unit Test 3', 'Unit Test 4'], true) ? 'Sem 2' : 'Sem 1';
+$semStmt = $db->prepare("SELECT semester FROM report_card WHERE academic_year = ? AND std = ? AND division = ? ORDER BY (semester = ?) DESC, id ASC LIMIT 1");
+$semStmt->execute([$year, $std, $division, $preferSem]);
+$cohortSem = trim((string)$semStmt->fetchColumn()) ?: $preferSem;
+$cohortClassKey = rcBuildClassKey($year, $std, $division, $cohortSem);
 
 // Available standards and classes
 $availableClasses = rcClassOptions();
@@ -481,6 +496,40 @@ $notifData = rcGetRecentNotifications(8);
         .notif-item { padding:12px 16px; border-bottom:1px solid var(--border); display:flex; gap:12px; font-size:0.82rem; line-height:1.4; text-decoration:none; color:inherit; }
         .notif-item:hover { background:#fafaf9; }
         .notif-item-icon { width:32px; height:32px; border-radius:8px; background:#fee2e2; color:#991b1b; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:0.85rem; }
+
+        /* Interactive Parent Signature Toggle */
+        .ut-sign-toggle {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border: 1.5px solid #cbd5e1;
+            background: #fff;
+            color: #94a3b8;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            font-size: 0.85rem;
+        }
+        .ut-sign-toggle:hover {
+            border-color: var(--brand);
+            color: var(--brand);
+            transform: scale(1.06);
+        }
+        .ut-sign-toggle.is-signed {
+            background: #dcfce7;
+            border-color: #16a34a;
+            color: #15803d;
+        }
+        .ut-sign-toggle.is-busy {
+            opacity: 0.55;
+            pointer-events: none;
+        }
+        .ut-sign-toggle.is-error {
+            border-color: #dc2626;
+            box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.2);
+        }
     </style>
 </head>
 <body>
@@ -556,8 +605,9 @@ $notifData = rcGetRecentNotifications(8);
                         <div>
                             <label style="font-size:0.75rem;font-weight:700;color:var(--muted);display:block;margin-bottom:4px;">Academic Year</label>
                             <select class="ut-select" name="year" onchange="this.form.submit()">
-                                <option value="2025-26" <?= $year === '2025-26' ? 'selected' : '' ?>>2025-26</option>
-                                <option value="2024-25" <?= $year === '2024-25' ? 'selected' : '' ?>>2024-25</option>
+                                <?php foreach ($yearOptions as $yOpt): ?>
+                                    <option value="<?= sanitize($yOpt) ?>" <?= $year === $yOpt ? 'selected' : '' ?>><?= sanitize($yOpt) ?></option>
+                                <?php endforeach; ?>
                             </select>
                         </div>
 
@@ -610,7 +660,7 @@ $notifData = rcGetRecentNotifications(8);
                             <i class="fas fa-receipt"></i> Parent Slips
                         </a>
 
-                        <a href="whatsapp_share.php?doc_type=unit_test&test_type=<?= urlencode($testType) ?>&class=<?= urlencode(rcBuildClassKey($year, $std, $division, 'Sem 1')) ?>" class="btn btn-sm btn-whatsapp" title="Open WhatsApp Dispatcher for this Unit Test">
+                        <a href="whatsapp_share.php?doc_type=unit_test&test_type=<?= urlencode($testType) ?>&class=<?= urlencode($cohortClassKey) ?>" class="btn btn-sm btn-whatsapp" title="Open WhatsApp Dispatcher for this Unit Test">
                             <i class="fa-brands fa-whatsapp"></i> WhatsApp Hub
                         </a>
 
@@ -677,7 +727,7 @@ $notifData = rcGetRecentNotifications(8);
                         <form method="POST">
                             <?= csrfField() ?>
                             <input type="hidden" name="action" value="sync_roster">
-                            <input type="hidden" name="source_year" value="2024-25">
+                            <input type="hidden" name="source_year" value="<?= sanitize($year) ?>">
                             <button type="submit" class="btn btn-primary" style="font-weight:700;">
                                 <i class="fas fa-sync-alt"></i> 1-Click Sync Students from Active Cohort
                             </button>
@@ -729,7 +779,6 @@ $notifData = rcGetRecentNotifications(8);
                                         <th class="th-sub-max"><?= (float)$totalMax ?></th>
                                         <th class="th-sub-max">100%</th>
                                         <th class="th-sub-max">A1-E</th>
-                                        <th class="th-sub-max"></th>
                                         <th class="th-sub-max"></th>
                                         <th class="th-sub-max"></th>
                                         <th class="th-sub-max"></th>
@@ -788,8 +837,16 @@ $notifData = rcGetRecentNotifications(8);
                                                    class="ut-attn-input"
                                                    maxlength="5">
                                         </td>
-                                        <td>
-                                            <i class="far fa-circle" style="color:#cbd5e1;font-size:0.9rem;" title="Parent signature verified"></i>
+                                        <td style="text-align:center;">
+                                            <?php $isSigned = !empty($stu['parents_sign']); ?>
+                                            <button type="button"
+                                                    class="ut-sign-toggle <?= $isSigned ? 'is-signed' : '' ?>"
+                                                    data-roll="<?= e_attr($stu['roll_no']) ?>"
+                                                    data-signed="<?= $isSigned ? '1' : '0' ?>"
+                                                    aria-pressed="<?= $isSigned ? 'true' : 'false' ?>"
+                                                    title="<?= $isSigned ? 'Parent signature verified (click to untick)' : 'Parent signature pending (click to verify)' ?>">
+                                                <i class="<?= $isSigned ? 'fas fa-check' : 'far fa-circle' ?>"></i>
+                                            </button>
                                         </td>
                                         <td style="text-align:center;white-space:nowrap;">
                                             <a href="unit_test_report_card.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>&roll=<?= urlencode($stu['roll_no']) ?>"
@@ -859,10 +916,96 @@ $notifData = rcGetRecentNotifications(8);
             'schoolName'   => $schoolName,
             'className'    => "STD {$romanStd}-{$division}",
             'testType'     => $testType,
-            'classKey'     => rcBuildClassKey($year, $std, $division, 'Sem 1'),
+            'std'          => $std,
+            'division'     => $division,
+            'classKey'     => $cohortClassKey,
             'academicYear' => $year
-        ], JSON_UNESCAPED_UNICODE) ?>
+        ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>
     </script>
     <script src="<?= BASE_URL ?>assets/js/hcc-bridge.js?v=<?= (is_file(__DIR__ . '/../assets/js/hcc-bridge.js') ? filemtime(__DIR__ . '/../assets/js/hcc-bridge.js') : 0) ?>"></script>
+    <script>
+    (function () {
+        'use strict';
+        const bridgeEl = document.getElementById('unitTestBridgeData');
+        let bridgeMeta = {};
+        try {
+            bridgeMeta = bridgeEl ? JSON.parse(bridgeEl.textContent || '{}') : {};
+        } catch (e) { bridgeMeta = {}; }
+
+        function getCsrfToken() {
+            const el = document.querySelector('#unitTestMatrixForm input[name="csrf_token"], input[name="csrf_token"]');
+            return el ? el.value : '';
+        }
+
+        function setBtnVisual(btn, signed) {
+            btn.dataset.signed = signed ? '1' : '0';
+            btn.setAttribute('aria-pressed', signed ? 'true' : 'false');
+            btn.classList.toggle('is-signed', !!signed);
+            btn.title = signed ? 'Parent signature verified (click to untick)' : 'Parent signature pending (click to verify)';
+            const icon = btn.querySelector('i');
+            if (icon) {
+                icon.className = signed ? 'fas fa-check' : 'far fa-circle';
+            }
+        }
+
+        document.addEventListener('click', function (ev) {
+            const btn = ev.target.closest('.ut-sign-toggle');
+            if (!btn || btn.classList.contains('is-busy')) return;
+            const roll = btn.dataset.roll || '';
+            if (!roll) return;
+
+            const prevSigned = btn.dataset.signed === '1' ? 1 : 0;
+            const nextSigned = prevSigned ? 0 : 1;
+
+            btn.classList.add('is-busy');
+            setBtnVisual(btn, nextSigned);
+
+            const body = new URLSearchParams({
+                csrf_token: getCsrfToken(),
+                table: 'unit_test_results',
+                year: bridgeMeta.academicYear || '',
+                std: bridgeMeta.std || '',
+                division: bridgeMeta.division || '',
+                test_type: bridgeMeta.testType || '',
+                roll: roll,
+                sign: String(nextSigned)
+            });
+
+            fetch('api_parent_sign.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                credentials: 'same-origin',
+                body: body
+            })
+            .then(function (r) {
+                return r.json().catch(function () { return { ok: false, error: 'Server returned HTTP ' + r.status }; });
+            })
+            .then(function (data) {
+                btn.classList.remove('is-busy');
+                if (!data || !data.ok) {
+                    setBtnVisual(btn, prevSigned);
+                    btn.classList.add('is-error');
+                    setTimeout(function () { btn.classList.remove('is-error'); }, 1200);
+                    alert((data && data.error) || 'Could not update parent signature.');
+                    return;
+                }
+                if (Array.isArray(bridgeMeta.students)) {
+                    const match = bridgeMeta.students.find(function (s) { return String(s.roll_no) === String(roll); });
+                    if (match) match.parents_sign = nextSigned;
+                    if (bridgeEl) bridgeEl.textContent = JSON.stringify(bridgeMeta);
+                }
+            })
+            .catch(function () {
+                btn.classList.remove('is-busy');
+                setBtnVisual(btn, prevSigned);
+                btn.classList.add('is-error');
+                setTimeout(function () { btn.classList.remove('is-error'); }, 1200);
+            });
+        });
+    })();
+    </script>
 </body>
 </html>

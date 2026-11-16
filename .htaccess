@@ -18,15 +18,15 @@ ServerSignature Off
 # 2) Deny direct HTTP access to sensitive directories (filesystem PHP includes still work).
 <IfModule mod_rewrite.c>
   RewriteEngine On
-  # Block config/, data/, logs/, vendor/, scratch/, and any hidden/dot directory.
-  RewriteRule ^(config|data|logs|vendor|scratch|\..*)(/|$) - [F,L,NC]
+  # Block config/, data/, logs/, vendor/, scratch/, storage/, automation/, knowledge/, tools/, and any hidden/dot directory.
+  RewriteRule ^(config|data|logs|vendor|scratch|storage|automation|knowledge|tools|\..*)(/|$) - [F,L,NC]
   # Block backup/temp/dump files from being served.
   RewriteRule \.(bak|old|orig|save|swp|swo|tmp|log|json|sql|yml|yaml|env|dist|db|sqlite|md)$ - [F,L,NC]
 </IfModule>
 
 # 3) Apache 2.4 native denial (works even if mod_rewrite is off).
 <IfModule mod_authz_core.c>
-  <If "%{REQUEST_URI} =~ m#^/hcc/(config|data|logs|vendor|scratch|\..*)(/|$)#">
+  <If "%{REQUEST_URI} =~ m#^/hcc/(config|data|logs|vendor|scratch|storage|automation|knowledge|tools|\..*)(/|$)#">
     Require all denied
   </If>
   # Deny serving of sensitive file extensions anywhere under /hcc.

@@ -4,12 +4,118 @@ require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/auth_check.php';
 $adminPage = 'bonafide_certificate';
 
+function bonafideFormatDobDMY(?string $raw): string {
+    $raw = trim((string)$raw);
+    if ($raw === '') return '';
+    if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $raw, $m)) {
+        return "{$m[3]}/{$m[2]}/{$m[1]}";
+    }
+    return $raw;
+}
+
+function bonafideNextSerial(PDO $db, string $year = ''): string {
+    rcEnsureArchiveTables();
+    $maxNum = 0;
+    if ($year !== '') {
+        $stmt = $db->prepare("SELECT COALESCE(MAX(CAST(cert_serial AS UNSIGNED)), 0) FROM bonafide_issued_log WHERE academic_year = ?");
+        $stmt->execute([$year]);
+        $maxNum = (int)$stmt->fetchColumn();
+    } else {
+        $maxNum = (int)$db->query("SELECT COALESCE(MAX(CAST(cert_serial AS UNSIGNED)), 0) FROM bonafide_issued_log")->fetchColumn();
+    }
+    return sprintf('%02d', $maxNum + 1);
+}
+
+/* ── Instant GR / Student Auto-Fill Lookup Endpoint ── */
+if (isset($_GET['action']) && $_GET['action'] === 'lookup_student') {
+    header('Content-Type: application/json; charset=utf-8');
+    $q = trim((string)($_GET['q'] ?? ''));
+    if ($q === '') {
+        echo json_encode(['ok' => true, 'students' => []], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
+        exit;
+    }
+
+    $db = getDB();
+    $activeYear = rcGetActiveAcademicYear();
+    $candidates = [];
+
+    $exactGr = rcFindStudentByGR($q);
+    if ($exactGr) {
+        $candidates[] = $exactGr;
+    }
+    foreach (rcSearchStudentsMaster($q, 15) as $row) {
+        $candidates[] = $row;
+    }
+
+    $seen = [];
+    $out = [];
+    $serialCache = [];
+    foreach ($candidates as $r) {
+        $gr   = trim((string)($r['gr_no'] ?? ''));
+        $name = trim((string)($r['student_name'] ?? ''));
+        $std  = trim((string)($r['std'] ?? ''));
+        $div  = trim((string)($r['division'] ?? ''));
+        $roll = trim((string)($r['roll_no'] ?? ''));
+        $ay   = trim((string)($r['academic_year'] ?? '')) ?: $activeYear;
+        if ($name === '') continue;
+
+        $dedupKey = ($gr !== '' ? 'gr:' . strtoupper($gr) : '') . '|' . mb_strtoupper($name) . "|{$std}|{$div}|{$roll}";
+        if (isset($seen[$dedupKey])) continue;
+        $seen[$dedupKey] = true;
+
+        $dobDmy = bonafideFormatDobDMY($r['date_of_birth'] ?? '');
+        if (!isset($serialCache[$ay])) {
+            $serialCache[$ay] = bonafideNextSerial($db, $ay);
+        }
+        $nextSerial = $serialCache[$ay];
+        $qrGr = $gr !== '' ? $gr : ($roll !== '' ? $roll : '0');
+        $verifyUrl = rcGetPublicBonafideUrl($qrGr, $nextSerial);
+
+        $out[] = [
+            'gr_no'            => $gr,
+            'student_name'     => $name,
+            'std'              => $std,
+            'division'         => $div,
+            'roll_no'          => $roll,
+            'academic_year'    => $ay,
+            'date_of_birth'    => $dobDmy,
+            'dob_words'        => dobToWords($dobDmy),
+            'caste_category'   => trim((string)($r['caste_category'] ?? '')),
+            'parent_phone'     => trim((string)($r['parent_phone'] ?? '')),
+            'next_cert_serial' => $nextSerial,
+            'verify_url'       => $verifyUrl,
+            'qr_svg'           => rcRenderQrSvgDataUri($verifyUrl),
+            'source'           => $r['source'] ?? 'students_master',
+        ];
+        if (count($out) >= 12) break;
+    }
+
+    echo json_encode(['ok' => true, 'students' => $out], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
+    exit;
+}
+
+/* ── Live QR Badge Refresh Endpoint ── */
+if (isset($_GET['action']) && $_GET['action'] === 'qr_preview') {
+    header('Content-Type: application/json; charset=utf-8');
+    $gr = trim((string)($_GET['gr'] ?? ''));
+    $sr = trim((string)($_GET['sr'] ?? ''));
+    if ($gr === '') $gr = '0';
+    if ($sr === '') $sr = '01';
+    $verifyUrl = rcGetPublicBonafideUrl($gr, $sr);
+    echo json_encode([
+        'ok'         => true,
+        'verify_url' => $verifyUrl,
+        'qr_svg'     => rcRenderQrSvgDataUri($verifyUrl),
+    ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
+    exit;
+}
+
 /* ── JSON list endpoint (used by the student picker via fetch) ── */
 if (isset($_GET['action']) && $_GET['action'] === 'list') {
     $db = getDB();
     $classKey = trim($_GET['class'] ?? '');
     $search   = trim($_GET['search']  ?? '');
-    $sql = "SELECT roll_no, student_name, std, division, semester, academic_year, date_of_birth
+    $sql = "SELECT roll_no, student_name, std, division, semester, academic_year, date_of_birth, parent_phone
                FROM report_card";
     $params = [];
     $where = [];
@@ -27,68 +133,168 @@ if (isset($_GET['action']) && $_GET['action'] === 'list') {
         $params[] = $q; $params[] = $q;
     }
     if ($where) $sql .= " WHERE " . implode(" AND ", $where);
-    $sql .= " GROUP BY roll_no, student_name, std, division, semester, academic_year, date_of_birth ORDER BY CAST(roll_no AS UNSIGNED)";
+    $sql .= " GROUP BY roll_no, student_name, std, division, semester, academic_year, date_of_birth, parent_phone ORDER BY CAST(roll_no AS UNSIGNED)";
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
     $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Enrich with students_master GR / Caste / Phone if available
+    $masterByClassRoll = [];
+    try {
+        rcEnsureArchiveTables();
+        foreach ($db->query("SELECT gr_no, std, division, roll_no, student_name, caste_category, parent_phone, date_of_birth FROM students_master")->fetchAll(PDO::FETCH_ASSOC) as $sm) {
+            $k = trim((string)$sm['std']) . '|' . trim((string)$sm['division']) . '|' . trim((string)$sm['roll_no']);
+            $masterByClassRoll[$k] = $sm;
+        }
+    } catch (\Throwable $e) {}
+
+    $serialCache = [];
     header('Content-Type: application/json');
-    echo json_encode(array_map(function ($r) {
+    echo json_encode(array_map(function ($r) use ($db, $masterByClassRoll, &$serialCache) {
         $r['class_key'] = rcClassKey($r['academic_year'], $r['std'], $r['division'], $r['semester']);
-        $r['dob_words'] = dobToWords($r['date_of_birth'] ?? '');
+        $mk = trim((string)$r['std']) . '|' . trim((string)$r['division']) . '|' . trim((string)$r['roll_no']);
+        $sm = $masterByClassRoll[$mk] ?? null;
+        $rawDob = $r['date_of_birth'] ?? ($sm['date_of_birth'] ?? '');
+        $dobDmy = bonafideFormatDobDMY($rawDob);
+        $r['date_of_birth'] = $dobDmy;
+        $r['dob_words'] = dobToWords($dobDmy);
+        $r['gr_no'] = $sm['gr_no'] ?? '';
+        $r['caste_category'] = $sm['caste_category'] ?? '';
+        $r['parent_phone'] = trim((string)($r['parent_phone'] ?? '')) ?: trim((string)($sm['parent_phone'] ?? ''));
+        $ay = $r['academic_year'] ?: rcGetActiveAcademicYear();
+        if (!isset($serialCache[$ay])) {
+            $serialCache[$ay] = bonafideNextSerial($db, $ay);
+        }
+        $r['next_cert_serial'] = $serialCache[$ay];
         return $r;
-    }, $rows));
+    }, $rows), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
     exit;
 }
 
 /* ── JSON endpoint to log issued bonafide into Archive Vault ── */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'log_bonafide') {
+    header('Content-Type: application/json; charset=utf-8');
     if (!verifyCSRFToken()) {
-        header('Content-Type: application/json');
         echo json_encode(['ok' => false, 'error' => 'Invalid security token']);
         exit;
     }
+    $db = getDB();
+    rcEnsureArchiveTables();
     $adminUser = sanitize($_SESSION['admin_name'] ?? 'Admin');
+    $activeYear = rcGetActiveAcademicYear();
+    $ay = trim((string)($_POST['academic_year'] ?? '')) ?: $activeYear;
+    $grNoIn = trim((string)($_POST['gr_no'] ?? ''));
+    if ($grNoIn === '') $grNoIn = trim((string)(getSetting('gr_no', '3875')));
+    $stuNameIn = trim((string)($_POST['student_name'] ?? ''));
+    $reqSerial = trim((string)($_POST['cert_serial'] ?? ''));
+
+    // Atomic serial allocation: preserve if empty/'auto' OR colliding with a different student in bonafide_issued_log
+    try {
+        $db->beginTransaction();
+        if ($reqSerial === '' || strtolower($reqSerial) === 'auto') {
+            $stmtMax = $db->prepare("SELECT COALESCE(MAX(CAST(cert_serial AS UNSIGNED)), 0) FROM bonafide_issued_log WHERE academic_year = ? FOR UPDATE");
+            $stmtMax->execute([$ay]);
+            $reqSerial = sprintf('%02d', ((int)$stmtMax->fetchColumn()) + 1);
+        } else {
+            $chk = $db->prepare("SELECT student_name FROM bonafide_issued_log WHERE gr_no = ? AND cert_serial = ? LIMIT 1 FOR UPDATE");
+            $chk->execute([$grNoIn, $reqSerial]);
+            $existingName = $chk->fetchColumn();
+            if ($existingName !== false && mb_strtoupper(trim((string)$existingName)) !== mb_strtoupper($stuNameIn)) {
+                $stmtMax = $db->prepare("SELECT COALESCE(MAX(CAST(cert_serial AS UNSIGNED)), 0) FROM bonafide_issued_log WHERE academic_year = ? FOR UPDATE");
+                $stmtMax->execute([$ay]);
+                $reqSerial = sprintf('%02d', ((int)$stmtMax->fetchColumn()) + 1);
+            }
+        }
+        if ($db->inTransaction()) {
+            $db->commit();
+        }
+    } catch (\Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        if ($reqSerial === '' || strtolower($reqSerial) === 'auto') {
+            $reqSerial = bonafideNextSerial($db, $ay);
+        }
+    }
+
+    // Parse std/division cleanly if sent as "STD – III – A"
+    $rawStd = trim((string)($_POST['std'] ?? ''));
+    $rawDiv = trim((string)($_POST['division'] ?? ''));
+    if ($rawDiv === '' && preg_match('/^STD\s*[–—\-:]?\s*([A-Za-z0-9]+)\s*[–—\-:]\s*([A-Za-z])$/i', $rawStd, $sm)) {
+        $rawStd = trim($sm[1]);
+        $rawDiv = strtoupper(trim($sm[2]));
+    }
+    $normDob = rcNormalizeDateToMysql(trim((string)($_POST['dob'] ?? '')));
+
     $payload = [
-        'cert_serial'  => trim($_POST['cert_serial'] ?? '01'),
-        'gr_no'        => trim($_POST['gr_no'] ?? '3875'),
-        'academic_year'=> trim($_POST['academic_year'] ?? '2024-25'),
-        'roll_no'      => trim($_POST['roll_no'] ?? ''),
-        'student_name' => trim($_POST['student_name'] ?? ''),
-        'std'          => trim($_POST['std'] ?? ''),
-        'division'     => trim($_POST['division'] ?? ''),
-        'date_of_birth'=> !empty($_POST['dob']) ? trim($_POST['dob']) : null,
-        'purpose'      => trim($_POST['purpose'] ?? 'Educational Purpose'),
-        'issued_date'  => date('Y-m-d')
+        'cert_serial'   => $reqSerial,
+        'gr_no'         => $grNoIn,
+        'academic_year' => $ay,
+        'roll_no'       => trim((string)($_POST['roll_no'] ?? '')),
+        'student_name'  => $stuNameIn,
+        'std'           => $rawStd,
+        'division'      => $rawDiv,
+        'date_of_birth' => $normDob,
+        'caste'         => trim((string)($_POST['caste'] ?? '')),
+        'purpose'       => trim((string)($_POST['purpose'] ?? 'Educational Purpose')),
+        'issued_date'   => date('Y-m-d'),
     ];
     $ok = rcLogIssuedBonafide($payload, $adminUser);
-    header('Content-Type: application/json');
-    echo json_encode(['ok' => $ok]);
+    $verifyUrl = rcGetPublicBonafideUrl($grNoIn, $reqSerial);
+    echo json_encode([
+        'ok'          => $ok,
+        'cert_serial' => $reqSerial,
+        'gr_no'       => $grNoIn,
+        'verify_url'  => $verifyUrl,
+        'qr_svg'      => rcRenderQrSvgDataUri($verifyUrl),
+    ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
     exit;
 }
 
 /* ── Resolve target student from query string ── */
 $db = getDB();
 bonafideEnsureSettings();
+rcEnsureArchiveTables();
 $settings = getAllSettings();
 $schoolName  = $settings['school_name']  ?? 'HINDUSTANI COVENANT CHURCH HIGH SCHOOL & JUNIOR COLLEGE';
 if (trim($schoolName) === 'Hindustani Covenant Church High School') {
     $schoolName = 'HINDUSTANI COVENANT CHURCH HIGH SCHOOL & JUNIOR COLLEGE';
 }
-$schoolTagline = $settings['school_tagline'] ?? '';
+$schoolTagline = $settings['school_tagline'] ?? 'Excellence in Academic & Moral Education';
 $schoolLogo  = $settings['logo']          ?? 'assets/images/hcclogo.jpg';
 $schoolAddr  = $settings['contact_address'] ?? '';
+$activeYear  = rcGetActiveAcademicYear();
 $grNo        = $settings['gr_no']         ?? '3875';
-$certSerial  = $settings['cert_serial']   ?? '01';
 $principalNm = $settings['principal_name'] ?? 'PRINCIPAL';
 
 $classKey = trim($_GET['class'] ?? '');
 $rollNo   = trim($_GET['roll'] ?? '');
 $student  = null;
+$masterMatch = null;
 if ($classKey !== '' && $rollNo !== '') {
     foreach (rcListStudents(urldecode($classKey)) as $s) {
         if ((string)$s['roll_no'] === $rollNo) { $student = $s; break; }
     }
+} elseif (!empty($_GET['gr'])) {
+    $masterMatch = rcFindStudentByGR(trim((string)$_GET['gr']));
+    if ($masterMatch) $student = $masterMatch;
 }
+if ($student && !$masterMatch) {
+    $qLookup = !empty($student['gr_no']) ? (string)$student['gr_no'] : (string)($student['student_name'] ?? '');
+    if ($qLookup !== '') {
+        foreach (rcSearchStudentsMaster($qLookup, 5) as $sm) {
+            if (trim((string)($sm['roll_no'] ?? '')) === trim((string)($student['roll_no'] ?? ''))
+                || mb_strtoupper(trim((string)$sm['student_name'])) === mb_strtoupper(trim((string)$student['student_name']))) {
+                $masterMatch = $sm;
+                break;
+            }
+        }
+    }
+}
+if ($masterMatch && !empty($masterMatch['gr_no'])) {
+    $grNo = (string)$masterMatch['gr_no'];
+}
+
+$targetAy    = trim((string)($student['academic_year'] ?? '')) ?: $activeYear;
+$certSerial  = bonafideNextSerial($db, $targetAy);
 $allClasses = rcClassOptions();
 $classOptions = [];
 foreach ($allClasses as $ck) {
@@ -96,14 +302,22 @@ foreach ($allClasses as $ck) {
     $label = 'STD ' . $ck['std'] . ' ' . $ck['division'] . ' — ' . $ck['semester'] . ' (' . $ck['academic_year'] . ') — ' . ($ck['students'] ?? 0) . ' students';
     $classOptions[] = ['key' => $key, 'label' => $label];
 }
+$dobDigits = bonafideFormatDobDMY($student['date_of_birth'] ?? ($masterMatch['date_of_birth'] ?? ''));
 $defaults = [
-    'student_name' => $student['student_name'] ?? '',
-    'std_div'      => $student ? ('STD – ' . $student['std'] . ' – ' . $student['division']) : '',
-    'dob_digits'   => $student['date_of_birth'] ?? '',
-    'dob_words'    => dobToWords($student['date_of_birth'] ?? ''),
-    'academic_year'=> $student['academic_year'] ?? '',
-    'issue_date'   => date('d/m/Y'),
+    'student_name'  => $student['student_name'] ?? '',
+    'std_div'       => $student ? ('STD – ' . ($student['std'] ?? '') . ' – ' . ($student['division'] ?? '')) : '',
+    'std'           => $student['std'] ?? '',
+    'division'      => $student['division'] ?? '',
+    'roll_no'       => $student['roll_no'] ?? '',
+    'dob_digits'    => $dobDigits,
+    'dob_words'     => dobToWords($dobDigits),
+    'academic_year' => $targetAy,
+    'caste'         => $masterMatch['caste_category'] ?? ($student['caste_category'] ?? ''),
+    'parent_phone'  => $student['parent_phone'] ?? ($masterMatch['parent_phone'] ?? ''),
+    'issue_date'    => date('d/m/Y'),
 ];
+$publicBonafideUrl = rcGetPublicBonafideUrl($grNo, $certSerial);
+$certQrDataUri     = rcRenderQrSvgDataUri($publicBonafideUrl);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -286,6 +500,27 @@ $defaults = [
         .photo-ph { display: flex; flex-direction: column; align-items: center; gap: 6px; font-family: 'Inter',sans-serif; font-size: .66rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #94a3b8; }
         .photo-ph i { font-size: 1.1rem; }
 
+        /* Instant GR Lookup Bar & Results */
+        .instant-gr-bar { background: linear-gradient(135deg, #eef2ff 0%, #f8fafc 100%); border: 1px solid #c7d2fe; border-radius: 10px; padding: 12px; margin-bottom: 14px; }
+        .instant-gr-bar label { display: flex; align-items: center; gap: 6px; font-size: .7rem; font-weight: 800; color: var(--bf-brand); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 7px; }
+        .instant-gr-row { display: flex; gap: 6px; }
+        .instant-gr-row input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid #c7d2fe; border-radius: 8px; font-size: .82rem; font-weight: 600; background: #fff; color: var(--bf-ink); }
+        .instant-gr-row input:focus { outline: none; border-color: var(--bf-brand); box-shadow: 0 0 0 3px rgba(26,35,126,.12); }
+        .instant-gr-results { margin-top: 8px; max-height: 190px; overflow-y: auto; border: 1px solid #c7d2fe; border-radius: 8px; background: #fff; }
+        .instant-gr-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #eef2f7; cursor: pointer; font-size: .78rem; transition: background .12s; }
+        .instant-gr-item:last-child { border-bottom: none; }
+        .instant-gr-item:hover { background: #eef2ff; }
+        .instant-gr-item strong { display: block; color: var(--bf-ink); font-weight: 700; }
+        .instant-gr-item small { color: var(--bf-muted); font-size: .71rem; }
+
+        /* Compact QR Verification Seal inside Certificate */
+        .cert-qr-bar { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding-top: 10px; border-top: 1px dashed #cbd5e1; font-family: 'Inter', sans-serif; font-size: .72rem; color: #475569; position: relative; z-index: 1; }
+        .cert-qr-bar img { width: 52px; height: 52px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; padding: 2px; flex-shrink: 0; }
+        .cert-qr-info { flex: 1; min-width: 0; line-height: 1.4; }
+        .cert-qr-info strong { display: block; color: var(--bf-brand); font-size: .74rem; font-weight: 800; letter-spacing: .02em; }
+        .cert-qr-info a { color: #334155; text-decoration: none; font-weight: 600; word-break: break-all; }
+        .cert-qr-info a:hover { text-decoration: underline; }
+
         /* Editing affordances */
         .cert-sheet[data-mode="edit"] [data-editable] { border-radius: 4px; transition: background .12s, outline-color .12s; }
         .cert-sheet[data-mode="edit"] [data-editable]:hover { outline: 2px dashed #f59e0b; outline-offset: 3px; cursor: text; background: rgba(245,158,11,.06); }
@@ -354,6 +589,16 @@ $defaults = [
         <h2 class="panel-title">Bonafide Certificate</h2>
         <p class="panel-sub">Select a student, then edit any field. Untouched fields keep the auto-filled value.</p>
 
+        <!-- Instant GR / Student Auto-Fill -->
+        <div class="instant-gr-bar">
+            <label for="instantGrInput"><i class="fas fa-bolt"></i> Instant GR / Student Auto-Fill</label>
+            <div class="instant-gr-row">
+                <input type="text" id="instantGrInput" placeholder="Enter GR No. or Name..." autocomplete="off">
+                <button class="btn btn-primary" id="instantGrBtn" type="button" style="padding:7px 11px;font-size:.78rem;">Find</button>
+            </div>
+            <div class="instant-gr-results" id="instantGrResults" style="display:none;"></div>
+        </div>
+
         <!-- Step 1: pick student -->
         <div class="form-section" style="margin-top:0;">
             <h3><i class="fas fa-users"></i> Pick a student <span class="step-pill">Step 1</span></h3>
@@ -413,7 +658,7 @@ $defaults = [
             </div>
             <div class="form-group">
                 <label for="f_caste">Caste</label>
-                <input type="text" id="f_caste" value="" placeholder="e.g. Maratha">
+                <input type="text" id="f_caste" value="<?= htmlspecialchars($defaults['caste'], ENT_QUOTES) ?>" placeholder="e.g. Maratha">
             </div>
             <div class="form-group">
                 <label for="f_date">Issue date (dd/mm/yyyy)</label>
@@ -485,7 +730,7 @@ $defaults = [
                     <span data-editable="dob" class="cert-fill<?= empty($defaults['dob_digits']) ? ' is-blank' : '' ?>"><?= sanitize($defaults['dob_digits']) ?: '____' ?></span>.
                     (In words: <span data-editable="dobwords" class="cert-fill<?= empty($defaults['dob_words']) ? ' is-blank' : '' ?>"><?= sanitize($defaults['dob_words']) ?: '____' ?></span>.)
                     For <span data-editable="ay" class="cert-fill<?= empty($defaults['academic_year']) ? ' is-blank' : '' ?>"><?= sanitize($defaults['academic_year']) ?: '____' ?></span>.
-                    <br>Caste :- <span data-editable="caste" class="cert-fill is-blank">_______</span>
+                    <br>Caste :- <span data-editable="caste" class="cert-fill<?= empty($defaults['caste']) ? ' is-blank' : '' ?>"><?= sanitize($defaults['caste']) ?: '_______' ?></span>
                 </p>
             </div>
 
@@ -506,6 +751,14 @@ $defaults = [
                 </div>
             </div>
 
+            <div class="cert-qr-bar" id="certQrBar">
+                <img id="certQrImg" src="<?= e_attr($certQrDataUri) ?>" alt="Certificate Verification QR">
+                <div class="cert-qr-info">
+                    <strong><i class="fas fa-shield-halved"></i> Official Digital Verification &bull; GR <span id="certQrGr"><?= sanitize($grNo) ?></span> &bull; Sr. <span id="certQrSr"><?= sanitize($certSerial) ?></span></strong>
+                    <a id="certQrLink" href="<?= e_attr($publicBonafideUrl) ?>" target="_blank" rel="noopener">Scan QR to verify authenticity at HCC Public Registry</a>
+                </div>
+            </div>
+
         </div>
         <p class="cert-legend"><i class="fas fa-circle-info"></i> Hover over any highlighted element to edit it in place (when Edit-in-place is ON). Or use the form on the left.</p>
     </div>
@@ -522,9 +775,17 @@ $defaults = [
 <script src="<?= BASE_URL ?>assets/js/whatsapp-share.js?v=<?= filemtime(__DIR__ . '/../assets/js/whatsapp-share.js') ?>"></script>
 <script type="application/json" id="bonafideData">
     <?= json_encode([
-        'schoolName' => $schoolName,
-        'csrfToken'  => generateCSRFToken()
-    ], JSON_UNESCAPED_UNICODE) ?>
+        'schoolName'   => $schoolName,
+        'activeYear'   => $activeYear,
+        'csrfToken'    => generateCSRFToken(),
+        'verifyUrl'    => $publicBonafideUrl,
+        'initialMeta'  => [
+            'roll_no'      => $defaults['roll_no'],
+            'std'          => $defaults['std'],
+            'division'     => $defaults['division'],
+            'parent_phone' => $defaults['parent_phone'],
+        ],
+    ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>
 </script>
 <script src="<?= BASE_URL ?>assets/js/bonafide.js?v=<?= (is_file(__DIR__ . '/../assets/js/bonafide.js') ? filemtime(__DIR__ . '/../assets/js/bonafide.js') : 0) ?>"></script>
 <script src="<?= BASE_URL ?>assets/js/admin.js?v=<?= (is_file(__DIR__ . '/../assets/js/admin.js') ? filemtime(__DIR__ . '/../assets/js/admin.js') : 0) ?>"></script>

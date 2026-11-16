@@ -30,6 +30,14 @@ $input = json_decode(file_get_contents('php://input'), true);
 if (!is_array($input)) $input = $_POST;
 if (isset($input['action']) && $action === 'list') $action = (string)$input['action'];
 
+$mutatingActions = ['create', 'update', 'save_as_new', 'duplicate', 'delete', 'rename', 'send'];
+if (in_array($action, $mutatingActions, true)) {
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+        waJsonResponse(['success' => false, 'error' => 'Method not allowed'], 405);
+    }
+    waVerifyCSRF($input);
+}
+
 function waTplRow(array $r): array {
     $r['id'] = (int)$r['id'];
     $r['is_starter'] = (bool)$r['is_starter'];

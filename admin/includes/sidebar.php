@@ -38,7 +38,7 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High Schoo
             <img src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="<?= sanitize($schoolName) ?> logo">
             <div class="sidebar-brand-text">
                 <strong><?= sanitize($schoolName) ?></strong>
-                <span><i class="fa-solid fa-shield-halved"></i> Automation System</span>
+                <span><i class="fa-solid fa-shield-halved" aria-hidden="true"></i> Automation System</span>
             </div>
         </a>
     </div>
@@ -47,102 +47,121 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High Schoo
         <!-- 1. OVERVIEW -->
         <p class="sidebar-label">Overview</p>
         <a href="dashboard.php" <?= $adminPage === 'dashboard' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Dashboard">
-            <i class="fa-solid fa-chart-pie"></i>
+            <i class="fa-solid fa-fw fa-gauge-high" aria-hidden="true"></i>
             <span>Dashboard</span>
         </a>
 
         <!-- 2. UNIT TESTS -->
         <p class="sidebar-label">Unit Tests (I &ndash; IV)</p>
         <a href="unit_tests.php" <?= $adminPage === 'unit_tests' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Unit Test Results">
-            <i class="fa-solid fa-table-cells"></i>
+            <i class="fa-solid fa-fw fa-square-poll-vertical" aria-hidden="true"></i>
             <span>Unit Test Results</span>
         </a>
         <a href="unit_test_entry.php" <?= $adminPage === 'unit_test_entry' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Unit Test Entry">
-            <i class="fa-solid fa-user-pen"></i>
+            <i class="fa-solid fa-fw fa-file-pen" aria-hidden="true"></i>
             <span>Unit Test Entry</span>
         </a>
         <a href="import_unit_tests.php" <?= $adminPage === 'import_unit_tests' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Import Unit Tests">
-            <i class="fa-solid fa-file-arrow-up"></i>
+            <i class="fa-solid fa-fw fa-file-import" aria-hidden="true"></i>
             <span>Import Unit Tests</span>
         </a>
 
-        <!-- ACADEMIC SCHEDULE / EXAM TIMETABLE -->
+        <!-- 3. ACADEMIC SCHEDULE -->
         <p class="sidebar-label">Academic Schedule</p>
         <a href="timetable.php" <?= $adminPage === 'timetable' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Exam Timetable" data-badge="Builder">
-            <i class="fa-solid fa-calendar-days"></i>
+            <i class="fa-solid fa-fw fa-calendar-week" aria-hidden="true"></i>
             <span>Exam Timetable</span>
-            <span class="sidebar-badge" style="background:rgba(201,162,39,0.18);color:#c9a227;border:1px solid rgba(201,162,39,0.35);">Builder</span>
+            <span class="sidebar-badge gold">Builder</span>
+        </a>
+        <a href="exam_seating.php" <?= $adminPage === 'exam_seating' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Exam Seating Plan">
+            <i class="fa-solid fa-fw fa-chair" aria-hidden="true"></i>
+            <span>Exam Seating Plan</span>
+        </a>
+        <a href="substitute_allocator.php" <?= $adminPage === 'substitute_allocator' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Substitute Allocator">
+            <i class="fa-solid fa-fw fa-people-arrows" aria-hidden="true"></i>
+            <span>Substitute Allocator</span>
         </a>
 
-        <!-- 3. SEMESTER RESULTS -->
+        <!-- 4. DAILY OPERATIONS -->
+        <p class="sidebar-label">Daily Operations</p>
+        <a href="at_risk_radar.php" <?= $adminPage === 'at_risk_radar' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="At-Risk Radar">
+            <i class="fa-solid fa-fw fa-triangle-exclamation" aria-hidden="true"></i>
+            <span>At-Risk Radar</span>
+        </a>
+        <a href="parent_sign_chase.php" <?= $adminPage === 'parent_sign_chase' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Parent-Sign Chase">
+            <i class="fa-solid fa-fw fa-file-signature" aria-hidden="true"></i>
+            <span>Parent-Sign Chase</span>
+        </a>
+
+        <!-- 5. SEMESTER RESULTS -->
         <p class="sidebar-label">Semester Results</p>
         <a href="results.php" <?= $adminPage === 'results' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Results Matrix">
-            <i class="fa-solid fa-table-list"></i>
+            <i class="fa-solid fa-fw fa-table" aria-hidden="true"></i>
             <span>Results Matrix</span>
         </a>
         <a href="entry.php" <?= $adminPage === 'entry' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Student Marks Entry">
-            <i class="fa-solid fa-pen-to-square"></i>
+            <i class="fa-solid fa-fw fa-pen-to-square" aria-hidden="true"></i>
             <span>Student Marks Entry</span>
         </a>
         <a href="import_excel.php" <?= $adminPage === 'import_excel' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Import Semester Excel">
-            <i class="fa-solid fa-file-excel"></i>
+            <i class="fa-solid fa-fw fa-file-excel" aria-hidden="true"></i>
             <span>Import Semester Excel</span>
         </a>
 
-        <!-- 4. RECORDS & MANAGEMENT -->
-        <p class="sidebar-label">Records & Management</p>
+        <!-- 6. RECORDS & MANAGEMENT -->
+        <p class="sidebar-label">Records &amp; Management</p>
         <a href="promote_students.php" <?= $adminPage === 'promote_students' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Promote Students">
-            <i class="fa-solid fa-graduation-cap"></i>
+            <i class="fa-solid fa-fw fa-user-graduate" aria-hidden="true"></i>
             <span>Promote Students</span>
         </a>
         <a href="bonafide_certificate.php" <?= $adminPage === 'bonafide_certificate' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Bonafide Certificate">
-            <i class="fa-solid fa-certificate"></i>
+            <i class="fa-solid fa-fw fa-award" aria-hidden="true"></i>
             <span>Bonafide Certificate</span>
         </a>
         <a href="whatsapp_dispatch_log.php" <?= $adminPage === 'whatsapp_dispatch_log' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="WhatsApp Dispatch Log">
-            <i class="fa-solid fa-clock-rotate-left"></i>
+            <i class="fa-solid fa-fw fa-clock-rotate-left" aria-hidden="true"></i>
             <span>WhatsApp Dispatch Log</span>
         </a>
         <a href="records_archive.php" <?= $adminPage === 'records_archive' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Records Archive" data-badge="Vault">
-            <i class="fa-solid fa-box-archive"></i>
+            <i class="fa-solid fa-fw fa-box-archive" aria-hidden="true"></i>
             <span>Records Archive</span>
             <span class="sidebar-badge archive">Vault</span>
         </a>
 
-        <!-- 5. COMMUNICATION & ADMISSIONS -->
-        <p class="sidebar-label">Communication & Admissions</p>
+        <!-- 7. COMMUNICATION & ADMISSIONS -->
+        <p class="sidebar-label">Communication &amp; Admissions</p>
         <a href="whatsapp_share.php" <?= $adminPage === 'whatsapp_share' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="WhatsApp Hub" data-badge="Live">
-            <i class="fa-brands fa-whatsapp" style="color:#25D366;"></i>
+            <i class="fa-brands fa-fw fa-whatsapp" aria-hidden="true"></i>
             <span>WhatsApp Hub</span>
             <span class="sidebar-badge wa">Live</span>
         </a>
         <a href="admission_followups.php" <?= $adminPage === 'admission_followups' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Admission Follow-ups" data-badge="CRM">
-            <i class="fa-solid fa-headset" style="color:#10b981;"></i>
+            <i class="fa-solid fa-fw fa-phone-volume" aria-hidden="true"></i>
             <span>Admission Follow-ups</span>
-            <span class="sidebar-badge" style="background:#10b981;color:#fff;">CRM</span>
+            <span class="sidebar-badge crm">CRM</span>
         </a>
         <a href="admission_enquiries.php" <?= $adminPage === 'admission_enquiries' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Admission Enquiries" data-badge="Pipeline">
-            <i class="fa-solid fa-user-plus" style="color:#0ea5e9;"></i>
+            <i class="fa-solid fa-fw fa-envelope-open-text" aria-hidden="true"></i>
             <span>Admission Enquiries</span>
-            <span class="sidebar-badge" style="background:#e0f2fe;color:#0284c7;font-weight:700;">Pipeline</span>
+            <span class="sidebar-badge pipeline">Pipeline</span>
         </a>
 
-        <!-- 6. CLOUD WORKSPACE & SHARING -->
+        <!-- 8. CLOUD WORKSPACE -->
         <p class="sidebar-label">Cloud Workspace</p>
         <a href="shared_workspace.php" <?= $adminPage === 'shared_workspace' ? 'class="active" aria-current="page"' : '' ?> data-tooltip="Drive Workspace" data-badge="Drive">
-            <i class="fa-brands fa-google-drive" style="color:#4285F4;"></i>
+            <i class="fa-brands fa-fw fa-google-drive" aria-hidden="true"></i>
             <span>Drive Workspace</span>
-            <span class="sidebar-badge wa" style="background:#4285F4;">Drive</span>
+            <span class="sidebar-badge drive">Drive</span>
         </a>
     </nav>
 
     <div class="sidebar-footer">
-        <a href="change_password.php" class="sidebar-security<?= $adminPage === 'change_password' ? ' active' : '' ?>" title="Account Security & Password" data-tooltip="Account Security & Password"<?= $adminPage === 'change_password' ? ' aria-current="page"' : '' ?>>
-            <i class="fa-solid fa-key"></i>
+        <a href="change_password.php" class="sidebar-security<?= $adminPage === 'change_password' ? ' active' : '' ?>" title="Account Security &amp; Password" data-tooltip="Account Security &amp; Password"<?= $adminPage === 'change_password' ? ' aria-current="page"' : '' ?>>
+            <i class="fa-solid fa-fw fa-user-shield" aria-hidden="true"></i>
             <span>Security</span>
         </a>
         <a href="logout.php" class="sidebar-logout js-logout-trigger" id="sidebarLogoutBtn" title="Log out of admin session" data-tooltip="Log Out">
-            <i class="fa-solid fa-arrow-right-from-bracket"></i>
+            <i class="fa-solid fa-fw fa-arrow-right-from-bracket" aria-hidden="true"></i>
             <span>Log out</span>
         </a>
     </div>

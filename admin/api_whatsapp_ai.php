@@ -1,23 +1,25 @@
 <?php
 /**
  * HCC School WhatsApp Hub — Local AI Admission Assistant Backend API
- * 
+ *
  * Architecture:
  * Existing PHP backend -> MySQL -> Rust automation service (port 8085) -> Ollama local model -> PHP backend -> Existing WebUI
- * 
+ * Preserves Send-on-Press strictly (never auto-sends to WhatsApp).
+ *
  * Endpoints:
- *  - POST ?action=process_message
+ *  - POST ?action=process_message   (CSRF protected)
  *  - GET  ?action=get_draft
- *  - POST ?action=approve_draft
- *  - POST ?action=reject_draft
- *  - POST ?action=escalate_enquiry
+ *  - POST ?action=approve_draft     (CSRF protected, no auto-send)
+ *  - POST ?action=reject_draft      (CSRF protected)
+ *  - POST ?action=escalate_enquiry  (CSRF protected)
  *  - GET  ?action=list_enquiries
  *  - GET  ?action=service_status
- *  - POST ?action=simulate_enquiry
+ *  - POST ?action=simulate_enquiry  (CSRF protected)
  */
 
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/includes/whatsapp_functions.php';
+require_once __DIR__ . '/includes/admission_ai_review.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -33,7 +35,22 @@ if (!is_array($input)) {
     $input = $_POST;
 }
 
-$rustServiceBase = getenv('RUST_AI_SERVICE_URL') ?: 'http://127.0.0.1:8085';
+// Enforce POST + CSRF on all state-mutating actions
+$mutationActions = [
+    'process_message',
+    'approve_draft',
+    'reject_draft',
+    'escalate_enquiry',
+    'simulate_enquiry',
+];
+if (in_array($action, $mutationActions, true)) {
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+        waJsonResponse(['success' => false, 'error' => 'Method Not Allowed: POST required'], 405);
+    }
+    waVerifyCSRF($input);
+}
+
+$rustServiceBase = rtrim((string)(getenv('RUST_AI_SERVICE_URL') ?: 'http://127.0.0.1:8085'), '/');
 
 switch ($action) {
     case 'service_status':
@@ -73,17 +90,39 @@ switch ($action) {
 }
 
 /**
+ * Normalize phone digits without fabricating phone numbers from WhatsApp @lid opaque IDs
+ *
+ * @return array{phone:string,phone_e164:string}
+ */
+function normalizeWaChatPhone(?string $waChatId): array {
+    $raw = trim((string)$waChatId);
+    if ($raw === '' || str_contains($raw, '@lid') || str_contains($raw, '@g.us') || str_contains($raw, 'broadcast')) {
+        return ['phone' => '', 'phone_e164' => ''];
+    }
+    if (preg_match('/^(\d{10,15})@(?:c\.us|s\.whatsapp\.net)$/i', $raw, $m)) {
+        $digits = $m[1];
+        return ['phone' => $digits, 'phone_e164' => '+' . $digits];
+    }
+    $digits = preg_replace('/\D+/', '', $raw);
+    if (strlen($digits) >= 10 && strlen($digits) <= 15) {
+        return ['phone' => $digits, 'phone_e164' => '+' . $digits];
+    }
+    return ['phone' => '', 'phone_e164' => ''];
+}
+
+/**
  * Check health of Rust service and Ollama
  */
 function handleServiceStatus(string $rustBase): void {
     $ch = curl_init("{$rustBase}/api/health");
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => airAiServiceHeaders(['Accept: application/json']),
         CURLOPT_TIMEOUT => 4,
         CURLOPT_CONNECTTIMEOUT => 2,
     ]);
     $resp = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
     if ($httpCode === 200 && $resp) {
@@ -91,15 +130,15 @@ function handleServiceStatus(string $rustBase): void {
         waJsonResponse([
             'success' => true,
             'rust_service_online' => true,
-            'details' => $data
+            'details' => $data,
         ]);
     } else {
         waJsonResponse([
             'success' => true,
             'rust_service_online' => false,
-            'error' => "Rust automation service is not running on {$rustBase}. Please start it using 'cargo run --bin admission-ai-service' or target/release/admission-ai-service.",
+            'error' => "Rust automation service is not running on {$rustBase} (HTTP {$httpCode}). Please start target/release/admission-ai-service.",
             'target_platform' => 'Windows Intel CPU, 8 GB RAM, 500 GB storage',
-            'fallback_mode' => 'active'
+            'fallback_mode' => 'active',
         ]);
     }
 }
@@ -115,7 +154,6 @@ function handleProcessMessage(PDO $db, string $rustBase, array $input): void {
         waJsonResponse(['success' => false, 'error' => 'Valid chat_id is required'], 400);
     }
 
-    // 1. Retrieve Chat info
     $stmt = $db->prepare("SELECT * FROM whatsapp_chats WHERE id = ?");
     $stmt->execute([$chatId]);
     $chat = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -124,40 +162,36 @@ function handleProcessMessage(PDO $db, string $rustBase, array $input): void {
         waJsonResponse(['success' => false, 'error' => 'Chat not found'], 404);
     }
 
-    // 2. Retrieve parent contact details if linked
-    $parentPhone = preg_replace('/@.*$/', '', $chat['wa_chat_id']);
-    $parentName = $chat['name'];
+    $phoneMeta = normalizeWaChatPhone($chat['wa_chat_id'] ?? '');
+    $parentPhone = $phoneMeta['phone'];
+    $parentName = $chat['name'] ?? null;
 
-    // 3. Find current message to process
     if ($messageId) {
         $stmt = $db->prepare("SELECT * FROM whatsapp_messages WHERE id = ? AND chat_id = ?");
         $stmt->execute([$messageId, $chatId]);
         $currentMsg = $stmt->fetch(PDO::FETCH_ASSOC);
     } else {
-        // Last inbound message
         $stmt = $db->prepare("SELECT * FROM whatsapp_messages WHERE chat_id = ? AND from_me = 0 ORDER BY id DESC LIMIT 1");
         $stmt->execute([$chatId]);
         $currentMsg = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$currentMsg) {
-            // Any latest message
             $stmt = $db->prepare("SELECT * FROM whatsapp_messages WHERE chat_id = ? ORDER BY id DESC LIMIT 1");
             $stmt->execute([$chatId]);
             $currentMsg = $stmt->fetch(PDO::FETCH_ASSOC);
         }
     }
 
-    $messageText = $currentMsg['body'] ?? trim($input['message_text'] ?? '');
-    if (empty($messageText)) {
+    $messageText = trim((string)($currentMsg['body'] ?? ($input['message_text'] ?? '')));
+    if ($messageText === '') {
         waJsonResponse(['success' => false, 'error' => 'No message found to analyze for this chat'], 400);
     }
 
-    // 4. Retrieve conversation history context (last 8 messages)
     $stmt = $db->prepare("
-        SELECT from_me, sender_name, body, timestamp 
-        FROM whatsapp_messages 
-        WHERE chat_id = ? 
-        ORDER BY id DESC 
+        SELECT from_me, sender_name, body, timestamp
+        FROM whatsapp_messages
+        WHERE chat_id = ?
+        ORDER BY id DESC
         LIMIT 8
     ");
     $stmt->execute([$chatId]);
@@ -169,19 +203,18 @@ function handleProcessMessage(PDO $db, string $rustBase, array $input): void {
             'from_me' => (bool)$row['from_me'],
             'sender_name' => $row['sender_name'],
             'body' => (string)$row['body'],
-            'timestamp' => (int)$row['timestamp']
+            'timestamp' => (int)$row['timestamp'],
         ];
     }
 
-    // 5. Send request to Rust service
     $rustPayload = [
         'chat_id' => $chatId,
         'message_id' => $currentMsg['id'] ?? null,
-        'parent_phone' => $parentPhone,
+        'parent_phone' => $parentPhone !== '' ? $parentPhone : null,
         'parent_name' => $parentName,
         'current_message' => $messageText,
         'conversation_context' => $context,
-        'model' => $input['model'] ?? null
+        'model' => $input['model'] ?? null,
     ];
 
     $ch = curl_init("{$rustBase}/api/process");
@@ -189,11 +222,11 @@ function handleProcessMessage(PDO $db, string $rustBase, array $input): void {
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => json_encode($rustPayload),
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_HTTPHEADER => airAiServiceHeaders(['Content-Type: application/json', 'Accept: application/json']),
         CURLOPT_TIMEOUT => 45,
     ]);
     $rustResponse = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
     $draftData = null;
@@ -201,13 +234,11 @@ function handleProcessMessage(PDO $db, string $rustBase, array $input): void {
         $draftData = json_decode($rustResponse, true);
     }
 
-    // If Rust service is unreachable, execute deterministic fallback locally
     if (!$draftData || empty($draftData['intent'])) {
         $draftData = generateLocalPhpFallbackDraft($chat, $messageText, $context);
     }
 
-    // 6. Save Draft to Database
-    $enquiryId = getOrCreateEnquiry($db, $chatId, $parentPhone, $parentName, $draftData);
+    $enquiryId = getOrCreateEnquiry($db, $chatId, $phoneMeta, $parentName, $draftData, $messageText);
 
     $insDraft = $db->prepare("
         INSERT INTO `admission_ai_drafts` (
@@ -236,21 +267,19 @@ function handleProcessMessage(PDO $db, string $rustBase, array $input): void {
         json_encode($draftData['missing_information'] ?? []),
         !empty($draftData['escalation_required']) ? 1 : 0,
         $draftData['escalation_reason'] ?? null,
-        $input['model'] ?? 'llama3.2:1b'
+        $input['model'] ?? 'llama3.2:1b',
     ]);
 
     $draftId = (int)$db->lastInsertId();
 
-    // 7. Update chat flags
     $db->prepare("
-        UPDATE `whatsapp_chats` 
-        SET `is_admission_enquiry` = 1, 
+        UPDATE `whatsapp_chats`
+        SET `is_admission_enquiry` = 1,
             `latest_ai_draft_id` = ?,
             `updated_at` = NOW()
         WHERE `id` = ?
     ")->execute([$draftId, $chatId]);
 
-    // 8. Return structured JSON exactly matching specification
     waJsonResponse([
         'success' => true,
         'draft_id' => $draftId,
@@ -266,7 +295,7 @@ function handleProcessMessage(PDO $db, string $rustBase, array $input): void {
         'escalation_required' => (bool)$draftData['escalation_required'],
         'escalation_reason' => $draftData['escalation_reason'],
         'admin_status' => 'pending',
-        'approval_required' => true
+        'approval_required' => true,
     ]);
 }
 
@@ -280,9 +309,9 @@ function handleGetDraft(PDO $db): void {
     }
 
     $stmt = $db->prepare("
-        SELECT * FROM `admission_ai_drafts` 
-        WHERE `chat_id` = ? 
-        ORDER BY `id` DESC 
+        SELECT * FROM `admission_ai_drafts`
+        WHERE `chat_id` = ?
+        ORDER BY `id` DESC
         LIMIT 1
     ");
     $stmt->execute([$chatId]);
@@ -310,19 +339,18 @@ function handleGetDraft(PDO $db): void {
         'escalation_reason' => $draft['escalation_reason'],
         'admin_status' => $draft['admin_status'],
         'model_used' => $draft['model_used'],
-        'created_at' => $draft['created_at']
+        'created_at' => $draft['created_at'],
     ]);
 }
 
 /**
  * Approve AI draft (stores approval only — NEVER sends WhatsApp)
- * Copy final_message into the hub and press Send to deliver.
+ * Copy final_message into the hub composer and press Send to deliver.
  */
 function handleApproveDraft(PDO $db, array $input, ?array $auth): void {
     $draftId = (int)($input['draft_id'] ?? 0);
     $chatId = (int)($input['chat_id'] ?? 0);
-    $editedText = trim($input['edited_text'] ?? '');
-    // AI approve never sends. User must press Send in the hub with the text.
+    $editedText = trim((string)($input['edited_text'] ?? ''));
 
     if ($draftId <= 0 && $chatId <= 0) {
         waJsonResponse(['success' => false, 'error' => 'draft_id or chat_id is required'], 400);
@@ -341,12 +369,11 @@ function handleApproveDraft(PDO $db, array $input, ?array $auth): void {
         waJsonResponse(['success' => false, 'error' => 'Draft not found'], 404);
     }
 
-    $finalMessageText = $editedText !== '' ? $editedText : $draft['response_draft'];
-    $adminId = $auth['admin_id'] ?? 1;
+    $finalMessageText = $editedText !== '' ? $editedText : (string)$draft['response_draft'];
+    $adminId = (int)($auth['admin_id'] ?? 1);
 
-    // Update draft status
     $upDraft = $db->prepare("
-        UPDATE `admission_ai_drafts` 
+        UPDATE `admission_ai_drafts`
         SET `admin_status` = 'approved',
             `admin_edited_response` = ?,
             `approved_by` = ?,
@@ -356,20 +383,19 @@ function handleApproveDraft(PDO $db, array $input, ?array $auth): void {
     ");
     $upDraft->execute([$editedText !== '' ? $editedText : null, $adminId, $draft['id']]);
 
-    // Update enquiry record
+    // Update canonical admission_enquiries status (NEW -> INFORMATION_SHARED, preserving other progress)
     if (!empty($draft['enquiry_id'])) {
         $db->prepare("
             UPDATE `admission_enquiries`
-            SET `status` = 'approved_sent',
+            SET `status` = IF(`status` = 'NEW', 'INFORMATION_SHARED', `status`),
                 `assigned_staff_id` = ?,
+                `suggested_message` = ?,
                 `updated_at` = NOW()
             WHERE `id` = ?
-        ")->execute([$adminId, $draft['enquiry_id']]);
+        ")->execute([$adminId, $finalMessageText, $draft['enquiry_id']]);
     }
 
-    // Never enqueue to WhatsApp from AI. Return the text; user presses Send in the hub.
     waJsonResponse([
-
         'success' => true,
         'draft_id' => (int)$draft['id'],
         'status' => 'approved',
@@ -377,7 +403,7 @@ function handleApproveDraft(PDO $db, array $input, ?array $auth): void {
         'sent_immediately' => false,
         'outbound_queue_id' => null,
         'sent_message_id' => null,
-        'note' => 'AI never sends. Copy the text into the hub compose box and press Send.'
+        'note' => 'AI never sends. Copy the text into the hub compose box and press Send.',
     ]);
 }
 
@@ -397,40 +423,86 @@ function handleRejectDraft(PDO $db, array $input, ?array $auth): void {
 }
 
 /**
- * Escalate an enquiry to office staff
+ * Escalate an enquiry to office staff using canonical schema fields
  */
 function handleEscalateEnquiry(PDO $db, array $input, ?array $auth): void {
     $chatId = (int)($input['chat_id'] ?? 0);
     $enquiryId = (int)($input['enquiry_id'] ?? 0);
-    $reason = trim($input['reason'] ?? 'Escalated by administrator for in-person office handling');
+    $reason = trim((string)($input['reason'] ?? 'Escalated by administrator for in-person office handling'));
+    if ($reason === '') {
+        $reason = 'Escalated by administrator for in-person office handling';
+    }
+
+    if ($enquiryId <= 0 && $chatId <= 0) {
+        waJsonResponse(['success' => false, 'error' => 'enquiry_id or chat_id is required'], 400);
+    }
 
     if ($enquiryId > 0) {
         $db->prepare("
-            UPDATE `admission_enquiries` 
-            SET `escalation_required` = 1, `escalation_reason` = ?, `status` = 'escalated', `updated_at` = NOW() 
+            UPDATE `admission_enquiries`
+            SET `priority` = 'urgent',
+                `followup_reason` = ?,
+                `status` = IF(`status` = 'NEW', 'CONTACTED', `status`),
+                `notes` = TRIM(CONCAT(COALESCE(`notes`, ''), IF(COALESCE(`notes`, '') = '', '', '\n'), '[Escalated] ', ?)),
+                `updated_at` = NOW()
             WHERE `id` = ?
+        ")->execute([mb_substr($reason, 0, 250), $reason, $enquiryId]);
+
+        $db->prepare("
+            UPDATE `admission_ai_drafts`
+            SET `escalation_required` = 1, `escalation_reason` = ?, `updated_at` = NOW()
+            WHERE `enquiry_id` = ?
         ")->execute([$reason, $enquiryId]);
     } elseif ($chatId > 0) {
         $db->prepare("
-            UPDATE `admission_enquiries` 
-            SET `escalation_required` = 1, `escalation_reason` = ?, `status` = 'escalated', `updated_at` = NOW() 
+            UPDATE `admission_enquiries`
+            SET `priority` = 'urgent',
+                `followup_reason` = ?,
+                `status` = IF(`status` = 'NEW', 'CONTACTED', `status`),
+                `notes` = TRIM(CONCAT(COALESCE(`notes`, ''), IF(COALESCE(`notes`, '') = '', '', '\n'), '[Escalated] ', ?)),
+                `updated_at` = NOW()
+            WHERE `chat_id` = ?
+        ")->execute([mb_substr($reason, 0, 250), $reason, $chatId]);
+
+        $db->prepare("
+            UPDATE `admission_ai_drafts`
+            SET `escalation_required` = 1, `escalation_reason` = ?, `updated_at` = NOW()
             WHERE `chat_id` = ?
         ")->execute([$reason, $chatId]);
     }
 
-    waJsonResponse(['success' => true, 'status' => 'escalated', 'reason' => $reason]);
+    waJsonResponse(['success' => true, 'status' => 'escalated', 'priority' => 'urgent', 'reason' => $reason]);
 }
 
 /**
- * List recent enquiries and AI drafts
+ * List recent enquiries and AI drafts using canonical admission_enquiries columns
  */
 function handleListEnquiries(PDO $db): void {
     $stmt = $db->prepare("
-        SELECT 
-            e.id as enquiry_id, e.chat_id, e.parent_phone, e.parent_name, e.student_name,
-            e.target_grade, e.primary_intent, e.status, e.escalation_required, e.escalation_reason,
-            d.id as draft_id, d.confidence, d.response_draft, d.admin_status, d.created_at as draft_created_at,
-            c.wa_chat_id, c.name as chat_name
+        SELECT
+            e.id as enquiry_id,
+            e.chat_id,
+            e.phone_number,
+            e.phone_e164,
+            COALESCE(NULLIF(e.phone_number, ''), NULLIF(e.phone_e164, ''), '') as parent_phone,
+            e.parent_name,
+            e.student_name,
+            e.interested_class,
+            e.interested_class as target_grade,
+            COALESCE(d.intent, e.followup_category, 'Admission enquiry') as primary_intent,
+            e.status,
+            e.priority,
+            e.followup_category,
+            e.next_followup_date,
+            COALESCE(d.escalation_required, IF(e.priority = 'urgent', 1, 0)) as escalation_required,
+            COALESCE(d.escalation_reason, IF(e.priority = 'urgent', e.followup_reason, NULL)) as escalation_reason,
+            d.id as draft_id,
+            d.confidence,
+            d.response_draft,
+            d.admin_status,
+            d.created_at as draft_created_at,
+            c.wa_chat_id,
+            c.name as chat_name
         FROM `admission_enquiries` e
         LEFT JOIN `admission_ai_drafts` d ON d.id = (
             SELECT MAX(id) FROM `admission_ai_drafts` WHERE enquiry_id = e.id
@@ -450,7 +522,7 @@ function handleListEnquiries(PDO $db): void {
  */
 function handleSimulateEnquiry(PDO $db, string $rustBase, array $input): void {
     $chatId = (int)($input['chat_id'] ?? 1);
-    $intent = trim($input['intent'] ?? 'Admission enquiry');
+    $intent = trim((string)($input['intent'] ?? 'Admission enquiry'));
 
     $simulationTemplates = [
         'Admission enquiry' => "Hello, I am Suresh Patil. I want to inquire about new admissions for Academic Year 2026-2027.",
@@ -465,12 +537,11 @@ function handleSimulateEnquiry(PDO $db, string $rustBase, array $input): void {
         'Campus visit' => "We would like to visit the HCC campus to meet the teachers and see the classrooms. What are the visitor timings?",
         'Application process' => "What is the step-by-step application procedure to register for admission?",
         'Admission follow-up' => "Good morning, I submitted the admission registration form for my son Rohan Patil last week. Could you update me on the status?",
-        'General enquiry' => "Respected Sir, please share the official admission prospectus and school contact numbers for admission enquiries."
+        'General enquiry' => "Respected Sir, please share the official admission prospectus and school contact numbers for admission enquiries.",
     ];
 
     $chosenText = $simulationTemplates[$intent] ?? $simulationTemplates['Admission enquiry'];
 
-    // 1. Insert as inbound message
     $waMsgId = 'sim_adm_' . time() . '_' . bin2hex(random_bytes(3));
     $now = time();
     $insMsg = $db->prepare("
@@ -485,9 +556,8 @@ function handleSimulateEnquiry(PDO $db, string $rustBase, array $input): void {
     $insMsg->execute([$waMsgId, $chatId, $chosenText, $now]);
     $msgId = (int)$db->lastInsertId();
 
-    // 2. Update chat
     $db->prepare("
-        UPDATE `whatsapp_chats` 
+        UPDATE `whatsapp_chats`
         SET `unread_count` = `unread_count` + 1,
             `last_message_id` = ?,
             `last_activity_at` = NOW(),
@@ -495,61 +565,96 @@ function handleSimulateEnquiry(PDO $db, string $rustBase, array $input): void {
         WHERE `id` = ?
     ")->execute([$msgId, $chatId]);
 
-    // 3. Immediately trigger AI process
     $processInput = [
         'chat_id' => $chatId,
         'message_id' => $msgId,
-        'message_text' => $chosenText
+        'message_text' => $chosenText,
     ];
 
     handleProcessMessage($db, $rustBase, $processInput);
 }
 
 /**
- * Get or create enquiry record
+ * Get or create enquiry record aligned cleanly with canonical admission_enquiries schema
  */
-function getOrCreateEnquiry(PDO $db, int $chatId, string $parentPhone, ?string $parentName, array $draftData): int {
-    $stmt = $db->prepare("SELECT id FROM `admission_enquiries` WHERE `chat_id` = ? ORDER BY id DESC LIMIT 1");
+function getOrCreateEnquiry(
+    PDO $db,
+    int $chatId,
+    array $phoneMeta,
+    ?string $parentName,
+    array $draftData,
+    string $messageText
+): int {
+    $stmt = $db->prepare("SELECT id, suggested_message FROM `admission_enquiries` WHERE `chat_id` = ? ORDER BY id DESC LIMIT 1");
     $stmt->execute([$chatId]);
-    $existing = $stmt->fetchColumn();
+    $existingRow = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    $studentName = $draftData['extracted_student_details']['name'] ?? null;
-    $targetGrade = $draftData['extracted_student_details']['grade_applying_for'] ?? null;
-    $primaryIntent = $draftData['intent'] ?? 'Admission enquiry';
-    $escalationReq = !empty($draftData['escalation_required']) ? 1 : 0;
-    $escalationReason = $draftData['escalation_reason'] ?? null;
+    $studentName = trim((string)($draftData['extracted_student_details']['name'] ?? ''));
+    $interestedClass = trim((string)($draftData['extracted_student_details']['grade_applying_for'] ?? ''));
+    $primaryIntent = trim((string)($draftData['intent'] ?? 'Admission enquiry'));
+    $escalationReq = !empty($draftData['escalation_required']);
+    $escalationReason = trim((string)($draftData['escalation_reason'] ?? ''));
+    $draftText = trim((string)($draftData['response_draft'] ?? ''));
+    $cleanParent = trim((string)($parentName ?? ($draftData['extracted_parent_details']['name'] ?? '')));
+    if ($cleanParent === '') {
+        $cleanParent = 'Parent';
+    }
 
-    if ($existing) {
+    if ($existingRow) {
+        $existingId = (int)$existingRow['id'];
+        $existingSuggested = trim((string)($existingRow['suggested_message'] ?? ''));
+        $nextSuggested = $existingSuggested !== '' ? $existingSuggested : $draftText;
+
         $up = $db->prepare("
             UPDATE `admission_enquiries`
-            SET `primary_intent` = ?,
-                `target_grade` = COALESCE(?, `target_grade`),
-                `student_name` = COALESCE(?, `student_name`),
-                `escalation_required` = ?,
-                `escalation_reason` = ?,
-                `status` = 'ai_drafted',
-                `last_message_at` = NOW(),
+            SET `interested_class` = IF(COALESCE(`interested_class`, '') IN ('', 'Not specified') AND ? != '', ?, `interested_class`),
+                `student_name` = COALESCE(NULLIF(?, ''), `student_name`),
+                `suggested_message` = COALESCE(NULLIF(?, ''), `suggested_message`),
+                `priority` = IF(? = 1 AND `priority` != 'urgent', 'high', `priority`),
+                `followup_reason` = COALESCE(NULLIF(?, ''), `followup_reason`),
+                `last_inbound_at` = NOW(),
                 `updated_at` = NOW()
             WHERE `id` = ?
         ");
-        $up->execute([$primaryIntent, $targetGrade, $studentName, $escalationReq, $escalationReason, $existing]);
-        return (int)$existing;
+        $up->execute([
+            $interestedClass,
+            $interestedClass,
+            $studentName,
+            $nextSuggested,
+            $escalationReq ? 1 : 0,
+            $escalationReason !== '' ? mb_substr($escalationReason, 0, 250) : null,
+            $existingId,
+        ]);
+        return $existingId;
     }
 
     $ins = $db->prepare("
         INSERT INTO `admission_enquiries` (
-            `chat_id`, `parent_phone`, `parent_name`, `student_name`, `target_grade`,
-            `primary_intent`, `status`, `escalation_required`, `escalation_reason`,
-            `last_message_at`, `created_at`
+            `parent_name`, `phone_number`, `phone_e164`, `student_name`, `interested_class`,
+            `academic_year`, `original_message`, `enquiry_source`, `notes`, `status`,
+            `chat_id`, `followup_category`, `next_followup_date`, `next_followup_time`,
+            `followup_reason`, `priority`, `suggested_message`, `last_inbound_at`,
+            `created_at`, `updated_at`
         ) VALUES (
             ?, ?, ?, ?, ?,
-            ?, 'ai_drafted', ?, ?,
+            '2026-2027', ?, 'whatsapp', ?, 'NEW',
+            ?, 'First response pending', CURDATE(), '10:00:00',
+            ?, ?, ?, NOW(),
             NOW(), NOW()
         )
     ");
     $ins->execute([
-        $chatId, $parentPhone, $parentName, $studentName, $targetGrade,
-        $primaryIntent, $escalationReq, $escalationReason
+        $cleanParent,
+        $phoneMeta['phone'],
+        $phoneMeta['phone_e164'],
+        $studentName !== '' ? $studentName : null,
+        $interestedClass !== '' ? $interestedClass : 'Not specified',
+        $messageText,
+        $primaryIntent !== '' ? "AI Intent: {$primaryIntent}" : null,
+        $chatId,
+        $escalationReason !== '' ? mb_substr($escalationReason, 0, 250) : ($primaryIntent ?: 'AI Admission Enquiry'),
+        $escalationReq ? 'high' : 'medium',
+        $draftText !== '' ? $draftText : null,
     ]);
 
     return (int)$db->lastInsertId();
@@ -565,7 +670,6 @@ function generateLocalPhpFallbackDraft(array $chat, string $message, array $cont
     $sources = ['Admission Prospectus 2026-2027'];
     $grade = null;
 
-    // Detect grade
     if (preg_match('/\b(nursery|lkg|ukg)\b/i', $lower, $m)) {
         $grade = ucfirst(strtolower($m[1]));
     } elseif (preg_match('/\b(?:grade|class|standard|std)\s*([1-9]|10)\b/i', $lower, $m) || preg_match('/\b([1-9]|10)(?:st|nd|rd|th)?\s*(?:grade|class|standard|std)\b/i', $lower, $m)) {
@@ -621,29 +725,30 @@ function generateLocalPhpFallbackDraft(array $chat, string $message, array $cont
             . "You will be able to view our smart classrooms, science and computer labs, library, and sports grounds. Kindly carry a photo ID for visitor pass issuance at the security gate.";
     } else {
         $body = "Thank you for contacting Hindustani Covenant Church High School, Solapur. Admissions for the 2026-2027 academic session are currently open from Pre-Primary through Grade 10.\n\n"
-            . "Our admission office is open Monday to Saturday from 09:00 AM to 03:30 PM. For any assistance, please feel free to call our helpline at +91 217 000 0000 or visit our office near Old Pune Naka, Solapur.";
+            . "Our admission office is open Monday to Saturday from 09:00 AM to 03:30 PM. For any assistance, please feel free to visit our office near Old Pune Naka, Solapur.";
     }
 
     $parentSalutation = !empty($chat['name']) ? "Respected {$chat['name']}" : "Respected Parent";
-    $fullDraft = "{$parentSalutation},\n\n{$body}\n\nWarm regards,\nAdmission Office\nHindustani Covenant Church High School, Solapur\nHelpline: +91 217 000 0000 | WhatsApp: +91 98016 60000";
+    $phoneMeta = normalizeWaChatPhone($chat['wa_chat_id'] ?? '');
+    $fullDraft = "{$parentSalutation},\n\n{$body}\n\nWarm regards,\nAdmission Office\nHindustani Covenant Church High School, Solapur";
 
     return [
         'intent' => $intent,
         'confidence' => 0.95,
         'extracted_parent_details' => [
             'name' => $chat['name'] ?? null,
-            'phone' => preg_replace('/@.*$/', '', $chat['wa_chat_id'] ?? '')
+            'phone' => $phoneMeta['phone'] !== '' ? $phoneMeta['phone'] : null,
         ],
         'extracted_student_details' => [
             'name' => null,
             'grade_applying_for' => $grade,
             'academic_year' => '2026-2027',
-            'current_school' => null
+            'current_school' => null,
         ],
         'relevant_knowledge_sources' => $sources,
         'response_draft' => $fullDraft,
         'missing_information' => $grade ? [] : ["Target grade or standard not specified"],
         'escalation_required' => false,
-        'escalation_reason' => null
+        'escalation_reason' => null,
     ];
 }

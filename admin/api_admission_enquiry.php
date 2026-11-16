@@ -13,6 +13,7 @@
  */
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/includes/whatsapp_functions.php';
+require_once __DIR__ . '/includes/admission_ai_review.php';
 require_once __DIR__ . '/auth_check.php';
 
 // Ensure user is authenticated (admin or editor)
@@ -29,9 +30,8 @@ $action = trim($_GET['action'] ?? ($_POST['action'] ?? ''));
 
 // Helper function to validate CSRF on POST actions
 function checkApiCSRF(): void {
-    if (!verifyCSRFToken()) {
-        waJsonResponse(['success' => false, 'error' => 'Security token invalid or expired. Please refresh the page.'], 403);
-    }
+    $jsonBody = json_decode((string)file_get_contents('php://input'), true);
+    waVerifyCSRF(is_array($jsonBody) ? $jsonBody : null);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -368,7 +368,7 @@ function hccCallRustDraft(array $enquiry): array {
     curl_setopt_array($ch, [
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
-        CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json'],
+        CURLOPT_HTTPHEADER => airAiServiceHeaders(['Content-Type: application/json', 'Accept: application/json']),
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_CONNECTTIMEOUT => 2,
         CURLOPT_TIMEOUT => 75,
@@ -866,7 +866,7 @@ if ($action === 'create' || ($_SERVER['REQUEST_METHOD'] === 'POST' && $action ==
             $contactId = (int)$cId;
             $db->prepare("UPDATE whatsapp_contacts SET name = COALESCE(name, ?), updated_at = NOW() WHERE id = ?")->execute([$parentName, $contactId]);
         } else {
-            $avatarUrl = "https://api.dicebear.com/7.x/initials/svg?seed=" . urlencode($parentName);
+            $avatarUrl = null;
             $insC = $db->prepare("
                 INSERT INTO whatsapp_contacts (wa_id, phone_e164, name, push_name, avatar_url, source, linked_student_roll, linked_class_key, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, 'manual', ?, ?, NOW(), NOW())
@@ -899,7 +899,7 @@ if ($action === 'create' || ($_SERVER['REQUEST_METHOD'] === 'POST' && $action ==
                 WHERE id = ?
             ")->execute([json_encode($mergedMeta, JSON_UNESCAPED_UNICODE), $parentName, $chatId]);
         } else {
-            $avatarUrl = "https://api.dicebear.com/7.x/initials/svg?seed=" . urlencode($parentName);
+            $avatarUrl = null;
             $insCh = $db->prepare("
                 INSERT INTO whatsapp_chats 
                 (wa_chat_id, chat_type, name, avatar_url, is_pinned, unread_count, metadata, linked_student_roll, linked_class_key, last_activity_at, created_at, updated_at)
@@ -1081,8 +1081,12 @@ if ($action === 'update_status') {
 
 // Action: generate_ai_draft
 if ($action === 'generate_ai_draft') {
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+        waJsonResponse(['success' => false, 'error' => 'Method not allowed'], 405);
+    }
+    checkApiCSRF();
     $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
-    $id = (int)($input['id'] ?? ($_GET['id'] ?? 0));
+    $id = (int)($input['id'] ?? 0);
 
     $enquiryData = [];
     if ($id > 0) {
@@ -1383,8 +1387,16 @@ if ($action === 'export_csv') {
         'Interested Class', 'Academic Year', 'Source', 'Status', 'Assigned Staff',
         'Matched Student Roll', 'Matched Class', 'Created By', 'Created At'
     ]);
+    $csvCell = static function ($value): string {
+        $s = (string)($value ?? '');
+        $trimmed = ltrim($s);
+        if ($trimmed !== '' && strpbrk($trimmed[0], "=+-@\t\r") !== false) {
+            return "'" . $s;
+        }
+        return $s;
+    };
     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        fputcsv($out, [
+        fputcsv($out, array_map($csvCell, [
             $row['id'],
             $row['parent_name'],
             $row['phone_number'],
@@ -1399,7 +1411,7 @@ if ($action === 'export_csv') {
             $row['matched_student_class'] ?? '—',
             $row['created_by_name'] ?? '—',
             $row['created_at']
-        ]);
+        ]));
     }
     fclose($out);
     exit;

@@ -180,6 +180,34 @@ if (!function_exists('airValidateModelJson')) {
     }
 }
 
+if (!function_exists('airAiServiceSecret')) {
+    /** Return shared secret for local Rust admission-ai-service (:8085) if configured. */
+    function airAiServiceSecret(): string {
+        if (defined('AI_SERVICE_SECRET') && is_string(AI_SERVICE_SECRET) && AI_SERVICE_SECRET !== '') {
+            return AI_SERVICE_SECRET;
+        }
+        $envSecret = getenv('AI_SERVICE_SECRET');
+        if (is_string($envSecret) && trim($envSecret) !== '') {
+            return trim($envSecret);
+        }
+        if (defined('JWT_SECRET') && is_string(JWT_SECRET) && strlen(JWT_SECRET) >= 16) {
+            return hash_hmac('sha256', 'admission-ai-service', JWT_SECRET);
+        }
+        return '';
+    }
+}
+
+if (!function_exists('airAiServiceHeaders')) {
+    /** @param string[] $headers */
+    function airAiServiceHeaders(array $headers = []): array {
+        $secret = airAiServiceSecret();
+        if ($secret !== '') {
+            $headers[] = 'X-AI-Service-Secret: ' . $secret;
+        }
+        return $headers;
+    }
+}
+
 if (!function_exists('airDiscoverLocalAi')) {
     /** @return array{ollama:bool,models:array,service:bool,service_url:string,default_model:string,error?:string} */
     function airDiscoverLocalAi(): array {
@@ -218,7 +246,12 @@ if (!function_exists('airDiscoverLocalAi')) {
             }
         }
         $ch = curl_init($serviceUrl . '/api/health');
-        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 3, CURLOPT_CONNECTTIMEOUT => 2]);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 3,
+            CURLOPT_CONNECTTIMEOUT => 2,
+            CURLOPT_HTTPHEADER => airAiServiceHeaders(['Accept: application/json']),
+        ]);
         $resp = curl_exec($ch);
         $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
@@ -367,8 +400,26 @@ if (!function_exists('airEnsureReviewSchema')) {
         if ($done) return;
         $done = true;
         $exists = $db->query("SHOW TABLES LIKE 'admission_ai_review_drafts'")->fetchColumn();
-        if ($exists) return;
-        $sql = file_get_contents(__DIR__ . '/../../data/migrations/create_admission_ai_review_drafts.sql');
-        if ($sql) $db->exec($sql);
+        if (!$exists) {
+            $sql = file_get_contents(__DIR__ . '/../../data/migrations/create_admission_ai_review_drafts.sql');
+            if ($sql) $db->exec($sql);
+        }
+        try {
+            $cols = $db->query("SHOW COLUMNS FROM admission_ai_review_drafts")->fetchAll(PDO::FETCH_COLUMN);
+            if (!in_array('analysis_engine', $cols, true)) {
+                $db->exec("ALTER TABLE admission_ai_review_drafts ADD COLUMN analysis_engine VARCHAR(20) NULL DEFAULT 'local' AFTER model_used");
+            }
+            if (!in_array('analysis_provider', $cols, true)) {
+                $db->exec("ALTER TABLE admission_ai_review_drafts ADD COLUMN analysis_provider VARCHAR(40) NULL DEFAULT NULL AFTER analysis_engine");
+            }
+            if (!in_array('analysis_model', $cols, true)) {
+                $db->exec("ALTER TABLE admission_ai_review_drafts ADD COLUMN analysis_model VARCHAR(120) NULL DEFAULT NULL AFTER analysis_provider");
+            }
+            if (!in_array('analysis_endpoint_host', $cols, true)) {
+                $db->exec("ALTER TABLE admission_ai_review_drafts ADD COLUMN analysis_endpoint_host VARCHAR(255) NULL DEFAULT NULL AFTER analysis_model");
+            }
+        } catch (Throwable $e) {
+            // Non-fatal if table columns were already reconciled
+        }
     }
 }

@@ -3,6 +3,8 @@
  * HCC WhatsApp Replica — Database Migration
  * Run once to create all required tables
  */
+if (PHP_SAPI !== 'cli') { http_response_code(403); exit('CLI only'); }
+
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../config/database.php';
 

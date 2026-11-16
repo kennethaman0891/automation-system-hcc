@@ -108,6 +108,7 @@
                 roll: stObj.roll,
                 className: meta.className,
                 semester: meta.semester,
+                academicYear: meta.academicYear,
                 obtained: stObj.obtained,
                 maxTotal: stObj.max_total,
                 percentage: stObj.pct,
@@ -118,32 +119,70 @@
                 customNote: ''
             });
 
-            window.HCCWhatsApp.openModal({
-                studentName: stObj.name,
-                roll: stObj.roll,
-                className: meta.className,
-                classKey: d.class,
-                phone: savedPhone,
-                messageText: msg,
-                onAutoSend: function (phone, message, done) {
-                    try { localStorage.setItem(phoneKey, phone); } catch (_) {}
-                    fetch('api_save_phone.php', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ class_key: d.class, roll: d.roll, phone: phone, table: 'report_card' })
-                    }).then(function (r) { return r.json(); }).then(function (res) {
-                        if (res && res.success) { btn.dataset.phone = phone; }
-                    }).catch(function (err) { console.warn('Phone save failed:', err); });
+            function persistPhone(phone) {
+                if (!phone) return;
+                try { localStorage.setItem(phoneKey, phone); } catch (_) {}
+                const csrfEl = document.querySelector('input[name="csrf_token"]');
+                const csrfToken = csrfEl ? csrfEl.value : '';
+                const headers = { 'Content-Type': 'application/json' };
+                if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+                fetch('api_save_phone.php', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        class_key: d.class,
+                        roll: d.roll,
+                        phone: phone,
+                        table: 'report_card',
+                        csrf_token: csrfToken
+                    })
+                }).then(function (r) { return r.json(); }).then(function (res) {
+                    if (res && res.success) { btn.dataset.phone = phone; }
+                }).catch(function (err) { console.warn('Phone save failed:', err); });
+            }
 
-                    if (window.HCCPdfEngine && window.HCCPdfEngine.shareWhatsAppAutomated) {
-                        window.HCCPdfEngine.shareWhatsAppAutomated(stObj, 'report_card', meta, phone, '')
-                            .then(function () { if (typeof done === 'function') done(); })
-                            .catch(function () { if (typeof done === 'function') done(); });
-                    } else if (typeof done === 'function') {
-                        done();
-                    }
+            if (window.HCCPdfEngine && typeof window.HCCPdfEngine.generateSinglePdf === 'function') {
+                if (window.HCCWhatsApp.showToast) {
+                    window.HCCWhatsApp.showToast('Preparing A4 PDF for WhatsApp...', 'fa-spinner fa-spin');
                 }
-            });
+                window.HCCPdfEngine.generateSinglePdf(stObj, 'report_card', meta).then(function (res) {
+                    window.HCCWhatsApp.openModal({
+                        studentName: stObj.name,
+                        roll: stObj.roll,
+                        className: meta.className,
+                        classKey: d.class,
+                        phone: savedPhone,
+                        messageText: msg,
+                        pdfBlob: res.blob,
+                        fileName: res.fileName,
+                        onDownloadPdf: function () {
+                            res.pdf.save(res.fileName);
+                        },
+                        onSent: persistPhone
+                    });
+                }).catch(function (err) {
+                    console.warn('PDF generation fallback to text share:', err);
+                    window.HCCWhatsApp.openModal({
+                        studentName: stObj.name,
+                        roll: stObj.roll,
+                        className: meta.className,
+                        classKey: d.class,
+                        phone: savedPhone,
+                        messageText: msg,
+                        onSent: persistPhone
+                    });
+                });
+            } else {
+                window.HCCWhatsApp.openModal({
+                    studentName: stObj.name,
+                    roll: stObj.roll,
+                    className: meta.className,
+                    classKey: d.class,
+                    phone: savedPhone,
+                    messageText: msg,
+                    onSent: persistPhone
+                });
+            }
         });
     };
 
@@ -195,11 +234,14 @@
                 max_total: totalMax,
                 pct: stu.percentage !== null ? Number(stu.percentage).toFixed(2) : '',
                 grade: stu.grade || '',
-                remark: stu.remark || ''
+                remark: stu.remark || '',
+                attendance: stu.attendance || '',
+                parents_sign: !!stu.parents_sign
             };
 
             const phoneKey = 'hcc_wa_phone_' + classKey + '_' + stu.roll_no;
-            const savedPhone = localStorage.getItem(phoneKey) || '';
+            const dbPhone = String(stu.parent_phone || btn.dataset.phone || '').replace(/\D+/g, '');
+            const savedPhone = dbPhone || localStorage.getItem(phoneKey) || '';
 
             if (window.HCCPdfEngine && window.HCCPdfEngine.shareWhatsAppWithPdf) {
                 window.HCCPdfEngine.shareWhatsAppWithPdf(fStu, 'unit_test', meta, savedPhone, '');

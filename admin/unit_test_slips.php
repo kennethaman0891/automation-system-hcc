@@ -2,10 +2,19 @@
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/auth_check.php';
 
-$year     = trim($_GET['year'] ?? '2025-26');
-$std      = trim($_GET['std'] ?? '1');
-$division = trim($_GET['division'] ?? 'A');
-$testType = trim($_GET['test_type'] ?? 'Unit Test 2');
+$activeYear = rcGetActiveAcademicYear();
+$year       = trim($_GET['year'] ?? $activeYear);
+if ($year === '') $year = $activeYear;
+$std        = trim($_GET['std'] ?? '1');
+$division   = trim($_GET['division'] ?? 'A');
+$testType   = trim($_GET['test_type'] ?? 'Unit Test 2');
+
+$db = getDB();
+$preferSem = in_array($testType, ['Unit Test 3', 'Unit Test 4'], true) ? 'Sem 2' : 'Sem 1';
+$semStmt = $db->prepare("SELECT semester FROM report_card WHERE academic_year = ? AND std = ? AND division = ? ORDER BY (semester = ?) DESC, id ASC LIMIT 1");
+$semStmt->execute([$year, $std, $division, $preferSem]);
+$cohortSem = trim((string)$semStmt->fetchColumn()) ?: $preferSem;
+$cohortClassKey = rcBuildClassKey($year, $std, $division, $cohortSem);
 
 $matrixData = rcGetUnitTestClassData($year, $std, $division, $testType);
 $students   = $matrixData['students'];
@@ -154,10 +163,10 @@ $romanStd = $romanMap[(string)$std] ?? $std;
             <button type="button" class="btn btn-outline" id="downloadAllPdfBtn" style="padding:6px 12px;font-size:0.82rem;font-weight:700;color:#1e3a8a;border-color:#1e3a8a;background:#fff;border-radius:6px;cursor:pointer;">
                 <i class="fas fa-file-pdf"></i> Download Class PDF
             </button>
-            <a href="export_pdf_batch.php?class=<?= e_url(rcBuildClassKey($year, $std, $division, 'Sem 1')) ?>&doc_type=unit_test&test_type=<?= e_url($testType) ?>" class="btn btn-outline" style="padding:6px 12px;font-size:0.82rem;font-weight:700;color:#475569;border-color:#cbd5e1;background:#fff;border-radius:6px;text-decoration:none;" title="Server-side fast offline ZIP archive" download>
+            <a href="export_pdf_batch.php?class=<?= e_url($cohortClassKey) ?>&doc_type=unit_test&test_type=<?= e_url($testType) ?>" class="btn btn-outline" style="padding:6px 12px;font-size:0.82rem;font-weight:700;color:#475569;border-color:#cbd5e1;background:#fff;border-radius:6px;text-decoration:none;" title="Server-side fast offline ZIP archive" download>
                 <i class="fas fa-file-archive"></i> Offline ZIP
             </a>
-            <a href="whatsapp_share.php?doc_type=unit_test&test_type=<?= urlencode($testType) ?>&class=<?= urlencode(rcBuildClassKey($year, $std, $division, 'Sem 1')) ?>" target="_blank" class="btn-whatsapp" style="font-size:0.82rem;padding:6px 14px;">
+            <a href="whatsapp_share.php?doc_type=unit_test&test_type=<?= urlencode($testType) ?>&class=<?= urlencode($cohortClassKey) ?>" target="_blank" class="btn-whatsapp" style="font-size:0.82rem;padding:6px 14px;">
                 <i class="fa-brands fa-whatsapp"></i> WhatsApp Hub
             </a>
             <button class="btn-print" onclick="window.print()">Print Slips</button>
@@ -254,26 +263,26 @@ $romanStd = $romanMap[(string)$std] ?? $std;
     (function () {
         'use strict';
 
-        const studentsData = <?= json_encode($students, JSON_UNESCAPED_UNICODE) ?>;
-        const subjectsData = <?= json_encode($subjects, JSON_UNESCAPED_UNICODE) ?>;
-        const totalMax     = <?= json_encode((float)$totalMax) ?>;
-        const schoolName   = <?= json_encode($schoolName) ?>;
-        const className    = <?= json_encode("STD {$romanStd}-{$division}") ?>;
-        const testType     = <?= json_encode($testType) ?>;
-        const classKey     = <?= json_encode(rcBuildClassKey($year, $std, $division, 'Sem 1')) ?>;
+        const studentsData = <?= json_encode($students, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+        const subjectsData = <?= json_encode($subjects, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+        const totalMax     = <?= json_encode((float)$totalMax, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+        const schoolName   = <?= json_encode($schoolName, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+        const className    = <?= json_encode("STD {$romanStd}-{$division}", JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+        const testType     = <?= json_encode($testType, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+        const classKey     = <?= json_encode($cohortClassKey, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
 
         const meta = {
             schoolName: schoolName,
             className: className,
             classKey: classKey,
-            academicYear: <?= json_encode($year) ?>,
+            academicYear: <?= json_encode($year, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
             testType: testType
         };
 
         const formattedStudents = studentsData.map(stu => {
             const subList = subjectsData.map(s => {
                 const sm = stu.subjects[s.subject_name];
-                let val = '0';
+                let val = '';
                 if (sm) {
                     if (sm.is_absent) val = 'Absent';
                     else if (sm.marks_obtained !== null) val = String(sm.marks_obtained);
@@ -284,6 +293,9 @@ $romanStd = $romanMap[(string)$std] ?? $std;
                 roll: stu.roll_no,
                 name: stu.student_name,
                 gender: stu.gender || '',
+                parent_phone: stu.parent_phone || '',
+                attendance: stu.attendance || '',
+                parents_sign: stu.parents_sign ? 1 : 0,
                 subjects: subList,
                 obtained: stu.total_obtained,
                 max_total: totalMax,
@@ -327,7 +339,7 @@ $romanStd = $romanMap[(string)$std] ?? $std;
                 const fStu = formattedStudents.find(s => String(s.roll) === String(roll));
                 if (fStu) {
                     const phoneKey = 'hcc_wa_phone_' + classKey + '_' + roll;
-                    const savedPhone = localStorage.getItem(phoneKey) || '';
+                    const savedPhone = (fStu.parent_phone && String(fStu.parent_phone).trim()) || localStorage.getItem(phoneKey) || '';
                     HCCPdfEngine.shareWhatsAppWithPdf(fStu, 'unit_test', meta, savedPhone, '');
                 }
             });

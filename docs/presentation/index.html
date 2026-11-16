@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HCC Campus Automation System — Executive Presentation</title>
+<style>
+  :root {
+    --bg: #0b1120;
+    --card: #ffffff;
+    --surface: #f8fafc;
+    --ink: #0f172a;
+    --muted: #475569;
+    --border: #e2e8f0;
+    --navy: #0f172a;
+    --blue: #1d4ed8;
+    --sky: #0284c7;
+    --emerald: #059669;
+    --amber: #d97706;
+    --rose: #e11d48;
+    --indigo: #4f46e5;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, Helvetica, Arial, sans-serif;
+    overflow: hidden;
+  }
+
+  /* Deck Stage */
+  .stage {
+    position: relative;
+    width: 100vw;
+    height: calc(100vh - 54px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px 24px;
+  }
+  .slide {
+    display: none;
+    width: min(100%, 1240px);
+    height: min(100%, 698px);
+    aspect-ratio: 16 / 9;
+    background: var(--card);
+    border-radius: 16px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+    padding: 40px 48px 34px;
+    position: relative;
+    overflow: hidden;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .slide.active { display: flex; }
+
+  /* Dark Hero Slide */
+  .slide.dark {
+    background: radial-gradient(circle at 85% 15%, rgba(56,189,248,0.22), transparent 45%),
+                radial-gradient(circle at 12% 85%, rgba(99,102,241,0.20), transparent 45%),
+                linear-gradient(135deg, #090f1e 0%, #131f38 55%, #0f172a 100%);
+    color: #f8fafc;
+  }
+  .slide.dark .sub, .slide.dark .muted { color: #cbd5e1; }
+  .slide.dark .card-box {
+    background: rgba(30, 41, 59, 0.78);
+    border-color: rgba(148, 163, 184, 0.25);
+    color: #f8fafc;
+  }
+  .slide.dark .card-box p, .slide.dark .card-box li { color: #cbd5e1; }
+
+  /* Header & Footer inside Slide */
+  .slide-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 14px;
+    margin-bottom: 18px;
+  }
+  .slide.dark .slide-head { border-color: rgba(148,163,184,0.22); }
+  .eyebrow {
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--sky);
+    margin-bottom: 4px;
+  }
+  h1 { margin: 0; font-size: 40px; line-height: 1.12; letter-spacing: -0.02em; }
+  h2 { margin: 0; font-size: 27px; line-height: 1.18; letter-spacing: -0.015em; }
+  .sub { margin: 6px 0 0; font-size: 14.5px; color: var(--muted); }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+    background: #eff6ff;
+    color: var(--blue);
+    border: 1px solid #bfdbfe;
+    white-space: nowrap;
+  }
+  .pill.green { background: #ecfdf5; color: var(--emerald); border-color: #a7f3d0; }
+  .pill.amber { background: #fffbeb; color: var(--amber); border-color: #fde68a; }
+  .pill.rose  { background: #fff1f2; color: var(--rose); border-color: #fecdd3; }
+  .slide.dark .pill { background: rgba(56,189,248,0.16); color: #7dd3fc; border-color: rgba(56,189,248,0.35); }
+
+  .slide-body { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 14px; min-height: 0; }
+  .slide-foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11.5px;
+    color: #64748b;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+    margin-top: 12px;
+  }
+  .slide.dark .slide-foot { border-color: rgba(148,163,184,0.2); color: #94a3b8; }
+
+  /* Grids & Cards */
+  .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .card-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 15px 17px;
+  }
+  .card-box h3 {
+    margin: 0 0 7px;
+    font-size: 15px;
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .slide.dark .card-box h3 { color: #fff; }
+  .card-box p, .card-box li { margin: 0; font-size: 13px; line-height: 1.48; color: var(--muted); }
+  .card-box ul { margin: 4px 0 0; padding-left: 17px; }
+  .card-box li + li { margin-top: 4px; }
+
+  .kpi-num { font-size: 30px; font-weight: 800; color: var(--blue); line-height: 1.1; }
+  .kpi-num.green { color: var(--emerald); }
+  .kpi-num.amber { color: var(--amber); }
+  .kpi-num.indigo { color: var(--indigo); }
+  .slide.dark .kpi-num { color: #38bdf8; }
+  .kpi-lbl { font-size: 12px; font-weight: 600; color: var(--muted); margin-top: 4px; }
+
+  .accent-left { border-left: 4px solid var(--blue); }
+  .accent-green { border-left: 4px solid var(--emerald); }
+  .accent-amber { border-left: 4px solid var(--amber); }
+  .accent-rose { border-left: 4px solid var(--rose); }
+  .accent-indigo { border-left: 4px solid var(--indigo); }
+
+  table.clean {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.6px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  table.clean th, table.clean td {
+    padding: 8px 11px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+  }
+  table.clean th { background: #f1f5f9; font-weight: 700; color: var(--ink); }
+  table.clean tr:last-child td { border-bottom: none; }
+
+  code {
+    background: #e2e8f0;
+    color: #0f172a;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.88em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .slide.dark code { background: rgba(15,23,42,0.85); color: #7dd3fc; }
+
+  /* Bottom HUD */
+  .hud {
+    height: 54px;
+    background: #090e1a;
+    border-top: 1px solid #1e293b;
+    padding: 0 22px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: #cbd5e1;
+    font-size: 13px;
+  }
+  .hud-left, .hud-right { display: flex; align-items: center; gap: 10px; }
+  .hud button {
+    background: #1e293b;
+    color: #f8fafc;
+    border: 1px solid #334155;
+    border-radius: 7px;
+    padding: 6px 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .hud button:hover { background: #334155; }
+  .progress-wrap {
+    flex: 1;
+    max-width: 340px;
+    height: 6px;
+    background: #1e293b;
+    border-radius: 999px;
+    overflow: hidden;
+    margin: 0 16px;
+  }
+  .progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #38bdf8, #818cf8);
+    width: 6.66%;
+    transition: width 0.2s ease;
+  }
+
+  /* Speaker Notes Drawer */
+  .notes-drawer {
+    display: none;
+    position: fixed;
+    right: 20px;
+    bottom: 66px;
+    width: 440px;
+    max-width: calc(100vw - 40px);
+    background: #0f172a;
+    color: #e2e8f0;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 16px 18px;
+    box-shadow: 0 16px 40px rgba(0,0,0,0.55);
+    z-index: 40;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .notes-drawer.open { display: block; }
+  .notes-drawer h4 { margin: 0 0 8px; color: #38bdf8; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+  /* Grid Overview Modal */
+  .grid-modal {
+    display: none;
+    position: fixed;
+    inset: 0 0 54px 0;
+    background: rgba(9, 14, 26, 0.95);
+    z-index: 50;
+    padding: 28px;
+    overflow-y: auto;
+  }
+  .grid-modal.open { display: block; }
+  .thumb-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 14px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  .thumb {
+    background: #1e293b;
+    border: 2px solid #334155;
+    border-radius: 10px;
+    padding: 14px;
+    color: #f8fafc;
+    cursor: pointer;
+    text-align: left;
+  }
+  .thumb.current { border-color: #38bdf8; }
+  .thumb small { color: #38bdf8; font-weight: 700; display: block; margin-bottom: 4px; }
+
+  /* Print / Export to PDF (16:9 PowerPoint-ready) */
+  @media print {
+    @page { size: 16in 9in; margin: 0; }
+    html, body { background: #fff; overflow: visible; height: auto; }
+    .hud, .notes-drawer, .grid-modal { display: none !important; }
+    .stage { display: block; padding: 0; height: auto; width: 100%; }
+    .slide {
+      display: flex !important;
+      width: 16in;
+      height: 9in;
+      max-width: none;
+      max-height: none;
+      border-radius: 0;
+      box-shadow: none;
+      page-break-after: always;
+      break-after: page;
+    }
+  }
+</style>
+</head>
+<body>
+
+<div class="stage" id="stage">
+
+  <!-- SLIDE 1: TITLE -->
+  <section class="slide dark active" data-note="Welcome board members, school leadership, and staff. Today we present the HCC Campus Automation System v2.5 — an end-to-end, privacy-first digital campus platform built specifically for Hindustani Covenant Church High School &amp; Junior College, Solapur.">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <span class="pill">Institutional Technology Showcase · v2.5</span>
+      <span class="pill">Solapur · Maharashtra State Board</span>
+    </div>
+    <div style="my:auto;">
+      <div class="eyebrow" style="color:#38bdf8;font-size:14px;">Hindustani Covenant Church High School &amp; Junior College</div>
+      <h1 style="font-size:48px;color:#fff;margin-top:8px;">HCC Campus Automation System</h1>
+      <p class="sub" style="font-size:19px;max-width:860px;margin-top:14px;">
+        Unified Academic Grading, Unit Tests, Timetable Operations, Cryptographic Parent Portals, School WhatsApp Hub &amp; Local-First Admission AI — running 100% under institutional control.
+      </p>
+      <div class="grid-4" style="margin-top:28px;">
+        <div class="card-box"><div class="kpi-num">887</div><div class="kpi-lbl">Active Students Tracked</div></div>
+        <div class="card-box"><div class="kpi-num">10,231+</div><div class="kpi-lbl">Semester &amp; UT Mark Rows</div></div>
+        <div class="card-box"><div class="kpi-num">39</div><div class="kpi-lbl">Relational MariaDB Tables</div></div>
+        <div class="card-box"><div class="kpi-num">14</div><div class="kpi-lbl">HCC-Native Daily Automations</div></div>
+      </div>
+    </div>
+    <div class="slide-foot">
+      <span>HCC Campus Automation System</span>
+      <span>Keys: ← / → Navigate · F Fullscreen · S Speaker Notes · G Slide Grid · P Print/PDF</span>
+    </div>
+  </section>
+
+  <!-- SLIDE 2: CHALLENGES -->
+  <section class="slide" data-note="Before HCC Automation, academic marks lived in scattered Excel workbooks, certificates were manually re-typed, morning teacher absences took 40 minutes to assign, and parent WhatsApp messages went untracked.">
+    <div class="slide-head">
+      <div>
+        <div class="eyebrow">01 · Institutional Problem Statement</div>
+        <h2>Solving Real Daily School Office &amp; Teacher Friction</h2>
+        <p class="sub">Generic school ERPs miss the messy daily reality of Excel markbooks, WhatsApp parent chaos, and morning office logistics.</p>
+      </div>
+      <span class="pill">Operational Scope</span>
+    </div>
+    <div class="slide-body">
+      <div class="grid-2">
+        <div class="card-box accent-left">
+          <h3>📊 Fragmented Teacher Excel Markbooks</h3>
+          <p>Class teachers create multi-sheet markbooks with <code>BOYS/GIRLS</code> divider rows, merged headers, and Excel formulas. Re-uploading often risked overwriting student DOBs or phone numbers.</p>
+        </div>
+        <div class="card-box accent-green">
+          <h3>💬 Unstructured Parent WhatsApp Flood</h3>
+          <p>Parents do not log into portals — they message WhatsApp for admissions, leave notices, fee screenshots, and mark queries. Generic ERPs ignore these unstructured messages.</p>
+        </div>
+        <div class="card-box accent-amber">
+          <h3>🕒 7:15 AM Morning &amp; Exam Logistics</h3>
+          <p>Assigning substitute teachers when 3 teachers are absent, building interleaved exam hall seating, and chasing unsigned report cards consumed hours of manual clerical work.</p>
+        </div>
+        <div class="card-box accent-rose">
+          <h3>🔒 Privacy &amp; Zero Cloud Lock-In</h3>
+          <p>Student records, phone numbers, and admission chats belong inside the school's own hardware — not leaked to third-party cloud APIs or vulnerable to WhatsApp bulk-ban bots.</p>
+        </div>
+      </div>
+    </div>
+    <div class="slide-foot"><span>HCC Campus Automation System</span><span>Slide 2 / 15</span></div>
+  </section>
+
+  <!-- SLIDE 3: ARCHITECTURE -->
+  <section class="slide" data-note="Our 4-tier polyglot architecture combines the reliability of PHP/MariaDB for web portals, Node.js Puppeteer for WhatsApp Web integration, and two high-performance Rust binaries + Local Ollama for zero-leakage AI.">
+    <div class="slide-head">
+      <div>
+        <div class="eyebrow">02 · System Architecture</div>
+        <h2>4-Tier Local-First Polyglot Architecture</h2>
+        <p class="sub">Runs cleanly on standard 8 GB RAM school hardware (macOS, Windows XAMPP, or Linux) with zero external CDN runtime reliance.</p>
+      </div>
+      <span class="pill">Port Map: :80 · :3306 · :8085 · :11434</span>
+    </div>
+    <div class="slide-body">
+      <svg viewBox="0 0 1120 340" style="width:100%;height:auto;max-height:360px;">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 1 L 10 5 L 0 9 z" fill="#475569"/>
+          </marker>
+        </defs>
+        <!-- Layer 1 -->
+        <rect x="12" y="20" width="240" height="300" rx="14" fill="#eff6ff" stroke="#93c5fd" stroke-width="2"/>
+        <text x="132" y="48" text-anchor="middle" font-size="14" font-weight="800" fill="#1e3a8a">1. BROWSER &amp; PORTALS</text>
+        <rect x="28" y="68" width="208" height="68" rx="9" fill="#fff" stroke="#bfdbfe"/>
+        <text x="132" y="96" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">Admin &amp; Teacher Portal</text>
+        <text x="132" y="116" text-anchor="middle" font-size="11" fill="#475569">Bootstrap 5.3 · jsPDF · Local Fonts</text>
+        <rect x="28" y="152" width="208" height="68" rx="9" fill="#fff" stroke="#bfdbfe"/>
+        <text x="132" y="180" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">WhatsApp Hub Replica</text>
+        <text x="132" y="200" text-anchor="middle" font-size="11" fill="#475569">Guided Hub + Send-on-Press UI</text>
+        <rect x="28" y="236" width="208" height="68" rx="9" fill="#fff" stroke="#bfdbfe"/>
+        <text x="132" y="264" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">Public QR Parent Portals</text>
+        <text x="132" y="284" text-anchor="middle" font-size="11" fill="#475569">HMAC-SHA256 Cards · Slips · Bonafide</text>
+
+        <!-- Layer 2 -->
+        <rect x="296" y="20" width="250" height="300" rx="14" fill="#f8fafc" stroke="#cbd5e1" stroke-width="2"/>
+        <text x="421" y="48" text-anchor="middle" font-size="14" font-weight="800" fill="#0f172a">2. APACHE + PHP 8.3 (:80)</text>
+        <rect x="312" y="68" width="218" height="72" rx="9" fill="#fff" stroke="#cbd5e1"/>
+        <text x="421" y="96" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">Security &amp; RBAC Sentry</text>
+        <text x="421" y="116" text-anchor="middle" font-size="11" fill="#475569">auth_check · CSRF · Nonce CSP</text>
+        <rect x="312" y="154" width="218" height="72" rx="9" fill="#fff" stroke="#cbd5e1"/>
+        <text x="421" y="182" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">Academic &amp; Ops Engine</text>
+        <text x="421" y="202" text-anchor="middle" font-size="11" fill="#475569">CCE/SSC · UT I–IV · Seating · Proxy</text>
+        <rect x="312" y="240" width="218" height="64" rx="9" fill="#fff" stroke="#cbd5e1"/>
+        <text x="421" y="267" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">Google Drive &amp; Excel</text>
+        <text x="421" y="287" text-anchor="middle" font-size="11" fill="#475569">PhpSpreadsheet · OAuth2 Workspace</text>
+
+        <!-- Layer 3 -->
+        <rect x="590" y="20" width="236" height="300" rx="14" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="2"/>
+        <text x="708" y="48" text-anchor="middle" font-size="14" font-weight="800" fill="#065f46">3. MARIADB 11.8 (:3306)</text>
+        <rect x="606" y="72" width="204" height="106" rx="9" fill="#fff" stroke="#a7f3d0"/>
+        <text x="708" y="98" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">hcc_admin (39 Tables)</text>
+        <text x="708" y="119" text-anchor="middle" font-size="11" fill="#475569">report_card · unit_test_results</text>
+        <text x="708" y="137" text-anchor="middle" font-size="11" fill="#475569">students_master · timetables</text>
+        <text x="708" y="155" text-anchor="middle" font-size="11" fill="#475569">daily_substitutions · seating</text>
+        <rect x="606" y="194" width="204" height="108" rx="9" fill="#fff" stroke="#a7f3d0"/>
+        <text x="708" y="220" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">Queues &amp; Telemetry</text>
+        <text x="708" y="241" text-anchor="middle" font-size="11" fill="#475569">whatsapp_chats / messages</text>
+        <text x="708" y="259" text-anchor="middle" font-size="11" fill="#475569">automation_jobs · signal_cards</text>
+        <text x="708" y="277" text-anchor="middle" font-size="11" fill="#475569">daily_briefings · audit_logs</text>
+
+        <!-- Layer 4 -->
+        <rect x="870" y="20" width="238" height="300" rx="14" fill="#eef2ff" stroke="#a5b4fc" stroke-width="2"/>
+        <text x="989" y="48" text-anchor="middle" font-size="14" font-weight="800" fill="#312e81">4. DAEMONS &amp; LOCAL AI</text>
+        <rect x="886" y="68" width="206" height="70" rx="9" fill="#fff" stroke="#c7d2fe"/>
+        <text x="989" y="95" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">Rust AI Service (:8085)</text>
+        <text x="989" y="115" text-anchor="middle" font-size="11" fill="#475569">Axum · 9 JSON Knowledge · Validator</text>
+        <rect x="886" y="150" width="206" height="62" rx="9" fill="#fff" stroke="#c7d2fe"/>
+        <text x="989" y="176" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">Ollama LLM (:11434)</text>
+        <text x="989" y="195" text-anchor="middle" font-size="11" fill="#475569">llama3.2:1b · 100% On-Premise</text>
+        <rect x="886" y="224" width="206" height="80" rx="9" fill="#fff" stroke="#c7d2fe"/>
+        <text x="989" y="249" text-anchor="middle" font-size="13" font-weight="700" fill="#0f172a">Rust Worker + WA Bridge</text>
+        <text x="989" y="268" text-anchor="middle" font-size="11" fill="#475569">hcc-automation-engine (5s poll)</text>
+        <text x="989" y="286" text-anchor="middle" font-size="11" fill="#475569">Node Puppeteer + DOM Watchdog</text>
+
+        <!-- Arrows -->
+        <line x1="252" y1="170" x2="294" y2="170" stroke="#475569" stroke-width="2.5" marker-end="url(#arr)"/>
+        <line x1="546" y1="170" x2="588" y2="170" stroke="#475569" stroke-width="2.5" marker-end="url(#arr)"/>
+        <line x1="826" y1="120" x2="868" y2="120" stroke="#475569" stroke-width="2.5" marker-end="url(#arr)"/>
+        <line x1="826" y1="255" x2="868" y2="255" stroke="#475569" stroke-width="2.5" marker-end="url(#arr)"/>
+      </svg>
+    </div>
+    <div class="slide-foot"><span>HCC Campus Automation System</span><span>Slide 3 / 15</span></div>
+  </section>
+
+  <!-- SLIDE 4: ACADEMIC ENGINE -->
+  <section class="slide" data-note="The academic core enforces dual-board rules automatically: Std 1-8 follows CCE FA+SA with CBSE 9-point grades and 33% passing, while Std 9-10 follows Maharashtra SSC Distinction/Grade I/II and 35% passing.">
+    <div class="slide-head">
+      <div>
+        <div class="eyebrow">03 · Academic Grading &amp; Records Engine</div>
+        <h2>Dual-Board Compliance: Std 1–8 CCE &amp; Std 9–10 SSC</h2>
+        <p class="sub">Real-time marks entry (<code>entry.php</code>), cohort matrix (<code>results.php</code>), and verified institutional KPIs.</p>
+      </div>
+      <span class="pill green">92.3% Cohort Pass · 887 Students</span>
+    </div>
+    <div class="slide-body">
+      <div class="grid-3">
+        <div class="card-box accent-left">
+          <h3>📘 Std 1–8 (CCE 9-Point)</h3>
+          <ul>
+            <li>Split <code>FA (70) + SA (30) = 100</code> or single-tier subjects.</li>
+            <li>CBSE grades <code>A1</code> (≥90.5%) down to <code>E2</code>.</li>
+            <li>Passing threshold: <strong>33%</strong> per subject.</li>
+          </ul>
+        </div>
+        <div class="card-box accent-indigo">
+          <h3>🎓 Std 9–10 (Maharashtra SSC)</h3>
+          <ul>
+            <li>SSC Divisions: <strong>Distinction</strong> (≥75%), <strong>Grade I</strong> (≥60%), <strong>Grade II</strong> (≥45%), <strong>Pass</strong> (≥35%).</li>
+            <li>Consistent across PHP &amp; JS engines.</li>
+          </ul>
+        </div>
+        <div class="card-box accent-green">
+          <h3>📈 Verified Analytics &amp; Promotion</h3>
+          <ul>
+            <li>Multi-semester &amp; student growth curves (<code>api_student_dashboard.php</code>).</li>
+            <li>End-of-year promotion (<code>Sem 2 → Sem 1</code>) with phone/DOB carry-forward and rollback vault.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="grid-4">
+        <div class="card-box"><div class="kpi-num">4,707</div><div class="kpi-lbl">Semester Subject Rows</div></div>
+        <div class="card-box"><div class="kpi-num green">819 / 887</div><div class="kpi-lbl">Accurate Cohort Pass Count</div></div>
+        <div class="card-box"><div class="kpi-num indigo">65.3%</div><div class="kpi-lbl">School Average Score</div></div>
+        <div class="card-box"><div class="kpi-num amber">1,206</div><div class="kpi-lbl">Promotion Audit Records</div></div>
+      </div>
+    </div>
+    <div class="slide-foot"><span>HCC Campus Automation System</span><span>Slide 4 / 15</span></div>
+  </section>
+
+  <!-- SLIDE 5: UNIT TESTS & DOCUMENT STUDIO -->
+  <section class="slide" data-note="Unit Tests I through IV manage continuous 20-mark assessments with 0.5 decimal precision, absentee tracking, 4-up printable progress slips, and zero-cloud A4 PDF batching.">
+    <div class="slide-head">
+      <div>
+        <div class="eyebrow">04 · Formative Assessments &amp; Document Studio</div>
+        <h2>Unit Tests I–IV &amp; Zero-Cloud PDF Print Pipeline</h2>
+        <p class="sub">Managing 5,524+ unit test evaluations with interactive parent signatures, 4-per-A4 slips, and offline ZIP dossiers.</p>
+      </div>
+      <span class="pill">5,524 UT Records · 65 Configs</span>
+    </div>
+    <div class="slide-body">
+      <div class="grid-2">
+        <div class="card-box accent-left">
+          <h3>📝 Unit Test I–IV Matrix Engine</h3>
+          <ul>
+            <li>Supports <code>.5</code> fractional marks and <code>AB</code> absentee flagging across dynamic per-subject maximums.</li>
+            <li>Preserves custom teacher remarks and validates marks <code>&le; max</code> server-side.</li>
+            <li>Interactive <strong>Parent Sign</strong> toggle synced with <code>report_card</code> and <code>students_master</code>.</li>
+          </ul>
+        </div>
+        <div class="card-box accent-green">
+          <h3>🖨️ A4 Print &amp; Batch Export Studio</h3>
+          <ul>
+            <li><strong>4-Up Unit Test Slips</strong> (<code>unit_test_slips.php</code>) cut-ready for parent diaries.</li>
+            <li><strong>Zero-Cloud Client PDFs</strong> via <code>jsPDF + html2canvas</code> with exact aspect-ratio preservation.</li>
+            <li><strong>Self-Contained Offline ZIPs</strong> (<code>export_pdf_batch.php</code>) with embedded base64 school crest and inline styles.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="slide-foot"><span>HCC Campus Automation System</span><span>Slide 5 / 15</span></div>
+  </section>
+
+  <!-- SLIDE 6: EXCEL AUTO-HEALER -->
+  <section class="slide" data-note="Automation #1 solves a painful weekly reality: teachers upload messy Excel markbooks. Our Auto-Healer detects swapped roll numbers, handles BOYS/GIRLS headers, evaluates formulas, and never wipes DOB or parent phones.">
+    <div class="slide-head">
+      <div>
+        <div class="eyebrow">05 · Automation #1 — Teacher Markbook Intelligence</div>
+        <h2>Messy Teacher-Excel Auto-Healer &amp; Metadata Shield</h2>
+        <p class="sub">Turning error-prone multi-sheet Excel uploads into a guarded, self-healing workflow inside <code>import_excel.php</code> &amp; <code>import_unit_tests.php</code>.</p>
+      </div>
+      <span class="pill green">Zero Data Loss Guarantee</span>
+    </div>
+    <div class="slide-body">
+      <div class="grid-3">
+        <div class="card-box accent-left">
+          <h3>1. Smart Structure Detection</h3>
+          <p>Automatically separates <code>F(70) S(30)</code> sub-headers, handles standalone <code>BOYS / GIRLS</code> divider rows without skipping student names, and evaluates Excel <code>=IF(...)</code> remark formulas.</p>
+        </div>
+        <div class="card-box accent-amber">
+          <h3>2. Fuzzy Roll-Swap Healing</h3>
+          <p>Compares imported <code>(roll_no, student_name)</code> against the active cohort using <code>similar_text()</code> to flag shifted roll numbers before a single DB row is modified.</p>
+        </div>
+        <div class="card-box accent-green">
+          <h3>3. Metadata Preservation Shield</h3>
+          <p>Teachers rarely keep DOB or parent mobile numbers in markbooks. Overwrite imports automatically preserve existing <code>date_of_birth</code>, <code>parent_phone</code>, and <code>parents_sign</code>.</p>
+        </div>
+      </div>
+      <div class="card-box" style="background:#f1f5f9;">
+        <strong>Blank vs Zero Safety:</strong> Empty cells are flagged as unentered instead of silently turning into <code>0</code> or <code>AB</code>; exported cells are sanitized via <code>rcCsvSafeCell()</code> against formula injection.
+      </div>
+    </div>
+    <div class="slide-foot"><span>HCC Campus Automation System</span><span>Slide 6 / 15</span></div>
+  </section>
+
+  <!-- SLIDE 7: TIMETABLE, SUBSTITUTE ALLOCATOR & SEATING -->
+  <section class="slide" data-note="Automations #6 and #7 automate two morning headaches nobody else builds well: 7:15 AM substitute teacher allocation when staff call in sick, and alternating-bench exam hall seating plans.">
+    <div class="slide-head">
+      <div>
+        <div class="eyebrow">06 · Automations #6 &amp; #7 — Office &amp; Exam Logistics</div>
+        <h2>Timetable Studio, 7:15 AM Substitute Allocator &amp; Exam Seating</h2>
+        <p class="sub">Eliminating morning staffroom chaos and manual exam bench charts directly from live DB rosters.</p>
+      </div>
+      <span class="pill">Under 60 Seconds Every Morning</span>
+    </div>
+    <div class="slide-body">
+      <div class="grid-3">
+        <div class="card-box accent-left">
+          <h3>📅 Exam Timetable Studio</h3>
+          <p>Drag-and-drop multi-slot schedule editor (<code>timetable.php</code>) with teacher presets, formula-safe CSV export, and CSRF-verified unsaved print preview.</p>
+        </div>
+        <div class="card-box accent-amber">
+          <h3>⚡ 7:15 AM Substitute Allocator</h3>
+          <p>Check absent teachers in <code>substitute_allocator.php</code> &rarr; lists uncovered periods, ranks conflict-free teachers by 7-day proxy load &amp; subject match, prints staffroom notice, and stages WhatsApp slips.</p>
+        </div>
+        <div class="card-box accent-indigo">
+          <h3>🪑 Interleaved Exam Seating</h3>
+          <p><code>exam_seating.php</code> combines live class roll lists with exam slots to alternate standards per bench (e.g., Std 7 + Std 9), calculate invigilators, and print room door chits &amp; desk stickers.</p>
+        </div>
+      </div>
+    </div>
+    <div class="slide-foot"><span>HCC Campus Automation System</span><span>Slide 7 / 15</span></div>
+  </section>
+
+  <!-- SLIDE 8: BONAFIDE, QR VERIFICATION & VAULT -->
+  <section class="slide" data-note="Automations #4, #5, and #8 eliminate repetitive certificate typing, stamp QR codes verified by banks/scholarship portals, and enforce server-side locking once an academic year is sealed.">
+    <div class="slide-head">
+      <div>
+        <div class="eyebrow">07 · Automations #4, #5 &amp; #8 — Clerical Trust &amp; Governance</div>
+        <h2>GR-to-Bonafide Pipeline, QR Verification &amp; Sealed Vault</h2>
+        <p class="sub">Connecting <code>students_master</code>, <code>bonafide_certificate.php</code>, <code>public_*.php</code>, and <code>records_archive.php</code>.</p>
+      </div>
+      <span class="pill green">Tamper-Proof HMAC-SHA256</span>
+    </div>
+    <div class="slide-body">
+      <div class="grid-3">
+        <div class="card-box accent-left">
+          <h3>🪪 Canonical GR Auto-Fill</h3>
+          <p>Typing a GR Number or name in <code>bonafide_certificate.php</code> instantly populates Student Name, Std, Division, DOB, DOB-in-Words, Caste, and next atomic <code>cert_serial</code>.</p>
+        </div>
+        <div class="card-box accent-green">
+          <h3>📱 QR-Verified Public Portals</h3>
+          <p>Zero-CDN SVG QR codes on Report Cards, UT Slips, and Bonafides link via URL-safe Base64 HMAC tokens to <code>public_card.php</code> / <code>public_bonafide.php</code> (strict 404 if unissued).</p>
+        </div>
+        <div class="card-box accent-rose">
+          <h3>🔐 True Academic Vault Lock</h3>
+          <p><code>rcIsVaultLocked()</code> enforces year-end sealing server-side across every entry, unit test, sign, and Excel import endpoint — preventing accidental post-audit edits.</p>
+        </div>
+      </div>
+    </div>
+    <div class="slide-foot"><span>HCC Campus Automation System</span><span>Slide 8 / 15</span></div>
+  </section>
+
+  <!-- SLIDE 9: AT-RISK RADAR & PARENT SIGN CHASE -->
+  <section class="slide" data-note="Automations #2 and #3 turn passive mark tables into proactive academic interventions: catching 12% drops or exam anxiety before finals, and replacing manual signature checks with a 1-click chase queue.">
+    <div class="slide-head">
+      <div>
+        <div class="eyebrow">08 · Automations #2 &amp; #3 — Proactive Academic Care</div>
+        <h2>At-Risk Sudden-Drop Radar &amp; Parent-Sign Chase Queue</h2>
+        <p class="sub">Turning 10,000+ stored marks into early academic interventions and zero-friction parent accountability.</p>
+      </div>
+      <span class="pill amber">Early Intervention Tools</span>
+    </div>
+    <div class="slide-body">
+      <div class="grid-2">
+        <div class="card-box accent-rose">
+          <h3>📉 Unit-Test-to-Semester At-Risk Radar</h3>
+          <ul>
+            <li>Cross-queries <code>unit_test_results</code> vs <code>report_card</code> per student and subject (<code>at_risk_radar.php</code>).</li>
+            <li>Flags <strong>&ge;12% Sudden Drops</strong>, <strong>Repeated Fails</strong>, and <strong>Exam-Anxiety Splits</strong> (high FA classwork &ge;60%, failing SA written exam).</li>
+            <li><strong>1-Click PTM Draft:</strong> Stages a polite bilingual (English + Marathi) WhatsApp PTM invite for teacher review.</li>
+          </ul>
+        </div>
+        <div class="card-box accent-amber">
+          <h3>✍️ Zero-Click Parent-Sign Chase Queue</h3>
+          <ul>
+            <li>Segments <code>parents_sign = 0</code> across classes into <strong>Never Sent</strong> vs <strong>Sent but Unsigned</strong> (<code>parent_sign_chase.php</code>).</li>
+            <li>1-click <strong>Mark Signed / Undo</strong> AJAX toggle, printable <strong>Assembly Bench-Check Sheet</strong>, and direct batch forwarding to the WhatsApp Hub.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="slide-foot"><span>HCC Campus Automation System</span><span>Slide 9 / 15</span></div>
+  </section>
+
+  <!-- SLIDE 10: WHATSAPP HUB -->
+  <section class="slide" data-note="Our School WhatsApp Hub offers both a Sequential Hub for mass report cards and a full WhatsApp Web Replica—while enforcing strict Send-on-Press rules so no unreviewed bot message can ever trigger a WhatsApp account ban.">
+    <div class="slide-head">
+      <div>
+        <div class="eyebrow">09 · Parent Communication Hub</div>
+        <h2>WhatsApp Web Replica &amp; Strict Send-on-Press Protocol</h2>
+        <p class="sub">Driven by an isolated Node.js Puppeteer bridge (<code>whatsapp-bridge.js</code>) with 15s privacy filtering and zero autonomous sends.</p>
+      </div>
+      <span class="pill green">Anti-Ban Human-in-the-Loop</span>
+    </div>
+    <div class="slide-body">
+      <div class="grid-2">
+        <div class="card-box accent-left">
+          <h3>💬 Dual-Mode Staff Workspace</h3>
+          <ul>
+            <li><strong>Guided Sequential Hub</strong>: Step through an entire division (`Alt+←/→`), attach client PDFs, and track <code>Pending / Sent / No Phone</code> status pills.</li>
+            <li><strong>WhatsApp Web Replica</strong>: Full chat list, <code>🎯 Enquiries</code> / <code>Pinned</code> tabs, template library, delivery ticks, and revoke-for-everyone support.</li>
+          </ul>
+        </div>
+        <div class="card-box accent-rose">
+          <h3>🛡️ Hardened Send-on-Press Invariants</h3>
+          <ul>
+            <li>All auto-send endpoints permanently disabled (<code>api_automated_send.php</code> returns <code>HTTP 410</code>).</li>
+            <li>Queue requires <code>origin='manual_ui'</code> + authenticated human <code>approved_by</code>.</li>
+            <li><strong>Strict Privacy Filter</strong> blocks unrelated personal 1-on-1 chats from entering school tables; <code>@lid</code> IDs stored safely without phone corruption.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="slide-foot"><span>HCC Campus Automation System</span><span>Slide 10 / 15</span></div>
+  </section>
+
+  <!-- SLIDE 11: LOCAL ADMISSION AI -->
+  <section class="slide" data-note="Our Rust Admission AI Service on port 8085 runs Ollama llama3.2:1b locally on 8 GB RAM, grounded strictly in 9 approved school JSONs, with Result Co-Pilot for parent mark queries.">
+    <div class="slide-head">
+      <div>
+        <div class="eyebrow">10 · Local-First AI &amp; Automation #11</div>
+        <h2>Rust Admission AI Service (:8085) &amp; Result-Day Co-Pilot</h2>
+        <p class="sub">Zero cloud dependency for student/parent data; grounded strictly in <code>knowledge/approved/</code> (9 JSON topics).</p>
+      </div>
+      <span class="pill">13 Rust Unit Tests Passing</span>
+    </div>
+    <div class="slide-body">
+      <div class="grid-3">
+        <div class="card-box accent-indigo">
+          <h3>🧠 Grounded Local Inference</h3>
+          <p>Axum microservice serializes requests (<code>concurrency=1</code>) for <code>llama3.2:1b</code> on 8 GB RAM. Wraps parent texts in XML <code>&lt;PARENT_MESSAGE&gt;</code> tags to prevent prompt injection.</p>
+        </div>
+        <div class="card-box accent-rose">
+          <h3>🛡️ SafetyValidator Guardrails</h3>
+          <p>Word-boundary regex classifier (13 intents) + post-generation validator that redacts hallucinated fees or invented seat counts and flags staff escalation automatically.</p>
+        </div>
+        <div class="card-box accent-green">
+          <h3>📊 Result-Day Co-Pilot (#11)</h3>
+          <p>Clicking <strong>📊 Co-Pilot</strong> in WhatsApp Composer pulls that child's live <code>report_card</code> / <code>unit_test_results</code> marks + office hours to stage an empathetic teacher reply.</p>
+        </div>
+      </div>
+    </div>
+    <div class="slide-foot"><span>HCC Campus Automation System</span><span>Slide 11 / 15</span></div>
+  </section>
+
+  <!-- SLIDE 12: RUST ENGINE & AI AUTOMATIONS -->
+  <section class="slide" data-note="Our Rust automation daemon polls MySQL every 5 seconds with crash recovery, extracting parent WhatsApp action cards, auto-advancing follow-ups on replies, compiling the 8:30 AM Principal Briefing, and watching bridge DOM health.">
+    <div class="slide-head">
+      <div>
+        <div class="eyebrow">11 · Automations #9, #10, #12, #13 &amp; #14</div>
+        <h2>Durable Rust Worker &amp; Passive WhatsApp Intelligence</h2>
+        <p class="sub">High-reliability Rust daemon (<code>hcc-automation-engine</code>) converting inbound noise into one-click morning office actions.</p>
+      </div>
+      <span class="pill green">5 Rust Tests Passing · Crash Safe</span>
+    </div>
+    <div class="slide-body">
+      <div class="grid-2">
+        <div class="card-box accent-left">
+          <h3>⚡ Inbound Signal Action Cards (#9 &amp; #10)</h3>
+          <p>Scans incoming WhatsApp texts &amp; media blobs for <em>Leave Notices</em>, <em>Phone Changes</em>, <em>Fee/UPI Claims</em>, <em>PTM Confirms</em>, and <em>Documents</em> — staging 1-click Apply/Dismiss cards in <code>admission_followups.php</code>.</p>
+        </div>
+        <div class="card-box accent-indigo">
+          <h3>🔁 Auto-Advancing Follow-Ups (#12)</h3>
+          <p>When a parent replies on WhatsApp, incoming ingestion moves <code>last_inbound_at</code> &amp; updates follow-up priority so staff never chase already-answered leads.</p>
+        </div>
+        <div class="card-box accent-amber">
+          <h3>☀️ 8:30 AM Principal Daily Briefing (#13)</h3>
+          <p>Compiles unreplied parent chats, overdue reminders, urgent leads, pending signals, and bridge status into one morning summary panel before school starts.</p>
+        </div>
+        <div class="card-box accent-rose">
+          <h3>🩺 Silent Bridge DOM Watchdog (#14)</h3>
+          <p>Monitors Puppeteer selector health (<code>chatListRows</code>, compose box) and heartbeat age so staff are warned before WhatsApp Web UI updates break a batch dispatch.</p>
+        </div>
+      </div>
+    </div>
+    <div class="slide-foot"><span>HCC Campus Automation System</span><span>Slide 12 / 15</span></div>
+  </section>
+
+  <!-- SLIDE 13: SECURITY LAYER -->
+  <section class="slide" data-note="We audited all 303 files and resolved 21 security findings: locking down the bridge filter PII dump, jailing media paths, gating migrations, securing Google OAuth, adding CSRF + CSP nonces, and removing hardcoded Rust credentials.">
+    <div class="slide-head">
+      <div>
+        <div class="eyebrow">12 · Security Layer &amp; Hardening Audit</div>
+        <h2>Defense-in-Depth: 21 Verified Security Hardening Fixes</h2>
+        <p class="sub">Zero critical or high vulnerabilities left open across PHP endpoints, Apache directories, JS DOM templates, and Rust services.</p>
+      </div>
+      <span class="pill green">21 / 21 Remediated &amp; Verified</span>
+    </div>
+    <div class="slide-body">
+      <table class="clean">
+        <thead>
+          <tr><th>Domain</th><th>Hardening Controls Verified</th><th>Live Apache / Test Proof</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Auth, RBAC &amp; OAuth</strong></td><td><code>SameSite=Strict</code>, 15m session rotation, 30m idle timeout, verified Google OAuth allowlist, admin-only SMTP/OAuth, zero plaintext OTP logs.</td><td>Unauthenticated filter API &rarr; <code>401</code>; open migrations &rarr; <code>403</code>.</td></tr>
+          <tr><td><strong>File &amp; Directory Locks</strong></td><td><code>realpath()</code> jail inside <code>storage/whatsapp/</code>, MIME allowlists, <code>.htaccess</code> on <code>storage/</code>, <code>automation/</code>, <code>knowledge/</code>, <code>tools/</code>, <code>scratch/</code>.</td><td>Direct HTTP to <code>db.rs</code>, <code>storage/</code>, <code>knowledge/</code> &rarr; <code>403</code>.</td></tr>
+          <tr><td><strong>Injection &amp; XSS Defense</strong></td><td>100% PDO prepared statements, <code>X-CSRF-Token</code> on JSON mutations, CSP nonces on print/cards, <code>JSON_HEX_TAG</code>, CSV formula prefixing.</td><td>0 PHP/JS syntax errors; SSRF 26/26 unit tests pass.</td></tr>
+          <tr><td><strong>Secrets &amp; Microservices</strong></td><td>Hardcoded DB password removed from Rust <code>db.rs</code>; AES-256-GCM API key storage; <code>CorsLayer::permissive()</code> removed on <code>:8085</code>.</td><td>E2E Admission (23/23), Revoke (12/12), No-Auto-Send (0 fails).</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="slide-foot"><span>HCC Campus Automation System</span><span>Slide 13 / 15</span></div>
+  </section>
+
+  <!-- SLIDE 14: DEPLOYMENT MATRIX -->
+  <section class="slide" data-note="The platform is fully cross-platform, with native launchd services on macOS, NSSM Windows Services and PowerShell scripts for 8 GB Windows PCs, and systemd units for Linux.">
+    <div class="slide-head">
+      <div>
+        <div class="eyebrow">13 · Cross-Platform Deployment &amp; Operations</div>
+        <h2>macOS, Windows (8 GB PC) &amp; Linux Service Parity</h2>
+        <p class="sub">Unified codebase with platform-aware MySQL transport, browser detection, and daemon orchestration.</p>
+      </div>
+      <span class="pill">Full Operations Manual Included</span>
+    </div>
+    <div class="slide-body">
+      <div class="grid-3">
+        <div class="card-box accent-left">
+          <h3>🍎 macOS (XAMPP + PHP-FPM)</h3>
+          <ul>
+            <li>Unix socket MySQL auto-detection.</li>
+            <li><code>launchd</code> agent via <code>install-launchd.sh</code>.</li>
+            <li><code>start-bridge.sh</code> / <code>stop-bridge.sh</code> with single-instance locking.</li>
+          </ul>
+        </div>
+        <div class="card-box accent-indigo">
+          <h3>🪟 Windows (XAMPP 8 GB PC)</h3>
+          <ul>
+            <li>Direct TCP <code>127.0.0.1:3306</code> fallback.</li>
+            <li><code>register-services.ps1</code> registers NSSM services: <code>HCC-AdmissionAI</code>, <code>HCC-FollowupEngine</code>, <code>HCC-WhatsAppBridge</code>.</li>
+          </ul>
+        </div>
+        <div class="card-box accent-green">
+          <h3>🐧 Linux (Apache / Nginx)</h3>
+          <ul>
+            <li>User/system <code>systemd</code> services via <code>install-systemd.sh</code>.</li>
+            <li>Idempotent SQL migrations in <code>data/migrations/2026_11_*.sql</code>.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="slide-foot"><span>HCC Campus Automation System</span><span>Slide 14 / 15</span></div>
+  </section>
+
+  <!-- SLIDE 15: CONCLUSION -->
+  <section class="slide dark" data-note="Thank you. Everything presented today is implemented, secured, verified against live databases, and documented in the Master Instruction Guide for immediate institutional use.">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <span class="pill">14 · Executive Summary &amp; Operational Readiness</span>
+      <span class="pill">Ready for Campus Rollout</span>
+    </div>
+    <div style="my:auto;">
+      <h1 style="font-size:40px;color:#fff;">Built for Real School Operations. Secured End-to-End.</h1>
+      <p class="sub" style="font-size:17px;max-width:860px;margin-top:10px;">
+        From messy teacher Excel markbooks and 7:15 AM substitute rosters to cryptographically signed parent cards and local-first WhatsApp AI — every workflow stays under HCC's control.
+      </p>
+      <div class="grid-3" style="margin-top:24px;">
+        <div class="card-box"><h3>✅ Verified Quality</h3><p>23/23 Admission E2E tests, 12/12 Revoke tests, 18/18 Rust unit tests, 0 PHP/JS syntax errors, and 0 auto-send violations.</p></div>
+        <div class="card-box"><h3>📖 Full Handbook</h3><p>Complete step-by-step operations &amp; IT guide published in <code>docs/HCC_MASTER_INSTRUCTION_GUIDE.md</code>.</p></div>
+        <div class="card-box"><h3>🚀 Immediate Next Steps</h3><p>1) Link WhatsApp QR on front-desk PC, 2) Start Ollama <code>llama3.2:1b</code> &amp; Rust services, 3) Brief teachers on the 4 new daily tools.</p></div>
+      </div>
+    </div>
+    <div class="slide-foot">
+      <span>Hindustani Covenant Church High School &amp; Junior College, Solapur</span>
+      <span>Thank You · Questions &amp; Live Walkthrough</span>
+    </div>
+  </section>
+
+</div>
+
+<div class="hud">
+  <div class="hud-left">
+    <button onclick="prevSlide()" title="Previous (Left Arrow)">← Prev</button>
+    <button onclick="nextSlide()" title="Next (Right Arrow / Space)">Next →</button>
+    <span id="slideCounter" style="font-weight:700;margin-left:6px;">1 / 15</span>
+  </div>
+  <div class="progress-wrap"><div class="progress-bar" id="progressBar"></div></div>
+  <div class="hud-right">
+    <button onclick="toggleGrid()" title="Slide Overview (G)">Grid</button>
+    <button onclick="toggleNotes()" title="Speaker Notes (S)">Notes</button>
+    <button onclick="toggleFullscreen()" title="Fullscreen (F)">Fullscreen</button>
+    <button onclick="window.print()" title="Export to PDF / PPT (P)" style="background:#1d4ed8;border-color:#2563eb;">Export PDF / PPT</button>
+  </div>
+</div>
+
+<aside class="notes-drawer" id="notesDrawer">
+  <h4>Presenter Speaker Notes</h4>
+  <div id="notesText"></div>
+</aside>
+
+<div class="grid-modal" id="gridModal">
+  <div style="display:flex;justify-content:space-between;align-items:center;max-width:1200px;margin:0 auto 18px;color:#fff;">
+    <h2 style="margin:0;">Slide Overview (Click to Jump)</h2>
+    <button onclick="toggleGrid()" style="background:#334155;color:#fff;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;">Close (Esc)</button>
+  </div>
+  <div class="thumb-grid" id="thumbGrid"></div>
+</div>
+
+<script>
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const counterEl = document.getElementById('slideCounter');
+  const progressEl = document.getElementById('progressBar');
+  const notesDrawer = document.getElementById('notesDrawer');
+  const notesText = document.getElementById('notesText');
+  const gridModal = document.getElementById('gridModal');
+  const thumbGrid = document.getElementById('thumbGrid');
+  let idx = 0;
+
+  function renderSlide(i) {
+    idx = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach((s, n) => s.classList.toggle('active', n === idx));
+    counterEl.textContent = (idx + 1) + ' / ' + slides.length;
+    progressEl.style.width = (((idx + 1) / slides.length) * 100).toFixed(2) + '%';
+    notesText.textContent = slides[idx].dataset.note || 'No notes for this slide.';
+    renderThumbs();
+  }
+
+  function nextSlide() { renderSlide(idx + 1); }
+  function prevSlide() { renderSlide(idx - 1); }
+  function toggleNotes() { notesDrawer.classList.toggle('open'); }
+  function toggleGrid() { gridModal.classList.toggle('open'); renderThumbs(); }
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+    else document.exitFullscreen?.();
+  }
+
+  function renderThumbs() {
+    thumbGrid.innerHTML = '';
+    slides.forEach((s, n) => {
+      const btn = document.createElement('button');
+      btn.className = 'thumb' + (n === idx ? ' current' : '');
+      const title = (s.querySelector('h1, h2')?.textContent || 'Slide ' + (n + 1)).trim();
+      const eyebrow = (s.querySelector('.eyebrow')?.textContent || 'Slide').trim();
+      const small = document.createElement('small');
+      small.textContent = (n + 1) + '. ' + eyebrow;
+      const span = document.createElement('div');
+      span.textContent = title;
+      btn.appendChild(small);
+      btn.appendChild(span);
+      btn.onclick = () => { renderSlide(n); gridModal.classList.remove('open'); };
+      thumbGrid.appendChild(btn);
+    });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); nextSlide(); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); prevSlide(); }
+    else if (e.key === 'f' || e.key === 'F') toggleFullscreen();
+    else if (e.key === 's' || e.key === 'S') toggleNotes();
+    else if (e.key === 'g' || e.key === 'G') toggleGrid();
+    else if (e.key === 'p' || e.key === 'P') window.print();
+    else if (e.key === 'Escape') { gridModal.classList.remove('open'); notesDrawer.classList.remove('open'); }
+  });
+
+  renderSlide(0);
+</script>
+</body>
+</html>

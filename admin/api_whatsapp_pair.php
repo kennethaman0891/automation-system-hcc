@@ -29,10 +29,16 @@ if (!$tmpDir || !is_dir($tmpDir)) {
 $reqFile  = rtrim($tmpDir, '/\\') . DIRECTORY_SEPARATOR . 'whatsapp_pair_request';
 $codeFile = rtrim($tmpDir, '/\\') . DIRECTORY_SEPARATOR . 'whatsapp_pair_code.txt';
 
-$action = $_GET['action'] ?? 'get';
+$action = $_GET['action'] ?? ($_POST['action'] ?? 'get');
 $body   = json_decode(file_get_contents('php://input'), true);
 if (!is_array($body)) {
     $body = $_POST;
+}
+if (in_array($action, ['request', 'cancel'], true)) {
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+        waJsonResponse(['success' => false, 'error' => 'Method not allowed'], 405);
+    }
+    waVerifyCSRF($body);
 }
 
 switch ($action) {

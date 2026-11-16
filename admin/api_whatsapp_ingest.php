@@ -34,6 +34,104 @@ if (is_string($data)) {
     $nested = json_decode($data, true, 512, $jsonFlags);
     if (is_array($nested)) $data = $nested;
 }
+
+$ingestAction = (string)($_GET['action'] ?? '');
+if ($ingestAction === 'save_media') {
+    if (!is_array($data)) {
+        waJsonResponse(['success' => false, 'error' => 'Invalid media payload'], 400);
+    }
+    $waMsgId = trim((string)($data['wa_msg_id'] ?? ''));
+    $b64 = trim((string)($data['data_base64'] ?? ''));
+    if ($waMsgId === '' || $b64 === '') {
+        waJsonResponse(['success' => false, 'error' => 'wa_msg_id and data_base64 are required'], 400);
+    }
+    if (str_contains($b64, ',')) {
+        $b64 = substr($b64, strpos($b64, ',') + 1);
+    }
+    $binary = base64_decode($b64, true);
+    if ($binary === false || $binary === '') {
+        waJsonResponse(['success' => false, 'error' => 'Invalid base64 media data'], 400);
+    }
+    $maxBytes = 10 * 1024 * 1024;
+    if (strlen($binary) > $maxBytes) {
+        waJsonResponse(['success' => false, 'error' => 'Media exceeds 10 MB limit'], 413);
+    }
+    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+    $detectedMime = $finfo ? (string)finfo_buffer($finfo, $binary) : '';
+    if ($finfo) {
+        finfo_close($finfo);
+    }
+    $detectedMime = strtolower(trim(explode(';', $detectedMime, 2)[0]));
+    $mimeExtMap = [
+        'image/jpeg'      => 'jpg',
+        'image/png'       => 'png',
+        'image/webp'      => 'webp',
+        'image/gif'       => 'gif',
+        'application/pdf' => 'pdf',
+    ];
+    if (!isset($mimeExtMap[$detectedMime])) {
+        waJsonResponse(['success' => false, 'error' => 'Unsupported media MIME type: ' . $detectedMime], 415);
+    }
+    $ext = $mimeExtMap[$detectedMime];
+    $subDir = date('Ym');
+    $baseStorage = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'whatsapp';
+    $targetDir = $baseStorage . DIRECTORY_SEPARATOR . 'media' . DIRECTORY_SEPARATOR . $subDir;
+    if (!is_dir($targetDir) && !@mkdir($targetDir, 0750, true) && !is_dir($targetDir)) {
+        waJsonResponse(['success' => false, 'error' => 'Unable to initialize media storage directory'], 500);
+    }
+    $fileName = bin2hex(random_bytes(16)) . '.' . $ext;
+    $fullPath = $targetDir . DIRECTORY_SEPARATOR . $fileName;
+    if (@file_put_contents($fullPath, $binary) === false) {
+        waJsonResponse(['success' => false, 'error' => 'Failed to persist media file'], 500);
+    }
+    @chmod($fullPath, 0640);
+    $resolvedPath = realpath($fullPath) ?: $fullPath;
+    $db = waGetDB();
+    $mediaKey = hash('sha256', $waMsgId);
+    $fileSize = strlen($binary);
+    $dbMsgStmt = $db->prepare("SELECT id FROM whatsapp_messages WHERE wa_msg_id = ? LIMIT 1");
+    $dbMsgStmt->execute([$waMsgId]);
+    $dbMsgId = (int)$dbMsgStmt->fetchColumn();
+
+    $mediaUrl = $dbMsgId > 0 ? ('api_whatsapp_media.php?msg_id=' . $dbMsgId) : null;
+    try {
+        $wmStmt = $db->prepare("
+            INSERT INTO whatsapp_media (wa_media_key, msg_id, media_type, mime_type, file_size, file_name, local_path, is_downloaded)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+            ON DUPLICATE KEY UPDATE
+                msg_id = COALESCE(VALUES(msg_id), msg_id),
+                mime_type = VALUES(mime_type),
+                file_size = VALUES(file_size),
+                local_path = VALUES(local_path),
+                is_downloaded = 1
+        ");
+        $wmStmt->execute([
+            $mediaKey,
+            $dbMsgId > 0 ? $dbMsgId : null,
+            str_starts_with($detectedMime, 'image/') ? 'image' : 'document',
+            $detectedMime,
+            $fileSize,
+            $fileName,
+            $resolvedPath,
+        ]);
+        if ($dbMsgId > 0) {
+            $db->prepare("UPDATE whatsapp_messages SET media_url = ?, media_mime = ?, media_size = ? WHERE id = ?")
+               ->execute([$mediaUrl, $detectedMime, $fileSize, $dbMsgId]);
+        }
+    } catch (Throwable $e) {
+        waJsonResponse(['success' => false, 'error' => 'Media DB record failed: ' . $e->getMessage()], 500);
+    }
+
+    waJsonResponse([
+        'success' => true,
+        'msg_id' => $dbMsgId,
+        'mime_type' => $detectedMime,
+        'file_size' => $fileSize,
+        'media_url' => $mediaUrl,
+        'local_path' => $resolvedPath,
+    ]);
+}
+
 if (is_array($data) && isset($data['wa_msg_id']) && !isset($data[0])) {
     $data = [$data];
 }
@@ -89,9 +187,37 @@ try {
                     }
                     $waChatId = $checked['digits'] . '@c.us';
                 }
-                // @lid / title:@slug@lid kept as-is (no phone available)
+                // @lid / title:@slug@lid: link to existing @c.us / wa_lid chat if known, else keep as-is
                 if ($isLid) {
                     $waChatId = strtolower(trim($waChatId));
+                    $resolvedExisting = null;
+                    if (!empty($msg['sender_phone'])) {
+                        $vpLid = waValidateWhatsAppPhone((string)$msg['sender_phone']);
+                        if ($vpLid['ok']) {
+                            $phoneJid = $vpLid['digits'] . '@c.us';
+                            $chkChat = $db->prepare("SELECT id, wa_chat_id FROM whatsapp_chats WHERE wa_chat_id = ? OR wa_lid = ? ORDER BY (wa_chat_id = ?) DESC LIMIT 1");
+                            $chkChat->execute([$phoneJid, $waChatId, $phoneJid]);
+                            $existingRow = $chkChat->fetch(PDO::FETCH_ASSOC);
+                            if ($existingRow) {
+                                $db->prepare("UPDATE whatsapp_chats SET wa_lid = COALESCE(wa_lid, ?) WHERE id = ?")
+                                   ->execute([$waChatId, (int)$existingRow['id']]);
+                                $resolvedExisting = (string)$existingRow['wa_chat_id'];
+                            } else {
+                                $resolvedExisting = $phoneJid;
+                            }
+                        }
+                    }
+                    if ($resolvedExisting === null) {
+                        $chkLid = $db->prepare("SELECT wa_chat_id FROM whatsapp_chats WHERE wa_lid = ? LIMIT 1");
+                        $chkLid->execute([$waChatId]);
+                        $foundByLid = $chkLid->fetchColumn();
+                        if ($foundByLid !== false && $foundByLid !== '') {
+                            $resolvedExisting = (string)$foundByLid;
+                        }
+                    }
+                    if ($resolvedExisting !== null && $resolvedExisting !== '') {
+                        $waChatId = $resolvedExisting;
+                    }
                 }
             }
 
@@ -100,10 +226,16 @@ try {
             // Get or create sender contact (for inbound messages)
             $senderId = null;
             if (!$msg['from_me'] && !empty($msg['sender_wa_id'])) {
+                $senderWaId = (string)$msg['sender_wa_id'];
+                $senderPhone = $msg['sender_phone'] ?? null;
+                if (str_contains($senderWaId, '@lid') && $senderPhone !== null) {
+                    $chkSenderPhone = waValidateWhatsAppPhone((string)$senderPhone);
+                    $senderPhone = $chkSenderPhone['ok'] ? $chkSenderPhone['e164'] : null;
+                }
                 $senderId = waGetOrCreateContact(
                     $db,
-                    $msg['sender_wa_id'],
-                    $msg['sender_phone'] ?? null,
+                    $senderWaId,
+                    $senderPhone,
                     $msg['sender_name'] ?? null,
                     $msg['sender_push_name'] ?? null,
                     $msg['sender_avatar'] ?? null
@@ -296,41 +428,65 @@ function waSyncInboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, ?int $s
     if (waInboundIsBlankSync($msg, $bodyText)) {
         return null;
     }
-    $rawDigitsEarly = preg_replace('/\D/', '', $waChatId);
-    $linkedTail = strlen($rawDigitsEarly) > 10 ? substr($rawDigitsEarly, -10) : $rawDigitsEarly;
-    if (waPhoneIsLinkedSchoolLine($db, $linkedTail)) {
-        return null;
+
+    $isLidChat = stripos($waChatId, '@lid') !== false;
+    $verifiedPhone = null;
+    if (!empty($msg['sender_phone'])) {
+        $vp = waValidateWhatsAppPhone((string)$msg['sender_phone']);
+        if ($vp['ok']) {
+            $verifiedPhone = $vp;
+        }
     }
-    $rawDigits = preg_replace('/\D/', '', $waChatId);
-    if (str_starts_with($rawDigits, '0')) {
-        $rawDigits = substr($rawDigits, 1);
-    }
-    if (strlen($rawDigits) === 10 && preg_match('/^[6-9]/', $rawDigits)) {
-        $rawDigits = '91' . $rawDigits;
-    }
-    if (strlen($rawDigits) < 10) {
-        return null;
+    if (!$verifiedPhone && !$isLidChat) {
+        $vp = waValidateWhatsAppPhone($waChatId);
+        if ($vp['ok']) {
+            $verifiedPhone = $vp;
+        }
     }
 
-    $phoneE164 = '+' . $rawDigits;
-    $phone10 = strlen($rawDigits) > 10 ? substr($rawDigits, -10) : $rawDigits;
-    $formattedPhone = '+' . substr($rawDigits, 0, 2) . ' ' . substr($rawDigits, 2, 5) . ' ' . substr($rawDigits, 7);
+    if ($verifiedPhone) {
+        $rawDigits = $verifiedPhone['digits'];
+        $phone10 = strlen($rawDigits) > 10 ? substr($rawDigits, -10) : $rawDigits;
+        if (waPhoneIsLinkedSchoolLine($db, $phone10)) {
+            return null;
+        }
+        $phoneE164 = $verifiedPhone['e164'];
+        $formattedPhone = '+' . substr($rawDigits, 0, 2) . ' ' . substr($rawDigits, 2, 5) . ' ' . substr($rawDigits, 7);
+    } elseif ($isLidChat) {
+        // Never invent a fake phone_e164 from opaque @lid identifier
+        $rawDigits = '';
+        $phone10 = '';
+        $phoneE164 = '';
+        $formattedPhone = '';
+    } else {
+        return null;
+    }
 
     $parentName = trim((string)($msg['sender_name'] ?? ($msg['sender_push_name'] ?? '')));
     if ($parentName === '' || strtolower($parentName) === 'you') {
-        $parentName = 'Parent (' . $phone10 . ')';
+        $parentName = $phone10 !== '' ? ('Parent (' . $phone10 . ')') : 'Parent (WhatsApp)';
     }
 
     // 1. Check if an active enquiry already exists
-    $enqStmt = $db->prepare("
-        SELECT id, parent_name, student_name, interested_class, academic_year, status, followup_category, chat_id
-        FROM admission_enquiries
-        WHERE chat_id = ? 
-           OR phone_e164 = ? 
-           OR phone_number LIKE ?
-        ORDER BY id DESC LIMIT 1
-    ");
-    $enqStmt->execute([$chatId, $phoneE164, "%{$phone10}%"]);
+    if ($phoneE164 !== '' && $phone10 !== '') {
+        $enqStmt = $db->prepare("
+            SELECT id, parent_name, student_name, interested_class, academic_year, status, followup_category, chat_id
+            FROM admission_enquiries
+            WHERE chat_id = ?
+               OR phone_e164 = ?
+               OR phone_number LIKE ?
+            ORDER BY id DESC LIMIT 1
+        ");
+        $enqStmt->execute([$chatId, $phoneE164, "%{$phone10}%"]);
+    } else {
+        $enqStmt = $db->prepare("
+            SELECT id, parent_name, student_name, interested_class, academic_year, status, followup_category, chat_id
+            FROM admission_enquiries
+            WHERE chat_id = ?
+            ORDER BY id DESC LIMIT 1
+        ");
+        $enqStmt->execute([$chatId]);
+    }
     $existing = $enqStmt->fetch(PDO::FETCH_ASSOC);
 
     if ($existing) {
@@ -347,22 +503,22 @@ function waSyncInboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, ?int $s
                 return $enquiryId;
             }
         }
+        $msgCreatedAt = !empty($msg['timestamp']) ? date('Y-m-d H:i:s', (int)$msg['timestamp']) : date('Y-m-d H:i:s');
+
         if ($bodyText !== '') {
-            // Deduplicate only identical message body received within 30 seconds (network duplicate prevention).
+            // Deduplicate only identical message body received within 60 seconds or within 5 minutes of message timestamp (repeat scrape prevention).
             // Do NOT use a multi-hour interval which drops valid conversational replies like 'yes', 'ok', 'thanks'.
             $byBody = $db->prepare("
                 SELECT id FROM admission_enquiry_messages
                 WHERE enquiry_id = ? AND message_type = 'incoming_message' AND body = ?
-                  AND created_at >= (NOW() - INTERVAL 30 SECOND)
+                  AND (created_at >= (NOW() - INTERVAL 60 SECOND) OR ABS(TIMESTAMPDIFF(SECOND, created_at, ?)) <= 300)
                 LIMIT 1
             ");
-            $byBody->execute([$enquiryId, $bodyText]);
+            $byBody->execute([$enquiryId, $bodyText, $msgCreatedAt]);
             if ($byBody->fetchColumn()) {
                 return $enquiryId;
             }
         }
-
-        $msgCreatedAt = !empty($msg['timestamp']) ? date('Y-m-d H:i:s', (int)$msg['timestamp']) : date('Y-m-d H:i:s');
 
         // Append to conversation timeline
         $msgIns = $db->prepare("
@@ -388,6 +544,7 @@ function waSyncInboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, ?int $s
         $upStmt = $db->prepare("
             UPDATE admission_enquiries
             SET updated_at = NOW(),
+                last_inbound_at = GREATEST(COALESCE(last_inbound_at, ?), ?),
                 chat_id = COALESCE(chat_id, ?),
                 contact_id = COALESCE(contact_id, ?),
                 next_followup_date = CASE
@@ -400,7 +557,7 @@ function waSyncInboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, ?int $s
                 END
             WHERE id = ?
         ");
-        $upStmt->execute([$chatId, $senderId, $enquiryId]);
+        $upStmt->execute([$msgCreatedAt, $msgCreatedAt, $chatId, $senderId, $enquiryId]);
 
         // Log follow-up history entry
         $histStmt = $db->prepare("
@@ -426,7 +583,11 @@ function waSyncInboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, ?int $s
 
     // A roster parent who only says "ok" stays in the WhatsApp hub.
     // An unknown number, or a roster number asking about admission, becomes an enquiry.
-    if (waPhoneOnSchoolRoster($db, $phone10) && !waMessageHasAdmissionIntent($bodyText)) {
+    // For @lid-only chats with no phone, only create an admission enquiry when admission intent is explicit.
+    if ($phone10 !== '' && waPhoneOnSchoolRoster($db, $phone10) && !waMessageHasAdmissionIntent($bodyText)) {
+        return null;
+    }
+    if ($phone10 === '' && !waMessageHasAdmissionIntent($bodyText)) {
         return null;
     }
 
@@ -488,6 +649,8 @@ function waSyncInboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, ?int $s
 
     $suggestedMsg = "Namaste {$parentName}, thank you for contacting Hindustani Covenant Church High School. We would be pleased to assist you with admission details for {$detectedClass}. Could you please share the student's full name and current school?";
 
+    $msgCreatedAt = !empty($msg['timestamp']) ? date('Y-m-d H:i:s', (int)$msg['timestamp']) : date('Y-m-d H:i:s');
+
     $newEnqSql = "
         INSERT INTO admission_enquiries (
             parent_name, phone_number, phone_e164, student_name, interested_class, academic_year,
@@ -495,14 +658,14 @@ function waSyncInboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, ?int $s
             next_followup_date, next_followup_time, priority, reminder_status,
             suggested_message, next_recommended_action,
             chat_id, contact_id, matched_student_roll, matched_student_class, matched_existing_parent,
-            created_by_name, created_at, updated_at
+            created_by_name, last_inbound_at, created_at, updated_at
         ) VALUES (
             ?, ?, ?, NULL, ?, ?,
             ?, 'whatsapp', 'NEW', 'First response pending',
             CURDATE(), '10:00:00', 'high', 'pending',
             ?, 'Review WhatsApp enquiry, share prospectus and schedule interaction.',
             ?, ?, ?, ?, ?,
-            'WhatsApp Automation', NOW(), NOW()
+            'WhatsApp Automation', ?, NOW(), NOW()
         )
     ";
     $newStmt = $db->prepare($newEnqSql);
@@ -510,11 +673,10 @@ function waSyncInboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, ?int $s
         $parentName, $formattedPhone, $phoneE164, $detectedClass, $academicYear,
         $bodyText !== '' ? $bodyText : '[WhatsApp Inbound Enquiry]',
         $suggestedMsg,
-        $chatId, $senderId, $matchedRoll, $matchedClass, $matchedParent
+        $chatId, $senderId, $matchedRoll, $matchedClass, $matchedParent,
+        $msgCreatedAt
     ]);
     $newEnquiryId = (int)$db->lastInsertId();
-
-    $msgCreatedAt = !empty($msg['timestamp']) ? date('Y-m-d H:i:s', (int)$msg['timestamp']) : date('Y-m-d H:i:s');
 
     // Insert into admission_enquiry_messages
     $db->prepare("
@@ -567,17 +729,33 @@ function waSyncOutboundAdmissionEnquiry(PDO $db, array $msg, int $chatId, string
     if ($bodyText === '' || waInboundIsBlankSync($msg, $bodyText)) {
         return;
     }
-    $rawDigits = preg_replace('/\D/', '', $waChatId);
-    $phone10 = strlen($rawDigits) > 10 ? substr($rawDigits, -10) : $rawDigits;
-    $phoneE164 = '+' . $rawDigits;
+    $isLidChat = stripos($waChatId, '@lid') !== false;
+    if (!$isLidChat) {
+        $vp = waValidateWhatsAppPhone($waChatId);
+        $rawDigits = $vp['ok'] ? $vp['digits'] : '';
+        $phone10 = strlen($rawDigits) > 10 ? substr($rawDigits, -10) : $rawDigits;
+        $phoneE164 = $vp['ok'] ? $vp['e164'] : '';
+    } else {
+        $phone10 = '';
+        $phoneE164 = '';
+    }
 
     // Check if an active enquiry exists for this chat or phone
-    $enqStmt = $db->prepare("
-        SELECT id, status FROM admission_enquiries
-        WHERE chat_id = ? OR phone_e164 = ? OR phone_number LIKE ?
-        ORDER BY id DESC LIMIT 1
-    ");
-    $enqStmt->execute([$chatId, $phoneE164, "%{$phone10}%"]);
+    if ($phoneE164 !== '' && $phone10 !== '') {
+        $enqStmt = $db->prepare("
+            SELECT id, status FROM admission_enquiries
+            WHERE chat_id = ? OR phone_e164 = ? OR phone_number LIKE ?
+            ORDER BY id DESC LIMIT 1
+        ");
+        $enqStmt->execute([$chatId, $phoneE164, "%{$phone10}%"]);
+    } else {
+        $enqStmt = $db->prepare("
+            SELECT id, status FROM admission_enquiries
+            WHERE chat_id = ?
+            ORDER BY id DESC LIMIT 1
+        ");
+        $enqStmt->execute([$chatId]);
+    }
     $existing = $enqStmt->fetch(PDO::FETCH_ASSOC);
     if (!$existing) {
         return;

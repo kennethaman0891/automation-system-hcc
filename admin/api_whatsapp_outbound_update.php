@@ -3,7 +3,7 @@ require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/includes/whatsapp_functions.php';
 require_once __DIR__ . '/auth_check.php';
 
-waRequireBridgeOrAuth();
+$auth = waRequireBridgeOrAuth();
 header('Content-Type: application/json; charset=utf-8');
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -13,16 +13,27 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 $db = waGetDB();
 waEnsureRevokeSchema($db);
 $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+if (($auth['via'] ?? '') !== 'bridge_secret') {
+    waVerifyCSRF(is_array($input) ? $input : null);
+}
 
 $id = (int)($input['id'] ?? 0);
 if (!$id) {
     waJsonResponse(['success' => false, 'error' => 'id required'], 400);
 }
 
+$allowedStatuses = ['queued', 'processing', 'sent', 'delivered', 'read', 'failed', 'cancelled'];
 $updates = [];
 $params = [];
 
-if (isset($input['status'])) { $updates[] = 'status = ?'; $params[] = $input['status']; }
+if (isset($input['status'])) {
+    $newStatus = trim((string)$input['status']);
+    if (!in_array($newStatus, $allowedStatuses, true)) {
+        waJsonResponse(['success' => false, 'error' => 'Invalid outbound status'], 422);
+    }
+    $updates[] = 'status = ?';
+    $params[] = $newStatus;
+}
 if (isset($input['attempts'])) { $updates[] = 'attempts = ?'; $params[] = (int)$input['attempts']; }
 if (isset($input['error_message'])) { $updates[] = 'error_message = ?'; $params[] = $input['error_message']; }
 // MySQL TIMESTAMP rejects ISO-8601 (2026-11-05T06:55:02.444Z). A bad clock must

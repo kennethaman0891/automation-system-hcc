@@ -173,15 +173,29 @@ function rcDisplayRemark($remark, $percentage): string {
 function rcDashboardStats() {
     $db = getDB();
     $s = [];
-    $r = $db->query("SELECT COUNT(DISTINCT roll_no) AS cnt FROM report_card")->fetch();
+    $r = $db->query("SELECT COUNT(DISTINCT CONCAT(academic_year,'|',std,'|',division,'|',roll_no)) AS cnt FROM report_card")->fetch();
     $s['students'] = (int)$r['cnt'];
     $r = $db->query("SELECT COUNT(DISTINCT subject_name) AS cnt FROM report_card")->fetch();
     $s['subjects'] = (int)$r['cnt'];
-    $r = $db->query("SELECT COUNT(DISTINCT roll_no) AS total, SUM(CASE WHEN obtained >= maxtotal THEN 1 ELSE 0 END) AS passed FROM (SELECT roll_no, SUM(fa_obtained+sa_obtained) AS obtained, SUM(fa_max+sa_max) AS maxtotal FROM report_card GROUP BY roll_no) t")->fetch();
-    $s['passed'] = (int)$r['passed'];
-    $s['total'] = (int)$r['total'];
+    $r = $db->query("
+        SELECT COUNT(*) AS total,
+               SUM(CASE
+                   WHEN CAST(std AS UNSIGNED) >= 9 THEN (obtained / maxtotal * 100) >= 35
+                   ELSE (obtained / maxtotal * 100) >= 33
+               END) AS passed,
+               AVG(obtained / maxtotal * 100) AS avgPct
+        FROM (
+            SELECT academic_year, std, division, semester, roll_no,
+                   SUM(fa_obtained + sa_obtained) AS obtained,
+                   SUM(fa_max + sa_max) AS maxtotal
+            FROM report_card
+            GROUP BY academic_year, std, division, semester, roll_no
+            HAVING maxtotal > 0
+        ) t
+    ")->fetch();
+    $s['passed'] = (int)($r['passed'] ?? 0);
+    $s['total'] = (int)($r['total'] ?? 0);
     $s['passPct'] = $s['total'] > 0 ? round(($s['passed'] / $s['total']) * 100, 1) : 0;
-    $r = $db->query("SELECT AVG(pct) AS avgPct FROM (SELECT roll_no, AVG(pct) AS pct FROM (SELECT roll_no, (fa_obtained+sa_obtained)/(fa_max+sa_max)*100 AS pct FROM report_card) t GROUP BY roll_no) tt")->fetch();
     $s['avgPct'] = round((float)($r['avgPct'] ?? 0), 1);
     return $s;
 }
@@ -375,6 +389,9 @@ function rcResultsMatrix(string $classKey, string $search = ''): array {
 function rcSaveBulkMarks(string $classKey, array $marks): array {
     $c = rcParseClassKey(urldecode($classKey));
     if ($c['std'] === '') return ['ok' => false, 'error' => 'A class must be selected.', 'saved' => 0];
+    if (rcIsVaultLocked($c['academic_year'], $c['semester'])) {
+        return ['ok' => false, 'error' => "Academic year {$c['academic_year']} is locked in the Records Archive.", 'saved' => 0];
+    }
     $subjects = rcClassSubjects($classKey);
     if (empty($subjects)) return ['ok' => false, 'error' => 'No subjects configured for this class.', 'saved' => 0];
     $cfg = [];
@@ -425,7 +442,17 @@ function rcSaveBulkMarks(string $classKey, array $marks): array {
 
 function rcAllStudents($filters = []) {
     $db = getDB();
-    $sql = "SELECT roll_no, student_name, academic_year, std, division, semester, SUM(fa_obtained+sa_obtained) AS obtained, SUM(fa_max+sa_max) AS maxtotal, COUNT(*) AS subject_count, GROUP_CONCAT(DISTINCT subject_name ORDER BY subject_name SEPARATOR ', ') AS subject_names, SUM(fa_obtained+sa_obtained) AS total FROM report_card";
+    $sql = "SELECT roll_no, student_name, academic_year, std, division, semester,
+                   SUM(fa_obtained+sa_obtained) AS obtained,
+                   SUM(fa_max+sa_max) AS maxtotal,
+                   COUNT(*) AS subject_count,
+                   GROUP_CONCAT(DISTINCT subject_name ORDER BY subject_name SEPARATOR ', ') AS subject_names,
+                   SUM(fa_obtained+sa_obtained) AS total,
+                   MAX(NULLIF(remark, '')) AS raw_remark,
+                   MAX(NULLIF(attendance, '')) AS attendance,
+                   MAX(parents_sign) AS parents_sign,
+                   MAX(NULLIF(parent_phone, '')) AS parent_phone
+            FROM report_card";
     $params = [];
     $where = [];
     if (!empty($filters['class_key'])) {
@@ -456,16 +483,12 @@ function rcAllStudents($filters = []) {
         $r['percentage'] = $r['maxtotal'] > 0 ? round(($r['obtained'] / $r['maxtotal']) * 100, 2) : 0;
         $r['grade'] = calculateGrade($r['percentage'], $r['std']);
         $r['passed'] = ((int)$r['std'] >= 9 ? $r['percentage'] >= 35 : $r['percentage'] >= 33);
-        // Build class_key for this student's class context
         $r['class_key'] = $r['academic_year'] . '|' . $r['std'] . '|' . $r['division'] . '|' . $r['semester'];
-        // pull remark/attendance/sign/phone from first row for this student in this class
-        $meta = $db->prepare("SELECT remark, attendance, parents_sign, parent_phone FROM report_card WHERE roll_no=? AND academic_year=? AND std=? AND division=? AND semester=? LIMIT 1");
-        $meta->execute([$r['roll_no'], $r['academic_year'], $r['std'], $r['division'], $r['semester']]);
-        $m = $meta->fetch(PDO::FETCH_ASSOC) ?: [];
-        $r['remark'] = rcDisplayRemark($m['remark'] ?? '', $r['percentage'] ?? 0);
-        $r['attendance'] = $m['attendance'] ?? '';
-        $r['parents_sign'] = (int)($m['parents_sign'] ?? 0);
-        $r['parent_phone'] = $m['parent_phone'] ?? '';
+        $r['remark'] = rcDisplayRemark($r['raw_remark'] ?? '', $r['percentage'] ?? 0);
+        unset($r['raw_remark']);
+        $r['attendance'] = $r['attendance'] ?? '';
+        $r['parents_sign'] = (int)($r['parents_sign'] ?? 0);
+        $r['parent_phone'] = $r['parent_phone'] ?? '';
         $rows[] = $r;
     }
     return $rows;
@@ -519,6 +542,11 @@ function rcGetNextRollNumber(string $classKey): int {
 
 /* ── Save entry (add or update) ── */
 function rcSaveEntry($data) {
+    $yr = trim((string)($data['academic_year'] ?? ''));
+    $sem = trim((string)($data['semester'] ?? ''));
+    if ($yr !== '' && rcIsVaultLocked($yr, $sem)) {
+        return ['ok' => false, 'error' => "Academic year {$yr} is locked in the Records Archive."];
+    }
     $db = getDB();
     $db->beginTransaction();
     try {
@@ -580,6 +608,16 @@ function rcSaveEntry($data) {
         }
 
         $db->commit();
+        rcSyncStudentMaster([
+            'gr_no' => $data['gr_no'] ?? '',
+            'academic_year' => trim((string)$data['academic_year']),
+            'std' => trim((string)$data['std']),
+            'division' => trim((string)$data['division']),
+            'roll_no' => trim((string)$data['roll_no']),
+            'student_name' => trim((string)(!empty($data['renamed_name']) ? $data['renamed_name'] : $data['student_name'])),
+            'date_of_birth' => $dobVal,
+            'parent_phone' => $phoneVal ?? '',
+        ]);
         return ['ok' => true, 'error' => ''];
     } catch (Exception $e) {
         if ($db->inTransaction()) $db->rollBack();
@@ -691,16 +729,27 @@ function dobToWords($dob) {
 function rcSaveBulkRemarks(string $classKey, array $remarks): array {
     $c = rcParseClassKey(urldecode($classKey));
     if ($c['std'] === '') return ['ok' => false, 'error' => 'A class must be selected.', 'saved' => 0];
+    if (rcIsVaultLocked($c['academic_year'], $c['semester'])) {
+        return ['ok' => false, 'error' => "Academic year {$c['academic_year']} is locked in the Records Archive.", 'saved' => 0];
+    }
     $db = getDB();
     $saved = 0;
     try {
+        $pctStmt = $db->prepare("SELECT roll_no, SUM(fa_obtained+sa_obtained) AS obt, SUM(fa_max+sa_max) AS maxt FROM report_card WHERE academic_year=? AND std=? AND division=? AND semester=? GROUP BY roll_no");
+        $pctStmt->execute([$c['academic_year'], $c['std'], $c['division'], $c['semester']]);
+        $pctMap = [];
+        foreach ($pctStmt->fetchAll(PDO::FETCH_ASSOC) as $pr) {
+            $mTot = (float)($pr['maxt'] ?? 0);
+            $pctMap[(string)$pr['roll_no']] = $mTot > 0 ? round(((float)$pr['obt'] / $mTot) * 100, 2) : 0;
+        }
+
         $db->beginTransaction();
         $upd = $db->prepare("UPDATE report_card SET remark=? WHERE academic_year=? AND std=? AND division=? AND semester=? AND roll_no=?");
         foreach ($remarks as $roll => $text) {
             $roll = trim((string)$roll);
             if ($roll === '') continue;
             $text = trim((string)$text);
-            $text = rcDisplayRemark($text, 0);
+            $text = rcDisplayRemark($text, $pctMap[$roll] ?? 0);
             if (mb_strlen($text) > 120) $text = mb_substr($text, 0, 120);
             $upd->execute([$text, $c['academic_year'], $c['std'], $c['division'], $c['semester'], $roll]);
             if ($upd->rowCount() > 0) $saved++;
@@ -713,8 +762,38 @@ function rcSaveBulkRemarks(string $classKey, array $remarks): array {
     return ['ok' => true, 'error' => '', 'saved' => $saved];
 }
 
+function rcSaveBulkAttendance(string $classKey, array $attendance): array {
+    $c = rcParseClassKey(urldecode($classKey));
+    if ($c['std'] === '') return ['ok' => false, 'error' => 'A class must be selected.', 'saved' => 0];
+    if (rcIsVaultLocked($c['academic_year'], $c['semester'])) {
+        return ['ok' => false, 'error' => "Academic year {$c['academic_year']} is locked in the Records Archive.", 'saved' => 0];
+    }
+    $db = getDB();
+    $saved = 0;
+    try {
+        $db->beginTransaction();
+        $upd = $db->prepare("UPDATE report_card SET attendance=? WHERE academic_year=? AND std=? AND division=? AND semester=? AND roll_no=?");
+        foreach ($attendance as $roll => $text) {
+            $roll = trim((string)$roll);
+            if ($roll === '') continue;
+            $text = trim((string)$text);
+            if (mb_strlen($text) > 40) $text = mb_substr($text, 0, 40);
+            $upd->execute([$text, $c['academic_year'], $c['std'], $c['division'], $c['semester'], $roll]);
+            if ($upd->rowCount() > 0) $saved++;
+        }
+        $db->commit();
+    } catch (Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        return ['ok' => false, 'error' => 'Attendance save failed.', 'saved' => 0];
+    }
+    return ['ok' => true, 'error' => '', 'saved' => $saved];
+}
+
 function rcDeleteStudent($classKey, $roll) {
     $c = rcParseClassKey(urldecode($classKey));
+    if (rcIsVaultLocked($c['academic_year'] ?? '', $c['semester'] ?? '')) {
+        return false;
+    }
     $db = getDB();
     $stmt = $db->prepare("DELETE FROM report_card WHERE academic_year=? AND std=? AND division=? AND semester=? AND roll_no=?");
     return $stmt->execute([$c['academic_year'], $c['std'], $c['division'], $c['semester'], $roll]);
@@ -742,6 +821,11 @@ function rcDeleteStudentsBulk(array $targets) {
     }
     if (empty($byClass)) {
         return ['ok' => false, 'deleted' => 0, 'error' => 'No valid students selected.'];
+    }
+    foreach ($byClass as $group) {
+        if (rcIsVaultLocked($group['c']['academic_year'], $group['c']['semester'])) {
+            return ['ok' => false, 'deleted' => 0, 'error' => "Academic year {$group['c']['academic_year']} is locked in the Records Archive."];
+        }
     }
     $db = getDB();
     $deleted = 0;
@@ -777,6 +861,9 @@ function rcDeleteUnitTestStudents(string $year, string $std, string $division, s
     if ($year === '' || $std === '') {
         return ['ok' => false, 'deleted' => 0, 'error' => 'A class must be selected.'];
     }
+    if (rcIsVaultLocked($year)) {
+        return ['ok' => false, 'deleted' => 0, 'error' => "Academic year {$year} is locked in the Records Archive."];
+    }
     $clean = [];
     foreach (array_slice($rolls, 0, 500) as $r) {
         $r = trim((string)$r);
@@ -802,13 +889,13 @@ function rcDeleteUnitTestStudents(string $year, string $std, string $division, s
 function rcTopPerformer() {
     $db = getDB();
     $stmt = $db->query(
-        "SELECT student_name, std, division, semester, academic_year,
+        "SELECT roll_no, student_name, std, division, semester, academic_year,
                 ROUND(SUM(fa_obtained+sa_obtained)/SUM(fa_max+sa_max)*100, 1) AS pct,
                 SUM(fa_obtained+sa_obtained) AS obtained,
                 SUM(fa_max+sa_max) AS max_total
          FROM report_card
-         GROUP BY student_name, std, division, semester, academic_year
-         HAVING pct IS NOT NULL
+         GROUP BY academic_year, std, division, semester, roll_no, student_name
+         HAVING max_total > 0 AND obtained > 0 AND pct IS NOT NULL
          ORDER BY pct DESC
          LIMIT 1"
     );
@@ -819,13 +906,13 @@ function rcTopPerformer() {
 function rcLowestPerformer() {
     $db = getDB();
     $stmt = $db->query(
-        "SELECT student_name, std, division, semester, academic_year,
+        "SELECT roll_no, student_name, std, division, semester, academic_year,
                 ROUND(SUM(fa_obtained+sa_obtained)/SUM(fa_max+sa_max)*100, 1) AS pct,
                 SUM(fa_obtained+sa_obtained) AS obtained,
                 SUM(fa_max+sa_max) AS max_total
          FROM report_card
-         GROUP BY student_name, std, division, semester, academic_year
-         HAVING pct IS NOT NULL
+         GROUP BY academic_year, std, division, semester, roll_no, student_name
+         HAVING max_total > 0 AND obtained > 0 AND pct IS NOT NULL
          ORDER BY pct ASC
          LIMIT 1"
     );
@@ -848,7 +935,10 @@ function rcSubjectStats() {
     $stmt = $db->query(
         "SELECT subject_name,
                 COUNT(*) AS total_entries,
-                SUM(CASE WHEN (fa_obtained+sa_obtained) >= (fa_max+sa_max) THEN 1 ELSE 0 END) AS passed,
+                SUM(CASE
+                    WHEN ((fa_obtained+sa_obtained)/(fa_max+sa_max)*100) >= (CASE WHEN CAST(std AS UNSIGNED) >= 9 THEN 35 ELSE 33 END)
+                    THEN 1 ELSE 0
+                END) AS passed,
                 ROUND(AVG((fa_obtained+sa_obtained)/(fa_max+sa_max)*100), 1) AS avg_pct
          FROM report_card
          WHERE fa_max + sa_max > 0
@@ -1040,6 +1130,9 @@ function rcPromoteClassWithChecklist(
     if ((int)$sourceStd >= 10 || $targetStd === 'Graduated') {
         return ['ok' => false, 'error' => 'Standard 10 is the terminal graduating class and cannot be promoted to Standard 11.'];
     }
+    if (rcIsVaultLocked($targetYear, $targetSem)) {
+        return ['ok' => false, 'error' => "Target academic year {$targetYear} is locked in the Records Archive."];
+    }
 
     // 1. Fetch Target Subjects
     $targetSubjects = rcGetStandardSubjects($targetStd, $targetYear, $targetDiv, $targetSem);
@@ -1051,11 +1144,15 @@ function rcPromoteClassWithChecklist(
     $classKey = "$targetYear|$targetStd|$targetDiv|$targetSem";
     rcSaveClassSubjects($classKey, $targetSubjects);
 
-    // 3. Fetch Selected Students from Source Class
+    // 3. Fetch Selected Students from Source Class (including parent_phone)
     $placeholders = implode(',', array_fill(0, count($selectedRolls), '?'));
-    $sql = "SELECT DISTINCT roll_no, student_name, date_of_birth 
-            FROM report_card 
-            WHERE academic_year = ? AND std = ? AND division = ? AND semester = ? AND roll_no IN ($placeholders)";
+    $sql = "SELECT roll_no,
+                   MAX(student_name) AS student_name,
+                   MAX(NULLIF(date_of_birth, '')) AS date_of_birth,
+                   MAX(NULLIF(parent_phone, '')) AS parent_phone
+            FROM report_card
+            WHERE academic_year = ? AND std = ? AND division = ? AND semester = ? AND roll_no IN ($placeholders)
+            GROUP BY roll_no";
     $params = array_merge([$sourceYear, $sourceStd, $sourceDiv, $sourceSem], $selectedRolls);
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
@@ -1063,6 +1160,20 @@ function rcPromoteClassWithChecklist(
 
     if (empty($students)) {
         return ['ok' => false, 'error' => 'No matching student records found in source class.'];
+    }
+
+    // Preload any GR numbers from students_master for source cohort
+    $grByRoll = [];
+    try {
+        $smStmt = $db->prepare("SELECT gr_no, roll_no, student_name, parent_phone FROM students_master WHERE academic_year = ? AND std = ? AND division = ?");
+        $smStmt->execute([$sourceYear, $sourceStd, $sourceDiv]);
+        foreach ($smStmt->fetchAll(PDO::FETCH_ASSOC) as $smr) {
+            if (!empty($smr['roll_no'])) {
+                $grByRoll[(string)$smr['roll_no']] = $smr;
+            }
+        }
+    } catch (Throwable $e) {
+        // students_master optional fallback
     }
 
     try {
@@ -1073,15 +1184,20 @@ function rcPromoteClassWithChecklist(
         $insertStmt = $db->prepare("
             INSERT INTO report_card 
             (academic_year, std, division, semester, roll_no, student_name, subject_name,
-             fa_max, fa_obtained, sa_max, sa_obtained, remark, attendance, parents_sign, date_of_birth)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0.0, ?, 0.0, '', '', 0, ?)
+             fa_max, fa_obtained, sa_max, sa_obtained, remark, attendance, parents_sign, date_of_birth, parent_phone)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0.0, ?, 0.0, '', '', 0, ?, ?)
         ");
 
         $insertedStudents = 0;
         foreach ($students as $stu) {
             $exactRoll = trim((string)$stu['roll_no']);
             $name = trim((string)$stu['student_name']);
-            $dob  = trim((string)($stu['date_of_birth'] ?? ''));
+            $dob  = !empty($stu['date_of_birth']) ? trim((string)$stu['date_of_birth']) : null;
+            $phone = trim((string)($stu['parent_phone'] ?? ''));
+            if ($phone === '' && !empty($grByRoll[$exactRoll]['parent_phone'])) {
+                $phone = trim((string)$grByRoll[$exactRoll]['parent_phone']);
+            }
+            $grNo = $grByRoll[$exactRoll]['gr_no'] ?? '';
 
             foreach ($targetSubjects as $sub) {
                 $subName = trim((string)$sub['subject_name']);
@@ -1104,10 +1220,25 @@ function rcPromoteClassWithChecklist(
                     $subName,
                     $faMax,
                     $saMax,
-                    $dob
+                    $dob,
+                    $phone !== '' ? $phone : null
                 ]);
             }
             $insertedStudents++;
+
+            if ($grNo !== '' || $phone !== '') {
+                rcSyncStudentMaster([
+                    'gr_no' => $grNo,
+                    'academic_year' => $targetYear,
+                    'std' => $targetStd,
+                    'division' => $targetDiv,
+                    'roll_no' => $exactRoll,
+                    'student_name' => $name,
+                    'date_of_birth' => $dob,
+                    'parent_phone' => $phone,
+                    'status' => 'active',
+                ]);
+            }
 
             // Record previous standard baseline snapshot in student_promotion_history
             try {
@@ -1161,12 +1292,23 @@ function rcPromoteClassWithChecklist(
 
 /* Rollback / delete a promoted cohort from target year without touching source */
 function rcRollbackClassPromotion(string $targetYear, string $targetStd, string $targetDiv, string $targetSem): array {
+    if (rcIsVaultLocked($targetYear, $targetSem)) {
+        return ['ok' => false, 'error' => "Target academic year {$targetYear} is locked in the Records Archive."];
+    }
     $db = getDB();
     try {
         $db->beginTransaction();
         $del = $db->prepare("DELETE FROM report_card WHERE academic_year = ? AND std = ? AND division = ? AND semester = ?");
         $del->execute([$targetYear, $targetStd, $targetDiv, $targetSem]);
         $count = $del->rowCount();
+
+        try {
+            $histDel = $db->prepare("DELETE FROM student_promotion_history WHERE target_year = ? AND target_std = ? AND target_div = ? AND target_sem = ?");
+            $histDel->execute([$targetYear, $targetStd, $targetDiv, $targetSem]);
+        } catch (Throwable $e) {
+            // ignore if history table doesn't exist yet
+        }
+
         $db->commit();
 
         rcAddNotification(
@@ -1362,18 +1504,22 @@ function rcGetUnitTestClassData(string $year, string $std, string $division, str
         $roll = (string)$r['roll_no'];
         if (!isset($students[$roll])) {
             $students[$roll] = [
-                'roll_no'      => $roll,
-                'student_name' => $r['student_name'],
-                'gender'       => $r['gender'] ?? '',
-                'attendance'   => $r['attendance'] ?? '',
-                'parents_sign' => (int)$r['parents_sign'],
-                'parent_phone' => $r['parent_phone'] ?? '',
-                'subjects'     => [],
+                'roll_no'        => $roll,
+                'student_name'   => $r['student_name'],
+                'gender'         => $r['gender'] ?? '',
+                'attendance'     => $r['attendance'] ?? '',
+                'parents_sign'   => (int)$r['parents_sign'],
+                'parent_phone'   => $r['parent_phone'] ?? '',
+                'stored_remark'  => trim((string)($r['remark'] ?? '')),
+                'subjects'       => [],
                 'total_obtained' => 0.0,
                 'total_max'      => 0.0,
                 'has_absent'     => false,
                 'all_absent'     => true,
+                'has_entered'    => false,
             ];
+        } elseif ($students[$roll]['stored_remark'] === '' && trim((string)($r['remark'] ?? '')) !== '') {
+            $students[$roll]['stored_remark'] = trim((string)$r['remark']);
         }
 
         $sName = $r['subject_name'];
@@ -1390,24 +1536,34 @@ function rcGetUnitTestClassData(string $year, string $std, string $division, str
         $students[$roll]['total_max'] += $sMax;
         if ($isAb) {
             $students[$roll]['has_absent'] = true;
+            $students[$roll]['has_entered'] = true;
         } else {
             $students[$roll]['all_absent'] = false;
-            $students[$roll]['total_obtained'] += ($sObt !== null ? $sObt : 0.0);
+            if ($sObt !== null) {
+                $students[$roll]['has_entered'] = true;
+                $students[$roll]['total_obtained'] += $sObt;
+            }
         }
     }
 
-    // Compute student percentage, grade, and remark
+    // Compute student percentage, grade, and remark (preserve stored non-empty custom remark)
     foreach ($students as $roll => &$st) {
-        if ($st['all_absent'] || $st['total_max'] <= 0) {
+        $storedRemark = $st['stored_remark'];
+        unset($st['stored_remark']);
+        if (!$st['has_entered'] || $st['total_max'] <= 0) {
             $st['percentage'] = null;
             $st['grade'] = '-';
-            $st['remark'] = 'Absent';
+            $st['remark'] = $storedRemark;
+        } elseif ($st['all_absent']) {
+            $st['percentage'] = null;
+            $st['grade'] = '-';
+            $st['remark'] = ($storedRemark !== '') ? $storedRemark : 'Absent';
         } else {
             $pct = round(($st['total_obtained'] / $st['total_max']) * 100, 2);
             $st['percentage'] = $pct;
             $gr = rcCalculateUnitTestGradeAndRemark($pct);
             $st['grade'] = $gr['grade'];
-            $st['remark'] = $gr['remark'];
+            $st['remark'] = ($storedRemark !== '' && $storedRemark !== 'Absent') ? $storedRemark : $gr['remark'];
         }
     }
     unset($st);
@@ -1437,6 +1593,9 @@ function rcSaveUnitTestMarksBulk(
     array $marksPayload, array $remarksPayload = [], array $attnPayload = [],
     string $adminUser = 'Admin'
 ): array {
+    if (rcIsVaultLocked($year)) {
+        return ['ok' => false, 'error' => "Academic year {$year} is locked in the Records Archive."];
+    }
     rcEnsureUnitTestTables();
     $db = getDB();
 
@@ -1473,31 +1632,51 @@ function rcSaveUnitTestMarksBulk(
             $subMarks = $studentData['marks'] ?? [];
             if (!is_array($subMarks)) continue;
 
-            // Compute student total for grading
+            // Compute student total for grading (clamping marks to [0, maxM])
             $totObt = 0.0;
             $totMax = 0.0;
             $allAb = true;
+            $anyEntered = false;
 
             foreach ($subMarks as $subj => $val) {
                 $maxM = $subjectMaxMap[$subj] ?? 20.0;
                 $totMax += $maxM;
-                $isAb = ($val === '-' || $val === 'AB' || $val === 'ab');
-                if (!$isAb) {
+                $valTrim = trim((string)$val);
+                $valUp = strtoupper($valTrim);
+                $isAb = ($valUp === '-' || $valUp === 'AB' || $valUp === 'ABSENT');
+                if ($isAb) {
+                    $anyEntered = true;
+                } elseif ($valTrim !== '') {
                     $allAb = false;
-                    $totObt += (float)$val;
+                    $anyEntered = true;
+                    $totObt += round(clampMark((float)$valTrim, $maxM), 1);
+                } else {
+                    $allAb = false;
                 }
             }
 
-            $pct = (!$allAb && $totMax > 0) ? round(($totObt / $totMax) * 100, 2) : null;
-            $autoGr = rcCalculateUnitTestGradeAndRemark($pct);
-            $grade = $autoGr['grade'];
-            $remark = ($customRemark !== '') ? $customRemark : $autoGr['remark'];
+            if (!$anyEntered) {
+                $pct = null;
+                $grade = '-';
+                $remark = $customRemark;
+            } elseif ($allAb) {
+                $pct = null;
+                $grade = '-';
+                $remark = ($customRemark !== '') ? $customRemark : 'Absent';
+            } else {
+                $pct = ($totMax > 0) ? round(($totObt / $totMax) * 100, 2) : null;
+                $autoGr = rcCalculateUnitTestGradeAndRemark($pct);
+                $grade = $autoGr['grade'];
+                $remark = ($customRemark !== '') ? $customRemark : $autoGr['remark'];
+            }
 
             // Save each subject entry
             foreach ($subMarks as $subj => $val) {
                 $maxM = $subjectMaxMap[$subj] ?? 20.0;
-                $isAb = ($val === '-' || $val === 'AB' || $val === 'ab') ? 1 : 0;
-                $obtVal = $isAb ? null : round((float)$val, 1);
+                $valTrim = trim((string)$val);
+                $valUp = strtoupper($valTrim);
+                $isAb = ($valUp === '-' || $valUp === 'AB' || $valUp === 'ABSENT') ? 1 : 0;
+                $obtVal = ($isAb || $valTrim === '') ? null : round(clampMark((float)$valTrim, $maxM), 1);
 
                 $updStmt->execute([
                     $year, $std, $division, $testType,
@@ -1528,13 +1707,20 @@ function rcSyncUnitTestRoster(
     string $sourceYear, string $std, string $division, string $testType,
     string $adminUser = 'Admin'
 ): array {
+    if (rcIsVaultLocked($sourceYear)) {
+        return ['ok' => false, 'error' => "Academic year {$sourceYear} is locked in the Records Archive."];
+    }
     rcEnsureUnitTestTables();
     $db = getDB();
 
-    // 1. Fetch active students from report_card
-    $stmt = $db->prepare("SELECT DISTINCT roll_no, student_name, date_of_birth 
-                          FROM report_card 
+    // 1. Fetch active students from report_card (including parent_phone)
+    $stmt = $db->prepare("SELECT roll_no,
+                                 MAX(student_name) AS student_name,
+                                 MAX(NULLIF(date_of_birth, '')) AS date_of_birth,
+                                 MAX(NULLIF(parent_phone, '')) AS parent_phone
+                          FROM report_card
                           WHERE academic_year = ? AND std = ? AND division = ?
+                          GROUP BY roll_no
                           ORDER BY CAST(roll_no AS UNSIGNED), roll_no");
     $stmt->execute([$sourceYear, $std, $division]);
     $cohort = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -1553,14 +1739,15 @@ function rcSyncUnitTestRoster(
 
         $ins = $db->prepare("
             INSERT INTO unit_test_results 
-            (academic_year, std, division, test_type, roll_no, student_name, subject_name, max_marks, marks_obtained, is_absent, grade, remark, attendance)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0.0, 0, 'E', 'Needs Major Improvement', '')
+            (academic_year, std, division, test_type, roll_no, student_name, subject_name, max_marks, marks_obtained, is_absent, grade, remark, attendance, parent_phone)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, '-', '', '', ?)
         ");
 
         $addedCount = 0;
         foreach ($cohort as $stu) {
             $roll = trim((string)$stu['roll_no']);
             $name = trim((string)$stu['student_name']);
+            $phone = !empty($stu['parent_phone']) ? trim((string)$stu['parent_phone']) : null;
 
             foreach ($subjects as $s) {
                 $subName = $s['subject_name'];
@@ -1571,7 +1758,7 @@ function rcSyncUnitTestRoster(
 
                 $ins->execute([
                     $sourceYear, $std, $division, $testType,
-                    $roll, $name, $subName, $maxM
+                    $roll, $name, $subName, $maxM, $phone
                 ]);
             }
             $addedCount++;
@@ -1593,6 +1780,9 @@ function rcSyncUnitTestRoster(
 
 /* Delete / clear a Unit Test class cohort */
 function rcDeleteUnitTestClass(string $year, string $std, string $division, string $testType): array {
+    if (rcIsVaultLocked($year)) {
+        return ['ok' => false, 'error' => "Academic year {$year} is locked in the Records Archive."];
+    }
     rcEnsureUnitTestTables();
     $db = getDB();
     try {
@@ -1706,7 +1896,10 @@ function rcSaveUnitTestEntry(array $data, string $adminUser = 'Admin'): array {
     rcEnsureUnitTestTables();
     $db = getDB();
 
-    $year     = trim($data['academic_year'] ?? '2025-26');
+    $year     = trim($data['academic_year'] ?? rcGetActiveAcademicYear());
+    if (rcIsVaultLocked($year)) {
+        return ['ok' => false, 'error' => "Academic year {$year} is locked in the Records Archive."];
+    }
     $std      = trim($data['std'] ?? '');
     $division = trim($data['division'] ?? 'A');
     $testType = trim($data['test_type'] ?? 'Unit Test 1');
@@ -1743,7 +1936,7 @@ function rcSaveUnitTestEntry(array $data, string $adminUser = 'Admin'): array {
             $isAb = !empty($s['is_absent']) ? 1 : 0;
             if (!$isAb) {
                 $allAb = false;
-                $totObt += (float)($s['marks_obtained'] ?? 0.0);
+                $totObt += round(clampMark((float)($s['marks_obtained'] ?? 0.0), $sMax), 1);
             }
         }
 
@@ -1780,7 +1973,7 @@ function rcSaveUnitTestEntry(array $data, string $adminUser = 'Admin'): array {
             $sMax = (float)($s['max_marks'] ?? 20.0);
             if ($sMax <= 0) $sMax = 20.0;
             $isAb = !empty($s['is_absent']) ? 1 : 0;
-            $obtVal = $isAb ? null : round((float)($s['marks_obtained'] ?? 0.0), 1);
+            $obtVal = $isAb ? null : round(clampMark((float)($s['marks_obtained'] ?? 0.0), $sMax), 1);
 
             $updStmt->execute([
                 $year, $std, $division, $testType,
@@ -1824,8 +2017,25 @@ function rcSaveUnitTestEntry(array $data, string $adminUser = 'Admin'): array {
 
 function rcGetBaseHostUrl(): string {
     $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['SERVER_PORT'] ?? 80) == 443) ? 'https' : 'http';
-    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $rawHost = trim((string)($_SERVER['HTTP_HOST'] ?? 'localhost'));
+    // Strip path/userinfo/newline tricks and enforce valid hostname[:port] (prevent Host Header Injection L-4)
+    $host = preg_match('/^([a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?)*|\[[0-9a-f:]+\])(?::[0-9]{1,5})?$/i', $rawHost)
+        ? $rawHost
+        : 'localhost';
     return $scheme . '://' . $host;
+}
+
+function rcBase64UrlEncode(string $data): string {
+    return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
+}
+
+function rcBase64UrlDecode(string $data) {
+    $norm = strtr($data, '-_', '+/');
+    $pad = strlen($norm) % 4;
+    if ($pad > 0) {
+        $norm .= str_repeat('=', 4 - $pad);
+    }
+    return base64_decode($norm, true);
 }
 
 function rcGenerateParentToken(string $type, array $params, int $ttlDays = 90): string {
@@ -1835,56 +2045,61 @@ function rcGenerateParentToken(string $type, array $params, int $ttlDays = 90): 
     $issuedAt = time();
     $expiresAt = $issuedAt + ($ttlDays * 86400);
     $payload = [
-        'type' => $type,
-        'params' => $params,
-        'iat' => $issuedAt,
-        'exp' => $expiresAt,
+        'type'   => $type,
+        'params' => array_map('strval', $params),
+        'iat'    => $issuedAt,
+        'exp'    => $expiresAt,
     ];
-    $payloadB64 = base64_encode(json_encode($payload));
+    $payloadB64 = rcBase64UrlEncode(json_encode($payload));
     $sig = substr(hash_hmac('sha256', $payloadB64, JWT_SECRET, true), 0, 16);
-    $sigB64 = rtrim(base64_encode($sig), '=');
+    $sigB64 = rcBase64UrlEncode($sig);
     return $payloadB64 . '.' . $sigB64;
 }
 
 function rcVerifyParentToken(string $type, array $params, string $token): bool {
-    if (trim($token) === '') return false;
-    
-    // New format: payloadB64.sigB64 (with embedded expiry)
+    $token = trim($token);
+    if ($token === '') return false;
+    $normParams = array_map('strval', $params);
+
+    // Token format: payloadB64.sigB64 (URL-safe Base64, also backward-compatible with legacy standard Base64)
     if (strpos($token, '.') !== false) {
         [$payloadB64, $sigB64] = explode('.', $token, 2);
-        $payloadJson = base64_decode($payloadB64, true);
+        $payloadJson = rcBase64UrlDecode($payloadB64);
         if ($payloadJson === false) return false;
         $payload = json_decode($payloadJson, true);
         if (!$payload || !isset($payload['type'], $payload['params'], $payload['iat'], $payload['exp'])) {
             return false;
         }
-        if ($payload['type'] !== $type) return false;
-        if ($payload['params'] !== $params) return false;
-        if (time() > $payload['exp']) return false;
+        if ((string)$payload['type'] !== $type) return false;
+        if (!is_array($payload['params']) || array_map('strval', $payload['params']) !== $normParams) return false;
+        if (time() > (int)$payload['exp']) return false;
+
         $expectedSig = substr(hash_hmac('sha256', $payloadB64, JWT_SECRET, true), 0, 16);
-        $expectedSigB64 = rtrim(base64_encode($expectedSig), '=');
-        return hash_equals($expectedSigB64, $sigB64);
+        $expectedUrlSafe = rcBase64UrlEncode($expectedSig);
+        $expectedLegacy  = rtrim(base64_encode($expectedSig), '=');
+        return hash_equals($expectedUrlSafe, $sigB64) || hash_equals($expectedLegacy, $sigB64);
     }
-    
+
     // Legacy format: simple HMAC (no expiry) - for backward compatibility
-    $legacyPayload = $type . '|' . implode('|', array_map('strval', $params));
+    $legacyPayload = $type . '|' . implode('|', $normParams);
     $legacyExpected = substr(hash_hmac('sha256', $legacyPayload, JWT_SECRET), 0, 16);
     return hash_equals($legacyExpected, $token);
 }
 
 function rcGetPublicCardUrl(string $classKey, string $roll): string {
-    $token = rcGenerateParentToken('card', [$classKey, $roll]);
-    return rcGetBaseHostUrl() . BASE_URL . 'public_card.php?class=' . urlencode($classKey) . '&roll=' . urlencode($roll) . '&token=' . $token;
+    $rawClassKey = urldecode($classKey);
+    $token = rcGenerateParentToken('card', [$rawClassKey, $roll]);
+    return rcGetBaseHostUrl() . BASE_URL . 'public_card.php?class=' . urlencode($rawClassKey) . '&roll=' . urlencode($roll) . '&token=' . rawurlencode($token);
 }
 
 function rcGetPublicSlipUrl(string $year, string $std, string $division, string $testType, string $roll): string {
     $token = rcGenerateParentToken('slip', [$year, $std, $division, $testType, $roll]);
-    return rcGetBaseHostUrl() . BASE_URL . 'public_slip.php?year=' . urlencode($year) . '&std=' . urlencode($std) . '&division=' . urlencode($division) . '&test_type=' . urlencode($testType) . '&roll=' . urlencode($roll) . '&token=' . $token;
+    return rcGetBaseHostUrl() . BASE_URL . 'public_slip.php?year=' . urlencode($year) . '&std=' . urlencode($std) . '&division=' . urlencode($division) . '&test_type=' . urlencode($testType) . '&roll=' . urlencode($roll) . '&token=' . rawurlencode($token);
 }
 
 function rcGetPublicBonafideUrl(string $grNo, string $certSerial): string {
     $token = rcGenerateParentToken('bonafide', [$grNo, $certSerial]);
-    return rcGetBaseHostUrl() . BASE_URL . 'public_bonafide.php?gr=' . urlencode($grNo) . '&sr=' . urlencode($certSerial) . '&token=' . $token;
+    return rcGetBaseHostUrl() . BASE_URL . 'public_bonafide.php?gr=' . urlencode($grNo) . '&sr=' . urlencode($certSerial) . '&token=' . rawurlencode($token);
 }
 
 /* ═════════════════════════════════════════════════════════════════════════
@@ -2029,7 +2244,10 @@ function rcGetVaultYearsSummary(): array {
         $rcStat = $db->prepare("SELECT 
             COUNT(DISTINCT CONCAT(std,'-',division,'-',roll_no)) as unique_students,
             COUNT(*) as total_records,
-            SUM(CASE WHEN (fa_obtained + sa_obtained) >= ((fa_max + sa_max) * 0.35) THEN 1 ELSE 0 END) as passed_marks,
+            SUM(CASE
+                WHEN (fa_max + sa_max) > 0 AND ((fa_obtained + sa_obtained) / (fa_max + sa_max) * 100) >= (CASE WHEN CAST(std AS UNSIGNED) >= 9 THEN 35 ELSE 33 END)
+                THEN 1 ELSE 0
+            END) as passed_marks,
             COUNT(DISTINCT CONCAT(std,'-',division,'-',semester)) as total_classes
             FROM report_card WHERE academic_year = ?");
         $rcStat->execute([$yr]);
@@ -2233,46 +2451,93 @@ function rcGetPromotionHistoryForClass(string $targetYear, string $targetStd, st
 /**
  * Returns an individual student's multi-year historical dossier across all standards.
  */
-function rcGetStudentMultiYearHistory(string $name, string $rollNo = ''): array {
+function rcGetStudentMultiYearHistory(string $name, string $rollNo = '', string $grNo = ''): array {
     $db = getDB();
     $history = [];
+    $rollNo = trim($rollNo);
+    $grNo   = trim($grNo);
 
-    // 1. Report card records across all years
-    $sql = "SELECT academic_year, std, division, semester, roll_no, student_name,
-                   SUM(fa_obtained + sa_obtained) as obtained,
-                   SUM(fa_max + sa_max) as max_total,
-                   remark, attendance
-            FROM report_card
-            WHERE student_name = ?
-            GROUP BY academic_year, std, division, semester, roll_no, student_name, remark, attendance
-            ORDER BY academic_year, CAST(std AS UNSIGNED), semester";
-    $stmt = $db->prepare($sql);
-    $stmt->execute([$name]);
+    if ($grNo !== '') {
+        $sm = rcFindStudentByGR($grNo);
+        if ($sm) {
+            if ($name === '') $name = (string)$sm['student_name'];
+            if ($rollNo === '' && !empty($sm['roll_no'])) $rollNo = (string)$sm['roll_no'];
+        }
+    }
+
+    // 1. Report card records across all years (filter by roll_no when supplied to avoid same-name collisions)
+    if ($rollNo !== '') {
+        $sql = "SELECT academic_year, std, division, semester, roll_no, student_name,
+                       SUM(fa_obtained + sa_obtained) as obtained,
+                       SUM(fa_max + sa_max) as max_total,
+                       MAX(NULLIF(remark, '')) as remark, MAX(NULLIF(attendance, '')) as attendance
+                FROM report_card
+                WHERE student_name = ? AND roll_no = ?
+                GROUP BY academic_year, std, division, semester, roll_no, student_name
+                ORDER BY academic_year, CAST(std AS UNSIGNED), semester";
+        $stmt = $db->prepare($sql);
+        $stmt->execute([$name, $rollNo]);
+    } else {
+        $sql = "SELECT academic_year, std, division, semester, roll_no, student_name,
+                       SUM(fa_obtained + sa_obtained) as obtained,
+                       SUM(fa_max + sa_max) as max_total,
+                       MAX(NULLIF(remark, '')) as remark, MAX(NULLIF(attendance, '')) as attendance
+                FROM report_card
+                WHERE student_name = ?
+                GROUP BY academic_year, std, division, semester, roll_no, student_name
+                ORDER BY academic_year, CAST(std AS UNSIGNED), semester";
+        $stmt = $db->prepare($sql);
+        $stmt->execute([$name]);
+    }
     $history['report_cards'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // 2. Unit tests across all years
-    $utSql = "SELECT academic_year, std, division, test_type, roll_no,
-                     SUM(marks_obtained) as obtained,
-                     SUM(max_marks) as max_total,
-                     grade, remark, attendance
-              FROM unit_test_results
-              WHERE student_name = ?
-              GROUP BY academic_year, std, division, test_type, roll_no, grade, remark, attendance
-              ORDER BY academic_year, CAST(std AS UNSIGNED), test_type";
-    $utStmt = $db->prepare($utSql);
-    $utStmt->execute([$name]);
+    if ($rollNo !== '') {
+        $utSql = "SELECT academic_year, std, division, test_type, roll_no,
+                         SUM(marks_obtained) as obtained,
+                         SUM(max_marks) as max_total,
+                         MAX(grade) as grade, MAX(NULLIF(remark, '')) as remark, MAX(NULLIF(attendance, '')) as attendance
+                  FROM unit_test_results
+                  WHERE student_name = ? AND roll_no = ?
+                  GROUP BY academic_year, std, division, test_type, roll_no
+                  ORDER BY academic_year, CAST(std AS UNSIGNED), test_type";
+        $utStmt = $db->prepare($utSql);
+        $utStmt->execute([$name, $rollNo]);
+    } else {
+        $utSql = "SELECT academic_year, std, division, test_type, roll_no,
+                         SUM(marks_obtained) as obtained,
+                         SUM(max_marks) as max_total,
+                         MAX(grade) as grade, MAX(NULLIF(remark, '')) as remark, MAX(NULLIF(attendance, '')) as attendance
+                  FROM unit_test_results
+                  WHERE student_name = ?
+                  GROUP BY academic_year, std, division, test_type, roll_no
+                  ORDER BY academic_year, CAST(std AS UNSIGNED), test_type";
+        $utStmt = $db->prepare($utSql);
+        $utStmt->execute([$name]);
+    }
     $history['unit_tests'] = $utStmt->fetchAll(PDO::FETCH_ASSOC);
 
     // 3. Promotion history
-    $prSql = "SELECT * FROM student_promotion_history WHERE student_name = ? ORDER BY id";
-    $prStmt = $db->prepare($prSql);
-    $prStmt->execute([$name]);
+    if ($rollNo !== '') {
+        $prStmt = $db->prepare("SELECT * FROM student_promotion_history WHERE student_name = ? AND roll_no = ? ORDER BY id");
+        $prStmt->execute([$name, $rollNo]);
+    } else {
+        $prStmt = $db->prepare("SELECT * FROM student_promotion_history WHERE student_name = ? ORDER BY id");
+        $prStmt->execute([$name]);
+    }
     $history['promotions'] = $prStmt->fetchAll(PDO::FETCH_ASSOC);
 
     // 4. Issued bonafides
-    $bfSql = "SELECT * FROM bonafide_issued_log WHERE student_name = ? ORDER BY id DESC";
-    $bfStmt = $db->prepare($bfSql);
-    $bfStmt->execute([$name]);
+    if ($grNo !== '') {
+        $bfStmt = $db->prepare("SELECT * FROM bonafide_issued_log WHERE gr_no = ? ORDER BY id DESC");
+        $bfStmt->execute([$grNo]);
+    } elseif ($rollNo !== '') {
+        $bfStmt = $db->prepare("SELECT * FROM bonafide_issued_log WHERE student_name = ? AND (roll_no = ? OR roll_no = '') ORDER BY id DESC");
+        $bfStmt->execute([$name, $rollNo]);
+    } else {
+        $bfStmt = $db->prepare("SELECT * FROM bonafide_issued_log WHERE student_name = ? ORDER BY id DESC");
+        $bfStmt->execute([$name]);
+    }
     $history['bonafides'] = $bfStmt->fetchAll(PDO::FETCH_ASSOC);
 
     return $history;
@@ -2331,6 +2596,10 @@ function rcArchiveAcademicYear(string $sourceYear, ?string $targetYear, string $
 function rcLogIssuedBonafide(array $certData, string $adminUser = 'Admin'): bool {
     rcEnsureArchiveTables();
     $db = getDB();
+    $year = trim((string)($certData['academic_year'] ?? ''));
+    if ($year === '') {
+        $year = rcGetActiveAcademicYear();
+    }
     $stmt = $db->prepare("
         INSERT INTO bonafide_issued_log 
         (cert_serial, gr_no, academic_year, roll_no, student_name, std, division, date_of_birth, purpose, issued_date, issued_by)
@@ -2340,10 +2609,10 @@ function rcLogIssuedBonafide(array $certData, string $adminUser = 'Admin'): bool
         issued_date = VALUES(issued_date),
         issued_by = VALUES(issued_by)
     ");
-    return $stmt->execute([
+    $ok = $stmt->execute([
         $certData['cert_serial'] ?? '01',
         $certData['gr_no'] ?? '',
-        $certData['academic_year'] ?? '2024-25',
+        $year,
         $certData['roll_no'] ?? '',
         $certData['student_name'] ?? '',
         $certData['std'] ?? '',
@@ -2353,6 +2622,19 @@ function rcLogIssuedBonafide(array $certData, string $adminUser = 'Admin'): bool
         $certData['issued_date'] ?? date('Y-m-d'),
         $adminUser
     ]);
+    if ($ok && !empty($certData['gr_no'])) {
+        rcSyncStudentMaster([
+            'gr_no' => $certData['gr_no'],
+            'academic_year' => $year,
+            'std' => $certData['std'] ?? '',
+            'division' => $certData['division'] ?? '',
+            'roll_no' => $certData['roll_no'] ?? '',
+            'student_name' => $certData['student_name'] ?? '',
+            'date_of_birth' => $certData['date_of_birth'] ?? null,
+            'caste_category' => $certData['caste'] ?? '',
+        ]);
+    }
+    return $ok;
 }
 
 /**
@@ -2936,6 +3218,7 @@ function rcSendPasswordOtpEmail(string $to, string $fullName, string $otp): bool
     return rcDeliverPortalEmail($to, $subject, $text, rcPortalEmailHtml($school, $inner, $logo), $logo ? [$logo] : []);
 }
 
+
 /**
  * Connection test from Account Security. Confirms the mailbox. Does not contain a reset code.
  */
@@ -2961,6 +3244,611 @@ function rcSendRecoveryConnectedEmail(string $to, string $fullName): bool {
     $logo = rcSchoolLogoInline();
     return rcDeliverPortalEmail($to, $subject, $text, rcPortalEmailHtml($school, $inner, $logo), $logo ? [$logo] : []);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ACADEMIC OPS, SECURITY & QR VERIFICATION HELPERS (2026-11)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Checks whether an academic year is locked in academic_year_vault.
+ */
+function rcIsVaultLocked(string $academicYear, ?string $semester = null): bool {
+    $yr = trim($academicYear);
+    if ($yr === '') return false;
+    try {
+        $db = getDB();
+        $stmt = $db->prepare("SELECT is_locked FROM academic_year_vault WHERE academic_year = ? LIMIT 1");
+        $stmt->execute([$yr]);
+        $val = $stmt->fetchColumn();
+        return $val !== false && (int)$val === 1;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+/**
+ * Returns sorted descending list of academic year options dynamically from DB + active + next year.
+ */
+function rcGetAcademicYearOptions(): array {
+    $years = [];
+    $active = rcGetActiveAcademicYear();
+    if ($active !== '') $years[$active] = true;
+
+    // Include next academic year relative to active year (e.g. 2025-26 -> 2026-27)
+    if (preg_match('/^(\d{4})-(\d{2})$/', $active, $m)) {
+        $y1 = (int)$m[1] + 1;
+        $y2 = str_pad((string)(($y1 + 1) % 100), 2, '0', STR_PAD_LEFT);
+        $years["{$y1}-{$y2}"] = true;
+    }
+
+    try {
+        $db = getDB();
+        foreach ([
+            "SELECT DISTINCT academic_year FROM report_card",
+            "SELECT DISTINCT academic_year FROM unit_test_results",
+            "SELECT DISTINCT academic_year FROM academic_year_vault",
+        ] as $sql) {
+            $st = $db->query($sql);
+            if ($st) {
+                while ($r = $st->fetchColumn()) {
+                    $r = trim((string)$r);
+                    if ($r !== '') $years[$r] = true;
+                }
+            }
+        }
+    } catch (Throwable $e) {
+        // fallback gracefully
+    }
+
+    $list = array_keys($years);
+    usort($list, static function ($a, $b) {
+        return strcmp($b, $a);
+    });
+    return $list;
+}
+
+/**
+ * Neutralizes spreadsheet formula injection (CSV/Excel M-6) by prefixing leading =, +, -, @, tab, CR.
+ */
+function rcCsvSafeCell($val): string {
+    $str = (string)$val;
+    if ($str === '') return '';
+    if (preg_match('/^[\t\r\n ]*[=+\-@]/u', $str) || $str[0] === "\t" || $str[0] === "\r") {
+        return "'" . $str;
+    }
+    return $str;
+}
+
+/**
+ * Looks up a student record from students_master by GR number.
+ */
+function rcFindStudentByGR(string $grNo): ?array {
+    $gr = trim($grNo);
+    if ($gr === '') return null;
+    try {
+        $db = getDB();
+        $stmt = $db->prepare("SELECT * FROM students_master WHERE gr_no = ? LIMIT 1");
+        $stmt->execute([$gr]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $row ?: null;
+    } catch (Throwable $e) {
+        return null;
+    }
+}
+
+/**
+ * Searches students_master + report_card + bonafide_issued_log for GR / student autocomplete.
+ */
+function rcSearchStudentsMaster(string $query, int $limit = 15): array {
+    $q = trim($query);
+    $db = getDB();
+    $results = [];
+    $seenKey = [];
+    $esc = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $q);
+    $like = '%' . $esc . '%';
+    $limit = max(1, min(50, $limit));
+
+    // 1. Canonical students_master matches first
+    try {
+        if ($q === '') {
+            $stmt = $db->prepare("SELECT gr_no, roll_no, student_name, date_of_birth, caste_category, parent_phone, std, division, academic_year, 'master' AS source FROM students_master ORDER BY updated_at DESC LIMIT " . $limit);
+            $stmt->execute();
+        } else {
+            $stmt = $db->prepare("SELECT gr_no, roll_no, student_name, date_of_birth, caste_category, parent_phone, std, division, academic_year, 'master' AS source
+                                  FROM students_master
+                                  WHERE gr_no LIKE ? ESCAPE '\\\\' OR student_name LIKE ? ESCAPE '\\\\' OR roll_no LIKE ? ESCAPE '\\\\'
+                                  ORDER BY (gr_no = ?) DESC, student_name ASC
+                                  LIMIT " . $limit);
+            $stmt->execute([$like, $like, $like, $q]);
+        }
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $k = mb_strtolower($r['gr_no'] !== '' ? 'gr:' . $r['gr_no'] : 'rc:' . $r['student_name'] . '|' . $r['std'] . '|' . $r['division']);
+            if (!isset($seenKey[$k])) {
+                $seenKey[$k] = true;
+                $results[] = $r;
+            }
+        }
+    } catch (Throwable $e) {
+        // table may not exist in older state
+    }
+
+    // 2. Fallback/supplement from report_card & bonafide_issued_log if under limit
+    if (count($results) < $limit && $q !== '') {
+        try {
+            $rem = $limit - count($results);
+            $bStmt = $db->prepare("SELECT gr_no, roll_no, student_name, date_of_birth, '' AS caste_category, '' AS parent_phone, std, division, academic_year, 'bonafide_log' AS source
+                                   FROM bonafide_issued_log
+                                   WHERE gr_no LIKE ? ESCAPE '\\\\' OR student_name LIKE ? ESCAPE '\\\\'
+                                   ORDER BY id DESC
+                                   LIMIT " . $rem);
+            $bStmt->execute([$like, $like]);
+            foreach ($bStmt->fetchAll(PDO::FETCH_ASSOC) as $br) {
+                $k = mb_strtolower(($br['gr_no'] ?? '') !== '' ? 'gr:' . $br['gr_no'] : 'rc:' . $br['student_name'] . '|' . $br['std'] . '|' . $br['division']);
+                if (!isset($seenKey[$k])) {
+                    $seenKey[$k] = true;
+                    $results[] = $br;
+                }
+            }
+        } catch (Throwable $e) {
+        }
+    }
+
+    if (count($results) < $limit && $q !== '') {
+        try {
+            $rem = $limit - count($results);
+            $rcStmt = $db->prepare("SELECT '' AS gr_no, roll_no, MAX(student_name) AS student_name, MAX(NULLIF(date_of_birth,'')) AS date_of_birth, '' AS caste_category, MAX(NULLIF(parent_phone,'')) AS parent_phone, std, division, academic_year, 'report_card' AS source
+                                    FROM report_card
+                                    WHERE student_name LIKE ? ESCAPE '\\\\' OR roll_no LIKE ? ESCAPE '\\\\'
+                                    GROUP BY academic_year, std, division, roll_no
+                                    ORDER BY academic_year DESC, CAST(std AS UNSIGNED) DESC, CAST(roll_no AS UNSIGNED) ASC
+                                    LIMIT " . $rem);
+            $rcStmt->execute([$like, $like]);
+            foreach ($rcStmt->fetchAll(PDO::FETCH_ASSOC) as $rcr) {
+                $k = mb_strtolower('rc:' . $rcr['student_name'] . '|' . $rcr['std'] . '|' . $rcr['division']);
+                if (!isset($seenKey[$k])) {
+                    $seenKey[$k] = true;
+                    $results[] = $rcr;
+                }
+            }
+        } catch (Throwable $e) {
+        }
+    }
+
+    return $results;
+}
+
+/**
+ * Normalizes a DOB string (dd/mm/yyyy or YYYY-MM-DD) to Y-m-d for MySQL DATE columns, or null.
+ */
+function rcNormalizeDateToMysql(?string $dob): ?string {
+    $s = trim((string)$dob);
+    if ($s === '') return null;
+    if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $s, $m)) {
+        if (checkdate((int)$m[2], (int)$m[3], (int)$m[1])) return $s;
+    }
+    if (preg_match('/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/', $s, $m)) {
+        $d = (int)$m[1]; $mo = (int)$m[2]; $y = (int)$m[3];
+        if (checkdate($mo, $d, $y)) {
+            return sprintf('%04d-%02d-%02d', $y, $mo, $d);
+        }
+    }
+    return null;
+}
+
+/**
+ * Syncs student metadata into students_master without starting nested DB transactions.
+ */
+function rcSyncStudentMaster(array $data): bool {
+    $grNo = trim((string)($data['gr_no'] ?? ''));
+    $name = trim((string)($data['student_name'] ?? ''));
+    $year = trim((string)($data['academic_year'] ?? ''));
+    $std  = trim((string)($data['std'] ?? ''));
+    $div  = trim((string)($data['division'] ?? ''));
+    $roll = isset($data['roll_no']) && $data['roll_no'] !== '' ? (int)$data['roll_no'] : null;
+    $dob  = rcNormalizeDateToMysql($data['date_of_birth'] ?? null);
+    $caste = trim((string)($data['caste_category'] ?? ''));
+    $phone = preg_replace('/\D+/', '', (string)($data['parent_phone'] ?? ''));
+    $status = in_array(($data['status'] ?? 'active'), ['active', 'promoted', 'alumni', 'left'], true)
+        ? (string)$data['status']
+        : 'active';
+
+    if ($name === '' && $grNo === '') return false;
+
+    try {
+        $db = getDB();
+        if ($grNo !== '') {
+            $stmt = $db->prepare("
+                INSERT INTO students_master (gr_no, roll_no, student_name, date_of_birth, caste_category, parent_phone, std, division, academic_year, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    roll_no = COALESCE(VALUES(roll_no), roll_no),
+                    student_name = IF(VALUES(student_name) <> '', VALUES(student_name), student_name),
+                    date_of_birth = COALESCE(VALUES(date_of_birth), date_of_birth),
+                    caste_category = IF(VALUES(caste_category) <> '', VALUES(caste_category), caste_category),
+                    parent_phone = IF(VALUES(parent_phone) <> '', VALUES(parent_phone), parent_phone),
+                    std = IF(VALUES(std) <> '', VALUES(std), std),
+                    division = IF(VALUES(division) <> '', VALUES(division), division),
+                    academic_year = IF(VALUES(academic_year) <> '', VALUES(academic_year), academic_year),
+                    status = VALUES(status)
+            ");
+            return $stmt->execute([$grNo, $roll, $name, $dob, $caste, $phone, $std, $div, $year, $status]);
+        }
+
+        // No GR provided: update existing cohort match in students_master if present
+        if ($year !== '' && $std !== '' && $div !== '' && $roll !== null) {
+            $find = $db->prepare("SELECT id FROM students_master WHERE academic_year = ? AND std = ? AND division = ? AND roll_no = ? LIMIT 1");
+            $find->execute([$year, $std, $div, $roll]);
+            $id = $find->fetchColumn();
+            if ($id) {
+                $upd = $db->prepare("UPDATE students_master SET
+                    student_name = IF(? <> '', ?, student_name),
+                    date_of_birth = COALESCE(?, date_of_birth),
+                    parent_phone = IF(? <> '', ?, parent_phone)
+                    WHERE id = ?");
+                return $upd->execute([$name, $name, $dob, $phone, $phone, $id]);
+            }
+        }
+        return true;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+/**
+ * Pure-PHP ISO/IEC 18004 QR Code Matrix Generator (Byte mode, ECC Level L, Versions 1..11).
+ * Zero CDN, zero external binaries.
+ */
+function rcQrEncodeMatrix(string $text): ?array {
+    $bytes = array_values(unpack('C*', $text));
+    $len = count($bytes);
+
+    // Version specs for ECC Level L: [totalCW, ecPerBlock, g1Blocks, g1Data, g2Blocks, g2Data, alignCoords]
+    $specs = [
+        1  => [26,  7,  1, 19, 0, 0, []],
+        2  => [44,  10, 1, 34, 0, 0, [6, 18]],
+        3  => [70,  15, 1, 55, 0, 0, [6, 22]],
+        4  => [100, 20, 1, 80, 0, 0, [6, 26]],
+        5  => [134, 26, 1, 108, 0, 0, [6, 30]],
+        6  => [172, 18, 2, 68, 0, 0, [6, 34]],
+        7  => [196, 20, 2, 78, 0, 0, [6, 22, 38]],
+        8  => [242, 24, 2, 97, 0, 0, [6, 24, 42]],
+        9  => [292, 30, 2, 116, 0, 0, [6, 26, 46]],
+        10 => [346, 18, 2, 68, 2, 69, [6, 28, 50]],
+        11 => [404, 20, 4, 81, 0, 0, [6, 30, 54]],
+    ];
+
+    $ver = null;
+    foreach ($specs as $v => $sp) {
+        $totalDataCW = ($sp[2] * $sp[3]) + ($sp[4] * $sp[5]);
+        $ccBits = ($v <= 9) ? 8 : 16;
+        $capBytes = intdiv(($totalDataCW * 8) - 4 - $ccBits, 8);
+        if ($len <= $capBytes) {
+            $ver = $v;
+            break;
+        }
+    }
+    if ($ver === null) return null;
+
+    $sp = $specs[$ver];
+    $totalDataCW = ($sp[2] * $sp[3]) + ($sp[4] * $sp[5]);
+    $ecPerBlock  = $sp[1];
+    $ccBits      = ($ver <= 9) ? 8 : 16;
+
+    // Build bit stream
+    $bits = [];
+    $pushBits = static function (int $val, int $width) use (&$bits): void {
+        for ($i = $width - 1; $i >= 0; $i--) {
+            $bits[] = ($val >> $i) & 1;
+        }
+    };
+    $pushBits(0b0100, 4); // Byte mode
+    $pushBits($len, $ccBits);
+    foreach ($bytes as $b) {
+        $pushBits($b, 8);
+    }
+    $maxBits = $totalDataCW * 8;
+    $termLen = min(4, $maxBits - count($bits));
+    for ($i = 0; $i < $termLen; $i++) $bits[] = 0;
+    while (count($bits) % 8 !== 0) $bits[] = 0;
+
+    $dataCW = [];
+    for ($i = 0, $n = count($bits); $i < $n; $i += 8) {
+        $byte = 0;
+        for ($j = 0; $j < 8; $j++) $byte = ($byte << 1) | $bits[$i + $j];
+        $dataCW[] = $byte;
+    }
+    $padToggle = 0;
+    while (count($dataCW) < $totalDataCW) {
+        $dataCW[] = ($padToggle % 2 === 0) ? 0xEC : 0x11;
+        $padToggle++;
+    }
+
+    // GF(256) arithmetic (poly 0x11D)
+    $gfExp = [];
+    $gfLog = array_fill(0, 256, 0);
+    $x = 1;
+    for ($i = 0; $i < 255; $i++) {
+        $gfExp[$i] = $x;
+        $gfLog[$x] = $i;
+        $x <<= 1;
+        if ($x & 0x100) $x ^= 0x11D;
+    }
+    $gfMul = static function (int $a, int $b) use ($gfExp, $gfLog): int {
+        if ($a === 0 || $b === 0) return 0;
+        return $gfExp[($gfLog[$a] + $gfLog[$b]) % 255];
+    };
+
+    // Reed-Solomon generator polynomial
+    $gen = [1];
+    for ($i = 0; $i < $ecPerBlock; $i++) {
+        $next = array_fill(0, count($gen) + 1, 0);
+        for ($j = 0, $gn = count($gen); $j < $gn; $j++) {
+            $next[$j] ^= $gen[$j];
+            $next[$j + 1] ^= $gfMul($gen[$j], $gfExp[$i]);
+        }
+        $gen = $next;
+    }
+    $computeEc = static function (array $block) use ($ecPerBlock, $gen, $gfMul): array {
+        $msg = array_merge($block, array_fill(0, $ecPerBlock, 0));
+        $dLen = count($block);
+        $gLen = count($gen);
+        for ($i = 0; $i < $dLen; $i++) {
+            $c = $msg[$i];
+            if ($c !== 0) {
+                for ($j = 0; $j < $gLen; $j++) {
+                    $msg[$i + $j] ^= $gfMul($gen[$j], $c);
+                }
+            }
+        }
+        return array_slice($msg, $dLen);
+    };
+
+    // Split into blocks & compute EC
+    $blocksData = [];
+    $blocksEc   = [];
+    $offset = 0;
+    for ($i = 0; $i < $sp[2]; $i++) {
+        $blk = array_slice($dataCW, $offset, $sp[3]);
+        $offset += $sp[3];
+        $blocksData[] = $blk;
+        $blocksEc[]   = $computeEc($blk);
+    }
+    for ($i = 0; $i < $sp[4]; $i++) {
+        $blk = array_slice($dataCW, $offset, $sp[5]);
+        $offset += $sp[5];
+        $blocksData[] = $blk;
+        $blocksEc[]   = $computeEc($blk);
+    }
+
+    // Interleave data and EC codewords
+    $stream = [];
+    $maxDataLen = max($sp[3], $sp[5]);
+    for ($i = 0; $i < $maxDataLen; $i++) {
+        foreach ($blocksData as $blk) {
+            if ($i < count($blk)) $stream[] = $blk[$i];
+        }
+    }
+    for ($i = 0; $i < $ecPerBlock; $i++) {
+        foreach ($blocksEc as $ec) {
+            $stream[] = $ec[$i];
+        }
+    }
+
+    $streamBits = [];
+    foreach ($stream as $cw) {
+        for ($b = 7; $b >= 0; $b--) $streamBits[] = ($cw >> $b) & 1;
+    }
+
+    $N = 17 + 4 * $ver;
+    $grid = array_fill(0, $N, array_fill(0, $N, 0));
+    $func = array_fill(0, $N, array_fill(0, $N, false));
+
+    $setFunc = static function (int $r, int $c, int $v) use ($N, &$grid, &$func): void {
+        if ($r >= 0 && $r < $N && $c >= 0 && $c < $N) {
+            $grid[$r][$c] = $v;
+            $func[$r][$c] = true;
+        }
+    };
+
+    // Finder patterns + separators
+    foreach ([[0, 0], [0, $N - 7], [$N - 7, 0]] as [$fr, $fc]) {
+        for ($dr = -1; $dr <= 7; $dr++) {
+            for ($dc = -1; $dc <= 7; $dc++) {
+                $r = $fr + $dr; $c = $fc + $dc;
+                if ($r < 0 || $r >= $N || $c < 0 || $c >= $N) continue;
+                $onBorder = ($dr === -1 || $dr === 7 || $dc === -1 || $dc === 7);
+                $inOuter  = ($dr >= 0 && $dr <= 6 && $dc >= 0 && $dc <= 6) && ($dr === 0 || $dr === 6 || $dc === 0 || $dc === 6);
+                $inCore   = ($dr >= 2 && $dr <= 4 && $dc >= 2 && $dc <= 4);
+                $setFunc($r, $c, (!$onBorder && ($inOuter || $inCore)) ? 1 : 0);
+            }
+        }
+    }
+
+    // Alignment patterns
+    $align = $sp[6];
+    foreach ($align as $ar) {
+        foreach ($align as $ac) {
+            if (($ar === 6 && $ac === 6) || ($ar === 6 && $ac === $N - 7) || ($ar === $N - 7 && $ac === 6)) {
+                continue;
+            }
+            for ($dr = -2; $dr <= 2; $dr++) {
+                for ($dc = -2; $dc <= 2; $dc++) {
+                    $val = (abs($dr) === 2 || abs($dc) === 2 || ($dr === 0 && $dc === 0)) ? 1 : 0;
+                    $setFunc($ar + $dr, $ac + $dc, $val);
+                }
+            }
+        }
+    }
+
+    // Timing patterns
+    for ($i = 8; $i <= $N - 9; $i++) {
+        if (!$func[6][$i]) $setFunc(6, $i, ($i % 2 === 0) ? 1 : 0);
+        if (!$func[$i][6]) $setFunc($i, 6, ($i % 2 === 0) ? 1 : 0);
+    }
+
+    // Dark module & reserved format info
+    $setFunc($N - 8, 8, 1);
+    for ($i = 0; $i < 9; $i++) {
+        if (!$func[8][$i]) $func[8][$i] = true;
+        if (!$func[$i][8]) $func[$i][8] = true;
+    }
+    for ($i = $N - 8; $i < $N; $i++) {
+        $func[8][$i] = true;
+    }
+    for ($i = $N - 7; $i < $N; $i++) {
+        $func[$i][8] = true;
+    }
+
+    // Version info for V >= 7
+    $versionBits = [7 => 0x07C94, 8 => 0x085BC, 9 => 0x09A99, 10 => 0x0A4D3, 11 => 0x0BBF6];
+    if ($ver >= 7 && isset($versionBits[$ver])) {
+        $vb = $versionBits[$ver];
+        for ($i = 0; $i < 18; $i++) {
+            $bit = ($vb >> $i) & 1;
+            $a = intdiv($i, 3);
+            $b = $i % 3;
+            $setFunc($a, $N - 11 + $b, $bit);
+            $setFunc($N - 11 + $b, $a, $bit);
+        }
+    }
+
+    // Place data bits in zigzag
+    $bitIdx = 0;
+    $bitTotal = count($streamBits);
+    $up = true;
+    for ($right = $N - 1; $right >= 1; $right -= 2) {
+        if ($right === 6) $right = 5;
+        for ($vert = 0; $vert < $N; $vert++) {
+            $r = $up ? ($N - 1 - $vert) : $vert;
+            for ($dx = 0; $dx < 2; $dx++) {
+                $c = $right - $dx;
+                if (!$func[$r][$c]) {
+                    $grid[$r][$c] = ($bitIdx < $bitTotal) ? $streamBits[$bitIdx++] : 0;
+                }
+            }
+        }
+        $up = !$up;
+    }
+
+    // Evaluate Mask 0..7 and choose minimum penalty
+    $formatL = [0x77C4, 0x72F3, 0x7DAA, 0x789D, 0x662F, 0x6318, 0x6C41, 0x6976];
+    $maskFn = static function (int $m, int $r, int $c): bool {
+        switch ($m) {
+            case 0: return (($r + $c) % 2) === 0;
+            case 1: return ($r % 2) === 0;
+            case 2: return ($c % 3) === 0;
+            case 3: return (($r + $c) % 3) === 0;
+            case 4: return ((intdiv($r, 2) + intdiv($c, 3)) % 2) === 0;
+            case 5: return ((($r * $c) % 2) + (($r * $c) % 3)) === 0;
+            case 6: return (((($r * $c) % 2) + (($r * $c) % 3)) % 2) === 0;
+            default: return (((($r + $c) % 2) + (($r * $c) % 3)) % 2) === 0;
+        }
+    };
+    $applyFormat = static function (array &$g, int $fmt) use ($N): void {
+        for ($i = 0; $i <= 5; $i++) $g[8][$i] = ($fmt >> (14 - $i)) & 1;
+        $g[8][7] = ($fmt >> 8) & 1;
+        $g[8][8] = ($fmt >> 7) & 1;
+        $g[7][8] = ($fmt >> 6) & 1;
+        for ($i = 0; $i <= 5; $i++) $g[5 - $i][8] = ($fmt >> (5 - $i)) & 1;
+        for ($i = 0; $i <= 6; $i++) $g[$N - 1 - $i][8] = ($fmt >> (14 - $i)) & 1;
+        for ($i = 0; $i <= 7; $i++) $g[8][$N - 8 + $i] = ($fmt >> (7 - $i)) & 1;
+    };
+    $scorePenalty = static function (array $g) use ($N): int {
+        $pen = 0;
+        for ($r = 0; $r < $N; $r++) {
+            $run = 1;
+            for ($c = 1; $c < $N; $c++) {
+                if ($g[$r][$c] === $g[$r][$c - 1]) {
+                    $run++;
+                } else {
+                    if ($run >= 5) $pen += $run - 2;
+                    $run = 1;
+                }
+            }
+            if ($run >= 5) $pen += $run - 2;
+        }
+        for ($c = 0; $c < $N; $c++) {
+            $run = 1;
+            for ($r = 1; $r < $N; $r++) {
+                if ($g[$r][$c] === $g[$r - 1][$c]) {
+                    $run++;
+                } else {
+                    if ($run >= 5) $pen += $run - 2;
+                    $run = 1;
+                }
+            }
+            if ($run >= 5) $pen += $run - 2;
+        }
+        for ($r = 0; $r < $N - 1; $r++) {
+            for ($c = 0; $c < $N - 1; $c++) {
+                $v = $g[$r][$c];
+                if ($v === $g[$r][$c + 1] && $v === $g[$r + 1][$c] && $v === $g[$r + 1][$c + 1]) {
+                    $pen += 3;
+                }
+            }
+        }
+        return $pen;
+    };
+
+    $bestMask = 0;
+    $bestPenalty = PHP_INT_MAX;
+    $bestGrid = $grid;
+    for ($m = 0; $m < 8; $m++) {
+        $cand = $grid;
+        for ($r = 0; $r < $N; $r++) {
+            for ($c = 0; $c < $N; $c++) {
+                if (!$func[$r][$c] && $maskFn($m, $r, $c)) {
+                    $cand[$r][$c] ^= 1;
+                }
+            }
+        }
+        $applyFormat($cand, $formatL[$m]);
+        $pen = $scorePenalty($cand);
+        if ($pen < $bestPenalty) {
+            $bestPenalty = $pen;
+            $bestMask = $m;
+            $bestGrid = $cand;
+        }
+    }
+
+    return $bestGrid;
+}
+
+/**
+ * Renders a scannable SVG Data URI QR code for verification URLs (zero-CDN).
+ */
+function rcRenderQrSvgDataUri(string $url, int $quiet = 3): string {
+    $matrix = rcQrEncodeMatrix($url);
+    if ($matrix === null) {
+        // Fallback crisp SVG badge if URL exceeds 321 bytes
+        $svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#fff"/><rect x="4" y="4" width="56" height="56" fill="none" stroke="#1e293b" stroke-width="2"/><text x="32" y="36" text-anchor="middle" font-size="11" font-family="sans-serif" fill="#1e293b">VERIFY</text></svg>';
+        return 'data:image/svg+xml;base64,' . base64_encode($svg);
+    }
+
+    $n = count($matrix);
+    $dim = $n + ($quiet * 2);
+    $rects = [];
+    for ($r = 0; $r < $n; $r++) {
+        $c = 0;
+        while ($c < $n) {
+            if ($matrix[$r][$c] === 1) {
+                $start = $c;
+                while ($c < $n && $matrix[$r][$c] === 1) $c++;
+                $w = $c - $start;
+                $x = $start + $quiet;
+                $y = $r + $quiet;
+                $rects[] = "<rect x=\"{$x}\" y=\"{$y}\" width=\"{$w}\" height=\"1\"/>";
+            } else {
+                $c++;
+            }
+        }
+    }
+    $svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' . $dim . ' ' . $dim . '" shape-rendering="crispEdges">'
+         . '<rect width="' . $dim . '" height="' . $dim . '" fill="#ffffff"/>'
+         . '<g fill="#111827">' . implode('', $rects) . '</g></svg>';
+    return 'data:image/svg+xml;base64,' . base64_encode($svg);
+}
+
 
 
 

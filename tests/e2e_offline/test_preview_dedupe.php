@@ -46,7 +46,7 @@ $qAfter = (int)$db->query('SELECT COUNT(*) FROM whatsapp_outbound_queue')->fetch
 check('incoming_preview_and_real_create_no_outbound_rows', $qAfter === $qBefore, "before=$qBefore after=$qAfter");
 
 $src = file_get_contents($root . '/admin/api_whatsapp_ingest.php');
-check('ingest_skips_enquiry_sync_for_previews', strpos($src, "empty(\$msg['from_me']) && !\$isPreviewOnly") !== false);
+check('ingest_skips_enquiry_sync_for_previews', strpos($src, "empty(\$msg['from_me']) && \$previewReason !== 'sidebar'") !== false || strpos($src, "empty(\$msg['from_me']) && !\$isPreviewOnly") !== false);
 check('ingest_has_no_send_calls', !preg_match('/waEnqueueWhatsAppOutbound|api_whatsapp_send|outbound_queue\s*\(/i', $src));
 $sse = file_get_contents($root . '/admin/api_whatsapp_events.php');
 check('sse_sends_event_ids_for_resume', strpos($sse, 'echo "id: {$id}') !== false);

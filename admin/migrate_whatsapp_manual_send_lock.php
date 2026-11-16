@@ -4,6 +4,8 @@
  * Adds origin/approved_by/approved_at/confirm_nonce and statuses held/draft/blocked_auto.
  * Safe to re-run.
  */
+if (PHP_SAPI !== 'cli') { http_response_code(403); exit('CLI only'); }
+
 error_reporting(E_ALL);
 ini_set('display_errors', '1');
 require_once __DIR__ . '/../config/database.php';

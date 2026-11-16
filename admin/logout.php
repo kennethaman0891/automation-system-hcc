@@ -22,25 +22,19 @@ $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $isConfirmed = false;
 
 if ($method === 'POST') {
-    $sent = $_POST['csrf_token'] ?? '';
-    $sess = $_SESSION['csrf_token'] ?? '';
-    if ($sent !== '' || $sess !== '') {
-        if ($sent === '' || $sess === '' || !hash_equals((string)$sess, (string)$sent)) {
-            http_response_code(403);
-            exit('Invalid logout request (CSRF mismatch).');
-        }
+    if (!verifyCSRFToken()) {
+        http_response_code(403);
+        exit('Invalid logout request (CSRF mismatch).');
     }
     if (!empty($_POST['confirm']) || ($_POST['action'] ?? '') === 'logout') {
         $isConfirmed = true;
     }
 } elseif ($method === 'GET' && !empty($_GET['confirm'])) {
-    $sentGet = $_GET['csrf_token'] ?? '';
-    $sessGet = $_SESSION['csrf_token'] ?? '';
-    if ($sentGet !== '' || $sessGet !== '') {
-        if ($sentGet === '' || $sessGet === '' || !hash_equals((string)$sessGet, (string)$sentGet)) {
-            http_response_code(403);
-            exit('Invalid logout request (CSRF mismatch).');
-        }
+    $sentGet = (string)($_GET['csrf_token'] ?? '');
+    $sessGet = (string)($_SESSION['csrf_token'] ?? '');
+    if ($sentGet === '' || $sessGet === '' || !hash_equals($sessGet, $sentGet)) {
+        http_response_code(403);
+        exit('Invalid logout request (CSRF mismatch).');
     }
     $isConfirmed = true;
 }
@@ -89,19 +83,34 @@ $initial = mb_strtoupper(mb_substr($adminName !== '' ? $adminName : 'A', 0, 1));
 $csrfToken = generateCSRFToken();
 $schoolName = 'Hindustani Covenant Church High School';
 
-// Safe return URL calculation
-$returnUrl = 'dashboard.php';
-$referer = $_SERVER['HTTP_REFERER'] ?? '';
-if (!empty($referer)) {
+// Safe return URL calculation (only http/https same-host or strict relative /hcc/ path; blocks javascript:/data: URIs)
+$rawReturnUrl = 'dashboard.php';
+$referer = trim((string)($_SERVER['HTTP_REFERER'] ?? ''));
+if ($referer !== '' && !preg_match('/[\r\n\0]/', $referer)) {
     $refParts = parse_url($referer);
-    $currentHost = $_SERVER['HTTP_HOST'] ?? '';
-    if (empty($refParts['host']) || $refParts['host'] === $currentHost) {
-        $refPath = $refParts['path'] ?? '';
-        if (strpos($refPath, 'logout.php') === false && strpos($refPath, 'login.php') === false) {
-            $returnUrl = htmlspecialchars($referer, ENT_QUOTES, 'UTF-8');
+    if (is_array($refParts)) {
+        $scheme = strtolower((string)($refParts['scheme'] ?? ''));
+        $refHost = strtolower((string)($refParts['host'] ?? ''));
+        $refHostWithPort = $refHost . (!empty($refParts['port']) ? ':' . (int)$refParts['port'] : '');
+        $currentHostRaw = strtolower((string)($_SERVER['HTTP_HOST'] ?? ''));
+        $currentHostNoPort = strtolower((string)preg_replace('/:\d+$/', '', $currentHostRaw));
+
+        $isAllowedScheme = in_array($scheme, ['http', 'https'], true);
+        $hostMatches = ($refHost !== '' && $currentHostRaw !== '')
+            && ($refHostWithPort === $currentHostRaw || $refHost === $currentHostNoPort);
+        $isRelativeHcc = ($scheme === '' && $refHost === '' && str_starts_with($referer, '/hcc/') && !str_starts_with($referer, '//'));
+
+        $refPath = (string)($refParts['path'] ?? '');
+        if ((($isAllowedScheme && $hostMatches) || $isRelativeHcc)
+            && $refPath !== ''
+            && strpos($refPath, 'logout.php') === false
+            && strpos($refPath, 'login.php') === false
+        ) {
+            $rawReturnUrl = $referer;
         }
     }
 }
+$returnUrl = htmlspecialchars($rawReturnUrl, ENT_QUOTES, 'UTF-8');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -465,14 +474,14 @@ if (!empty($referer)) {
             }
             document.addEventListener('keydown', function (e) {
                 if (e.key === 'Escape') {
-                    window.location.href = <?= json_encode($returnUrl) ?>;
+                    window.location.href = <?= json_encode($rawReturnUrl, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) ?>;
                 }
             });
             var backdrop = document.getElementById('logoutModalBackdrop');
             if (backdrop) {
                 backdrop.addEventListener('click', function (e) {
                     if (e.target === backdrop) {
-                        window.location.href = <?= json_encode($returnUrl) ?>;
+                        window.location.href = <?= json_encode($rawReturnUrl, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) ?>;
                     }
                 });
             }

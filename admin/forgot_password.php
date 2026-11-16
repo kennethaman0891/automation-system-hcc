@@ -156,11 +156,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $sent = rcSendPasswordOtpEmail($recoveryEmail, (string)($user['full_name'] ?? 'Administrator'), $otp);
                 if (!$sent) {
                     error_log('HCC [forgot_password] Mail delivery failed for ' . $recoveryEmail);
-                    @file_put_contents(
-                        $throttleDir . '/forgot_password_debug.txt',
-                        date('Y-m-d H:i:s') . ' | ' . $recoveryEmail . ' | OTP: ' . $otp . PHP_EOL,
-                        FILE_APPEND | LOCK_EX
-                    );
                 }
 
                 unset($_SESSION['hcc_pwd_reset_uid'], $_SESSION['hcc_pwd_reset_until']);

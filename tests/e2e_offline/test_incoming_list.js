@@ -237,6 +237,38 @@ const typedOrEnter = (keys) => keys.filter(k => k.startsWith('type:') || k === '
     const previews = b.posts.filter(p => p.endpoint === 'api_whatsapp_ingest.php');
     t('IL16', 'openable unread row is clicked and its thread read (no preview stand-in)', opened === 1 && read >= 2 && previews.length === 0, `opened=${opened} read=${read}`);
   }
+  // Privacy filter enabled: 1-to-1 replies (hi / Thank you teacher) and @lid chats must ingest; unknown groups must stay blocked
+  {
+    const rows = [
+      row({ title: 'Parent @lid Chat', wa_chat_id: '123456789012@lid', unread: true, preview: 'Thank you teacher', rowText: 'Parent @lid Chat 12:52 Thank you teacher 1' }),
+      row({ title: '+91 98765 43210', phone: '919876543210', unread: true, preview: 'hi', rowText: '+91 98765 43210 12:53 hi 1' }),
+    ];
+    const page = makeFakePage(rows);
+    const b = makeBridge(page);
+    b.privacyFilter.enabled = true;
+    await b.ingestVisibleChats(3);
+    const ingest = b.posts.filter(p => p.endpoint === 'api_whatsapp_ingest.php');
+    const bodies = ingest.map(p => p.data[0].body);
+    t('IL33', 'privacy filter allows 1-to-1 parent replies (hi / Thank you teacher) including @lid chats',
+      bodies.includes('Thank you teacher') && bodies.includes('hi'),
+      JSON.stringify(bodies));
+  }
+  {
+    const b = makeBridge(makeFakePage([]));
+    b.privacyFilter.enabled = true;
+    const resolved = b.resolveWaChatId({ name: 'Aarav Parent', status: '+91 98765 43210' }, '987654321012345@lid');
+    t('IL34', 'resolveWaChatId prefers real @c.us phone from contactInfo over opaque @lid in messageJid',
+      resolved === '919876543210@c.us',
+      resolved);
+    const unknownGroup = b.isMessageAllowed(
+      { from_me: false, body: 'random group chat', wa_chat_id: '120363999888777@g.us', sender_wa_id: '120363999888777@g.us' },
+      { wa_chat_id: '120363999888777@g.us', chat_type: 'group', chat_name: 'Friends Weekend Group' }
+    );
+    t('IL35', 'privacy filter still blocks unknown non-school group chats',
+      unknownGroup && unknownGroup.allowed === false,
+      JSON.stringify(unknownGroup));
+  }
+
   // Static guarantees
   const body = src.slice(src.indexOf('  async ingestVisibleChats('), src.indexOf("  async ingestOpenChat(knownWaChatId = '')"));
   t('IL17', 'list ingest code has no keyboard typing, Enter, or send calls',

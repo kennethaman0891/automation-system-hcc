@@ -682,7 +682,7 @@
                 }
 
                 // If Followup Modal is open, live refresh parent WhatsApp conversation in Step 2
-                const modal = document.getElementById('followupModal');
+                const modal = document.getElementById('followupDetailModal');
                 if (modal && modal.style.display === 'flex' && currentEnquiryId) {
                     const getRes = await fetch(`api_admission_followup.php?action=get&id=${currentEnquiryId}`);
                     const getData = await getRes.json();
@@ -699,8 +699,158 @@
             } catch (ignored) {}
         }
 
+        // ── Automation #13: 8:30 AM Principal Daily Briefing & #9 Signal Cards ──
+        async function loadPrincipalBriefing() {
+            const contentEl = document.getElementById('briefingContent');
+            const metricsEl = document.getElementById('briefingMetricsRow');
+            const metaEl = document.getElementById('briefingUpdatedAt');
+            if (!contentEl) return;
+            try {
+                const res = await fetch('api_admission_followup.php?action=principal_briefing&op=get', { cache: 'no-store' });
+                const data = await res.json();
+                if (!data || !data.success || !data.briefing) {
+                    contentEl.textContent = data?.migration_required ? 'Run schema reconciliation migration to enable morning briefings.' : 'No briefing generated yet.';
+                    return;
+                }
+                renderBriefingPanel(data.briefing);
+            } catch (e) {
+                if (contentEl) contentEl.textContent = 'Unable to load daily briefing.';
+            }
+        }
+
+        function renderBriefingPanel(b) {
+            const contentEl = document.getElementById('briefingContent');
+            const metricsEl = document.getElementById('briefingMetricsRow');
+            const metaEl = document.getElementById('briefingUpdatedAt');
+            if (metaEl) metaEl.textContent = `Briefing for ${b.brief_date || 'today'} · Updated ${b.created_at || ''}`;
+            if (contentEl) contentEl.textContent = b.summary_markdown || 'All clear.';
+            if (metricsEl) {
+                const m = b.metrics || {};
+                const pills = [
+                    { lbl: 'Unreplied Inbound', val: m.unreplied_inbound ?? 0 },
+                    { lbl: 'Overdue Follow-ups', val: m.overdue_followups ?? 0 },
+                    { lbl: 'Urgent Leads', val: m.urgent_enquiries ?? 0 },
+                    { lbl: 'Pending Signals', val: m.pending_signals ?? 0 },
+                    { lbl: 'Bridge DOM', val: m.dom_health || 'unknown' }
+                ];
+                metricsEl.innerHTML = pills.map(p => `<span class="af-metric-pill">${escapeHtml(p.lbl)}: ${escapeHtml(String(p.val))}</span>`).join('');
+            }
+        }
+
+        async function loadSignalCards() {
+            const listEl = document.getElementById('signalCardsList');
+            const badgeEl = document.getElementById('signalCardsCountBadge');
+            if (!listEl) return;
+            try {
+                const res = await fetch('api_admission_followup.php?action=signal_cards&op=list&status=pending&limit=20', { cache: 'no-store' });
+                const data = await res.json();
+                if (badgeEl) badgeEl.textContent = String(data?.pending_count ?? 0);
+                const cards = (data && Array.isArray(data.cards)) ? data.cards : [];
+                if (!cards.length) {
+                    listEl.innerHTML = '<div class="af-panel-meta">No pending parent WhatsApp signal cards. Click <strong>Scan Messages</strong> to inspect recent chats.</div>';
+                    return;
+                }
+                listEl.innerHTML = cards.map(c => {
+                    const ext = c.extracted || {};
+                    const typeCls = 'af-signal-type--' + String(c.signal_type || 'other').replace(/[^a-z_]/g, '');
+                    const studentLabel = c.matched_student_name
+                        ? `${escapeHtml(c.matched_student_name)}${c.matched_class ? ' (' + escapeHtml(c.matched_class) + ')' : ''}`
+                        : (c.chat_name ? escapeHtml(c.chat_name) : `Chat #${c.chat_id}`);
+                    const snippet = ext.snippet || c.message_body || '';
+                    return `
+                        <div class="af-signal-item" data-card-id="${Number(c.id)}">
+                            <div class="af-signal-top">
+                                <span class="af-signal-type ${typeCls}">${escapeHtml(c.signal_type || 'other')}</span>
+                                <span style="font-size:0.75rem;color:#64748b;">${studentLabel}</span>
+                            </div>
+                            <div class="af-signal-snippet">${escapeHtml(snippet)}</div>
+                            <div class="af-signal-actions">
+                                <button type="button" class="af-btn-xs af-btn-xs--primary btn-apply-signal" data-id="${Number(c.id)}">
+                                    <i class="fas fa-check"></i> Apply Action
+                                </button>
+                                <button type="button" class="af-btn-xs af-btn-xs--ghost btn-dismiss-signal" data-id="${Number(c.id)}">
+                                    Dismiss
+                                </button>
+                                <a class="af-btn-xs" href="whatsapp_share.php?view=replica&chat_id=${Number(c.chat_id)}" style="text-decoration:none;">
+                                    <i class="fas fa-comments"></i> Open Chat
+                                </a>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                listEl.querySelectorAll('.btn-apply-signal').forEach(btn => {
+                    btn.addEventListener('click', () => handleSignalCardAction(btn.dataset.id, 'apply'));
+                });
+                listEl.querySelectorAll('.btn-dismiss-signal').forEach(btn => {
+                    btn.addEventListener('click', () => handleSignalCardAction(btn.dataset.id, 'dismiss'));
+                });
+            } catch (e) {
+                listEl.innerHTML = '<div class="af-panel-meta">Failed to load inbound signal cards.</div>';
+            }
+        }
+
+        async function handleSignalCardAction(id, op) {
+            try {
+                const res = await fetch(`api_admission_followup.php?action=signal_cards&op=${encodeURIComponent(op)}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCSRFToken() },
+                    body: JSON.stringify({ id: Number(id) })
+                });
+                const data = await res.json();
+                if (data && data.success) {
+                    loadSignalCards();
+                    loadPrincipalBriefing();
+                } else {
+                    alert(data?.error || 'Action failed');
+                }
+            } catch (e) {
+                alert('Error updating signal card.');
+            }
+        }
+
+        document.getElementById('btnGenerateBriefing')?.addEventListener('click', async () => {
+            const btn = document.getElementById('btnGenerateBriefing');
+            if (btn) btn.disabled = true;
+            try {
+                const res = await fetch('api_admission_followup.php?action=principal_briefing&op=generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCSRFToken() },
+                    body: JSON.stringify({})
+                });
+                const data = await res.json();
+                if (data && data.success && data.briefing) {
+                    renderBriefingPanel(data.briefing);
+                }
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        });
+
+        document.getElementById('btnScanSignals')?.addEventListener('click', async () => {
+            const btn = document.getElementById('btnScanSignals');
+            if (btn) btn.disabled = true;
+            try {
+                await fetch('api_admission_followup.php?action=signal_cards&op=scan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCSRFToken() },
+                    body: JSON.stringify({})
+                });
+                await loadSignalCards();
+                await loadPrincipalBriefing();
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        });
+
+        document.getElementById('btnRefreshSignals')?.addEventListener('click', () => {
+            loadSignalCards();
+        });
+
         setInterval(pollFollowupsBackground, 12000);
         refreshWaInboundStatus();
+        loadPrincipalBriefing();
+        loadSignalCards();
     });
 
     // Expose helpers to global scope

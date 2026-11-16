@@ -9,9 +9,22 @@ require_once __DIR__ . '/auth_check.php';
 
 $settings     = getAllSettings();
 $schoolName   = $settings['school_name'] ?? 'Hindustani Covenant Church High School';
-$schoolTagline= $settings['school_tagline'] ?? 'Excellence in Academic & Moral Education';
+$schoolTagline= trim((string)($settings['school_tagline'] ?? ''));
+if ($schoolTagline === '') {
+    $schoolTagline = 'Excellence in Academic & Moral Education';
+}
 $logoBase64   = getSchoolLogoBase64();
+if ($logoBase64 === '') {
+    $logoJsPath = __DIR__ . '/../assets/js/hcc-logo-base64.js';
+    if (is_file($logoJsPath)) {
+        $jsContent = @file_get_contents($logoJsPath);
+        if ($jsContent && preg_match('/"((?:data:image\/[a-zA-Z0-9+.-]+;base64,)[A-Za-z0-9+\/=]+)"/', $jsContent, $lm)) {
+            $logoBase64 = $lm[1];
+        }
+    }
+}
 
+$activeYear = rcGetActiveAcademicYear();
 $classKey = trim($_GET['class'] ?? '');
 $docType  = trim($_GET['doc_type'] ?? 'report_card');
 $testType = trim($_GET['test_type'] ?? 'Unit Test 2');
@@ -21,7 +34,7 @@ if ($classKey === '') {
 }
 
 $c = rcParseClassKey(urldecode($classKey));
-$year = $c['academic_year'] ?: '2024-25';
+$year = $c['academic_year'] ?: $activeYear;
 $std = $c['std'] ?: '1';
 $division = $c['division'] ?: 'A';
 $semester = $c['semester'] ?: 'Sem 1';
@@ -62,21 +75,52 @@ if ($docType === 'unit_test') {
     $bfStmt->execute([$year]);
     $rawBonafides = $bfStmt->fetchAll(PDO::FETCH_ASSOC);
 
+    $usedZipNames = [];
     if (empty($rawBonafides)) {
         $rawStudents = rcAllStudents(['class_key' => $classKey]);
         foreach ($rawStudents as $stu) {
             $grNo = $settings['gr_no'] ?? '3875';
             $certSr = str_pad((string)$stu['roll_no'], 2, '0', STR_PAD_LEFT);
             $cleanName = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $stu['student_name']);
-            $html = renderServerBonafideA4Html($stu, $schoolName, $settings['principal_name'] ?? 'PRINCIPAL', $logoBase64, "STD – {$romanStd} – {$division}", $grNo, $certSr, $year);
-            $zip->addFromString("Roll_{$certSr}_{$cleanName}_Bonafide.html", $html);
+            $rowStd = trim((string)($stu['std'] ?? '')) ?: $std;
+            $rowDiv = trim((string)($stu['division'] ?? '')) ?: $division;
+            $rowRomanStd = $romanMap[$rowStd] ?? $rowStd;
+            $rowStdDiv = $rowDiv !== '' ? "STD – {$rowRomanStd} – {$rowDiv}" : "STD – {$rowRomanStd}";
+            $rowAy = trim((string)($stu['academic_year'] ?? '')) ?: $year;
+            $html = renderServerBonafideA4Html($stu, $schoolName, $settings['principal_name'] ?? 'PRINCIPAL', $logoBase64, $rowStdDiv, $grNo, $certSr, $rowAy);
+            $entryName = "Roll_{$certSr}_{$cleanName}_Bonafide.html";
+            if (isset($usedZipNames[$entryName])) {
+                $usedZipNames[$entryName]++;
+                $entryName = "Roll_{$certSr}_{$cleanName}_" . $usedZipNames[$entryName] . "_Bonafide.html";
+            } else {
+                $usedZipNames[$entryName] = 1;
+            }
+            $zip->addFromString($entryName, $html);
         }
     } else {
         foreach ($rawBonafides as $bf) {
             $cleanName = preg_replace('/[^a-zA-Z0-9_\-]/', '_', $bf['student_name']);
             $certSr = str_pad((string)($bf['cert_serial'] ?: $bf['roll_no']), 2, '0', STR_PAD_LEFT);
-            $html = renderServerBonafideA4Html($bf, $schoolName, $settings['principal_name'] ?? 'PRINCIPAL', $logoBase64, "STD – {$romanStd} – {$division}", $bf['gr_no'], $bf['cert_serial'], $year);
-            $zip->addFromString("Roll_{$certSr}_{$cleanName}_Bonafide.html", $html);
+            $rowStd = trim((string)($bf['std'] ?? ''));
+            $rowDiv = trim((string)($bf['division'] ?? ''));
+            $rowAy  = trim((string)($bf['academic_year'] ?? '')) ?: $year;
+            if ($rowStd !== '' && stripos($rowStd, 'STD') === 0) {
+                $rowStdDiv = ($rowDiv !== '' && stripos($rowStd, $rowDiv) === false) ? "{$rowStd} – {$rowDiv}" : $rowStd;
+            } elseif ($rowStd !== '') {
+                $rowRomanStd = $romanMap[$rowStd] ?? $rowStd;
+                $rowStdDiv = $rowDiv !== '' ? "STD – {$rowRomanStd} – {$rowDiv}" : "STD – {$rowRomanStd}";
+            } else {
+                $rowStdDiv = "STD – {$romanStd} – {$division}";
+            }
+            $html = renderServerBonafideA4Html($bf, $schoolName, $settings['principal_name'] ?? 'PRINCIPAL', $logoBase64, $rowStdDiv, $bf['gr_no'], $bf['cert_serial'], $rowAy);
+            $entryName = "Roll_{$certSr}_{$cleanName}_Bonafide.html";
+            if (isset($usedZipNames[$entryName])) {
+                $usedZipNames[$entryName]++;
+                $entryName = "Roll_{$certSr}_{$cleanName}_" . $usedZipNames[$entryName] . "_Bonafide.html";
+            } else {
+                $usedZipNames[$entryName] = 1;
+            }
+            $zip->addFromString($entryName, $html);
         }
     }
     $downloadName = "{$classLabel}_Bonafide_Certificates_Archive.zip";
@@ -103,6 +147,8 @@ if ($docType === 'unit_test') {
 }
 
 $zip->close();
+
+$downloadName = preg_replace('/[^A-Za-z0-9_.-]/', '_', $downloadName);
 
 if (!file_exists($tempZipPath) || filesize($tempZipPath) === 0) {
     die('Error: Generated ZIP archive is empty or invalid.');
@@ -189,19 +235,24 @@ function renderServerReportCardA4Html($stu, $rows, $schoolName, $schoolTagline, 
         $i++;
     }
 
-    $stuName = htmlspecialchars($stu['student_name'], ENT_QUOTES);
-    $roll = htmlspecialchars($stu['roll_no'], ENT_QUOTES);
+    $stuName = htmlspecialchars((string)($stu['student_name'] ?? ''), ENT_QUOTES, 'UTF-8');
+    $roll = htmlspecialchars((string)($stu['roll_no'] ?? ''), ENT_QUOTES, 'UTF-8');
+    $safeSchoolName = htmlspecialchars((string)$schoolName, ENT_QUOTES, 'UTF-8');
+    $safeSchoolTagline = htmlspecialchars((string)(trim((string)$schoolTagline) !== '' ? $schoolTagline : 'Excellence in Academic & Moral Education'), ENT_QUOTES, 'UTF-8');
+    $safeClassName = htmlspecialchars((string)$className, ENT_QUOTES, 'UTF-8');
+    $safeAy = htmlspecialchars((string)$ay, ENT_QUOTES, 'UTF-8');
+    $logoHtml = $logoBase64 !== '' ? '<img src="' . htmlspecialchars($logoBase64, ENT_QUOTES, 'UTF-8') . '" alt="Logo">' : '';
     $obtained = number_format((float)$stu['obtained'], 1);
     $maxTotal = number_format((float)$stu['maxtotal'], 1);
     $percentage = (float)$stu['percentage'];
     $pctTotal = number_format($percentage, 2);
-    $grade = htmlspecialchars($stu['grade'] ?? '—', ENT_QUOTES);
+    $grade = htmlspecialchars((string)($stu['grade'] ?? '—'), ENT_QUOTES, 'UTF-8');
     $gradeCls = preg_replace('/[^a-zA-Z0-9_-]/', '', $grade);
-    $divisionLabel = htmlspecialchars(getGradeDivision($percentage, $stu['std'] ?? '1'), ENT_QUOTES);
+    $divisionLabel = htmlspecialchars(getGradeDivision($percentage, $stu['std'] ?? '1'), ENT_QUOTES, 'UTF-8');
     $isPassed = ((int)($stu['std'] ?? 1) >= 9 ? $percentage >= 35 : $percentage >= 33);
     $statusHtml = $isPassed ? '<span style="color:#16a34a;font-weight:700;">PASS</span>' : '<span style="color:#dc2626;font-weight:700;">FAIL</span>';
-    $remark = htmlspecialchars(rcDisplayRemark($stu['remark'] ?? '', $percentage), ENT_QUOTES);
-    $attendance = htmlspecialchars($stu['attendance'] ?: '—', ENT_QUOTES);
+    $remark = htmlspecialchars(rcDisplayRemark($stu['remark'] ?? '', $percentage), ENT_QUOTES, 'UTF-8');
+    $attendance = htmlspecialchars((string)($stu['attendance'] ?: '—'), ENT_QUOTES, 'UTF-8');
     $parentsSign = !empty($stu['parents_sign']) ? 'Confirmed' : 'Not Signed';
     $today = date('d-m-Y');
 
@@ -211,18 +262,15 @@ function renderServerReportCardA4Html($stu, $rows, $schoolName, $schoolTagline, 
 <head>
     <meta charset="UTF-8">
     <title>Report Card - {$stuName}</title>
-    <link rel="stylesheet" href="../assets/vendor/font-awesome@6.5.0/css/all.min.css">
-    <link rel="stylesheet" href="../assets/vendor/inter-fonts.css">
-    <link rel="stylesheet" href="../assets/vendor/merriweather/merriweather.css">
     <style>
         * { box-sizing: border-box; }
-        body { font-family: 'Inter', system-ui, sans-serif; background: #fff; color: #0f172a; margin: 0; padding: 20px; font-size: 12px; }
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; background: #fff; color: #0f172a; margin: 0; padding: 20px; font-size: 12px; }
         .print-sheet { max-width: 820px; margin: 0 auto; background: #fff; border: 2px solid #1a237e; }
         .print-hdr { text-align: center; padding: 24px 24px 14px; position: relative; }
         .print-hdr::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(90deg, #1a237e, #c9943e, #1a237e); }
         .print-hdr img { height: 64px; width: auto; object-fit: contain; margin-bottom: 6px; }
-        .print-hdr h1 { font-family: 'Merriweather', Georgia, serif; font-size: 1.35rem; font-weight: 900; color: #1a237e; margin: 0; }
-        .print-hdr h2 { font-family: 'Merriweather', Georgia, serif; font-size: 0.95rem; font-weight: 700; color: #1a237e; margin: 2px 0 0; letter-spacing: 1px; }
+        .print-hdr h1 { font-family: 'Merriweather', Georgia, 'Times New Roman', serif; font-size: 1.35rem; font-weight: 900; color: #1a237e; margin: 0; }
+        .print-hdr h2 { font-family: 'Merriweather', Georgia, 'Times New Roman', serif; font-size: 0.95rem; font-weight: 700; color: #1a237e; margin: 2px 0 0; letter-spacing: 1px; }
         .print-title { margin: 0; padding: 10px 24px; border-top: 2px solid #1a237e; border-bottom: 2px solid #1a237e; text-align: center; }
         .print-title h3 { margin: 0; font-size: 1rem; font-weight: 700; color: #dc2626; text-transform: uppercase; letter-spacing: 3px; }
         .print-meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px 24px; font-size: 0.85rem; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }
@@ -267,17 +315,17 @@ function renderServerReportCardA4Html($stu, $rows, $schoolName, $schoolTagline, 
 <body>
     <div class="print-sheet">
         <div class="print-hdr">
-            <img src="{$logoBase64}" alt="Logo">
-            <h1>{$schoolName}</h1>
-            <h2>{$schoolTagline}</h2>
+            {$logoHtml}
+            <h1>{$safeSchoolName}</h1>
+            <h2>{$safeSchoolTagline}</h2>
         </div>
         <div class="print-title"><h3>Report Card</h3></div>
         
         <div class="print-meta">
             <div><strong>Student Name</strong><span>{$stuName}</span></div>
             <div><strong>Roll No.</strong><span>{$roll}</span></div>
-            <div><strong>Class</strong><span>{$className}</span></div>
-            <div><strong>Academic Year</strong><span>{$ay}</span></div>
+            <div><strong>Class</strong><span>{$safeClassName}</span></div>
+            <div><strong>Academic Year</strong><span>{$safeAy}</span></div>
         </div>
 
         <div class="print-body">
@@ -369,16 +417,22 @@ function renderServerUnitTestA4Html($stu, $subjects, $totalMax, $schoolName, $sc
         $i++;
     }
 
-    $stuName = htmlspecialchars($stu['student_name'], ENT_QUOTES);
-    $roll = htmlspecialchars($stu['roll_no'], ENT_QUOTES);
+    $stuName = htmlspecialchars((string)($stu['student_name'] ?? ''), ENT_QUOTES, 'UTF-8');
+    $roll = htmlspecialchars((string)($stu['roll_no'] ?? ''), ENT_QUOTES, 'UTF-8');
+    $safeSchoolName = htmlspecialchars((string)$schoolName, ENT_QUOTES, 'UTF-8');
+    $safeSchoolTagline = htmlspecialchars((string)(trim((string)$schoolTagline) !== '' ? $schoolTagline : 'Excellence in Academic & Moral Education'), ENT_QUOTES, 'UTF-8');
+    $safeClassName = htmlspecialchars((string)$className, ENT_QUOTES, 'UTF-8');
+    $safeTestType = htmlspecialchars((string)$testType, ENT_QUOTES, 'UTF-8');
+    $safeAy = htmlspecialchars((string)$ay, ENT_QUOTES, 'UTF-8');
+    $logoHtml = $logoBase64 !== '' ? '<img src="' . htmlspecialchars($logoBase64, ENT_QUOTES, 'UTF-8') . '" alt="Logo">' : '';
     $totalObt = $stu['total_obtained'] !== null ? number_format((float)$stu['total_obtained'], 1) : '0.0';
     $totalMaxDisp = number_format((float)$totalMax, 1);
     $pct = $stu['percentage'] !== null ? number_format((float)$stu['percentage'], 2) : null;
-    $grade = htmlspecialchars($stu['grade'] ?: '–', ENT_QUOTES);
+    $grade = htmlspecialchars((string)($stu['grade'] ?: '–'), ENT_QUOTES, 'UTF-8');
     $isPass = ($stu['percentage'] !== null && (float)$stu['percentage'] >= 35);
     $statusHtml = $isPass ? '<span style="color:#16a34a;font-weight:700;">PASS</span>' : '<span style="color:#dc2626;font-weight:700;">FAIL</span>';
-    $remark = htmlspecialchars($stu['remark'] ?: '—', ENT_QUOTES);
-    $attendance = htmlspecialchars($stu['attendance'] ?: '—', ENT_QUOTES);
+    $remark = htmlspecialchars((string)($stu['remark'] ?: '—'), ENT_QUOTES, 'UTF-8');
+    $attendance = htmlspecialchars((string)($stu['attendance'] ?: '—'), ENT_QUOTES, 'UTF-8');
     $parentsSign = !empty($stu['parents_sign']) ? 'Confirmed' : 'Not Signed';
     $today = date('d-m-Y');
 
@@ -388,18 +442,15 @@ function renderServerUnitTestA4Html($stu, $subjects, $totalMax, $schoolName, $sc
 <head>
     <meta charset="UTF-8">
     <title>Unit Test Report Card - {$stuName}</title>
-    <link rel="stylesheet" href="../assets/vendor/font-awesome@6.5.0/css/all.min.css">
-    <link rel="stylesheet" href="../assets/vendor/inter-fonts.css">
-    <link rel="stylesheet" href="../assets/vendor/merriweather/merriweather.css">
     <style>
         * { box-sizing: border-box; }
-        body { font-family: 'Inter', system-ui, sans-serif; background: #fff; color: #0f172a; margin: 0; padding: 20px; font-size: 12px; }
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; background: #fff; color: #0f172a; margin: 0; padding: 20px; font-size: 12px; }
         .print-sheet { max-width: 820px; margin: 0 auto; background: #fff; border: 2px solid #1a237e; }
         .print-hdr { text-align: center; padding: 24px 24px 14px; position: relative; }
         .print-hdr::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: linear-gradient(90deg, #1a237e, #c9943e, #1a237e); }
         .print-hdr img { height: 64px; width: auto; object-fit: contain; margin-bottom: 6px; }
-        .print-hdr h1 { font-family: 'Merriweather', Georgia, serif; font-size: 1.35rem; font-weight: 900; color: #1a237e; margin: 0; }
-        .print-hdr h2 { font-family: 'Merriweather', Georgia, serif; font-size: 0.95rem; font-weight: 700; color: #1a237e; margin: 2px 0 0; letter-spacing: 1px; }
+        .print-hdr h1 { font-family: 'Merriweather', Georgia, 'Times New Roman', serif; font-size: 1.35rem; font-weight: 900; color: #1a237e; margin: 0; }
+        .print-hdr h2 { font-family: 'Merriweather', Georgia, 'Times New Roman', serif; font-size: 0.95rem; font-weight: 700; color: #1a237e; margin: 2px 0 0; letter-spacing: 1px; }
         .print-title { margin: 0; padding: 10px 24px; border-top: 2px solid #1a237e; border-bottom: 2px solid #1a237e; text-align: center; }
         .print-title h3 { margin: 0; font-size: 1rem; font-weight: 700; color: #dc2626; text-transform: uppercase; letter-spacing: 3px; }
         .print-meta { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 16px 24px; font-size: 0.85rem; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }
@@ -436,17 +487,17 @@ function renderServerUnitTestA4Html($stu, $subjects, $totalMax, $schoolName, $sc
 <body>
     <div class="print-sheet">
         <div class="print-hdr">
-            <img src="{$logoBase64}" alt="Logo">
-            <h1>{$schoolName}</h1>
-            <h2>{$schoolTagline}</h2>
+            {$logoHtml}
+            <h1>{$safeSchoolName}</h1>
+            <h2>{$safeSchoolTagline}</h2>
         </div>
         <div class="print-title"><h3>Unit Test Report Card</h3></div>
 
         <div class="print-meta">
             <div><strong>Student Name</strong><span>{$stuName}</span></div>
             <div><strong>Roll No.</strong><span>{$roll}</span></div>
-            <div><strong>Class</strong><span>{$className}</span></div>
-            <div><strong>Exam</strong><span>{$testType} ({$ay})</span></div>
+            <div><strong>Class</strong><span>{$safeClassName}</span></div>
+            <div><strong>Exam</strong><span>{$safeTestType} ({$safeAy})</span></div>
         </div>
 
         <div class="print-body">
@@ -497,15 +548,21 @@ HTML;
  * Exactly matches admin/bonafide_certificate.php (.cert-sheet)
  */
 function renderServerBonafideA4Html($stu, $schoolName, $principalName, $logoBase64, $stdDiv, $grNo, $certSerial, $ay): string {
-    $stuName = htmlspecialchars($stu['student_name'] ?? '____', ENT_QUOTES);
-    $stdDivStr = htmlspecialchars($stdDiv, ENT_QUOTES);
-    $dobDigits = htmlspecialchars($stu['date_of_birth'] ?? '____', ENT_QUOTES);
-    $dobWords = htmlspecialchars(function_exists('dobToWords') ? dobToWords($stu['date_of_birth'] ?? '') : '____', ENT_QUOTES);
-    $ayStr = htmlspecialchars($ay, ENT_QUOTES);
-    $caste = htmlspecialchars($stu['caste'] ?? '_______', ENT_QUOTES);
-    $grNoStr = htmlspecialchars($grNo, ENT_QUOTES);
-    $certSerialStr = htmlspecialchars($certSerial, ENT_QUOTES);
-    $principalStr = htmlspecialchars($principalName, ENT_QUOTES);
+    $rawDob = trim((string)($stu['date_of_birth'] ?? ''));
+    if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $rawDob, $dm)) {
+        $rawDob = "{$dm[3]}/{$dm[2]}/{$dm[1]}";
+    }
+    $stuName = htmlspecialchars((string)($stu['student_name'] ?? '____'), ENT_QUOTES, 'UTF-8');
+    $safeSchoolName = htmlspecialchars((string)$schoolName, ENT_QUOTES, 'UTF-8');
+    $stdDivStr = htmlspecialchars((string)$stdDiv, ENT_QUOTES, 'UTF-8');
+    $dobDigits = htmlspecialchars($rawDob !== '' ? $rawDob : '____', ENT_QUOTES, 'UTF-8');
+    $dobWords = htmlspecialchars($rawDob !== '' && function_exists('dobToWords') ? dobToWords($rawDob) : '____', ENT_QUOTES, 'UTF-8');
+    $ayStr = htmlspecialchars((string)$ay, ENT_QUOTES, 'UTF-8');
+    $caste = htmlspecialchars((string)($stu['caste'] ?? ($stu['caste_category'] ?? '_______')), ENT_QUOTES, 'UTF-8');
+    $grNoStr = htmlspecialchars((string)$grNo, ENT_QUOTES, 'UTF-8');
+    $certSerialStr = htmlspecialchars((string)$certSerial, ENT_QUOTES, 'UTF-8');
+    $principalStr = htmlspecialchars((string)$principalName, ENT_QUOTES, 'UTF-8');
+    $logoHtml = $logoBase64 !== '' ? '<img src="' . htmlspecialchars($logoBase64, ENT_QUOTES, 'UTF-8') . '" alt="Logo">' : '';
     $today = date('d/m/Y');
 
     return <<<HTML
@@ -514,21 +571,18 @@ function renderServerBonafideA4Html($stu, $schoolName, $principalName, $logoBase
 <head>
     <meta charset="UTF-8">
     <title>Bonafide Certificate - {$stuName}</title>
-    <link rel="stylesheet" href="../assets/vendor/font-awesome@6.5.0/css/all.min.css">
-    <link rel="stylesheet" href="../assets/vendor/inter-fonts.css">
-    <link rel="stylesheet" href="../assets/vendor/merriweather/merriweather.css">
     <style>
         * { box-sizing: border-box; }
-        body { font-family: 'Inter', system-ui, sans-serif; background: #fff; color: #0f1e3d; margin: 0; padding: 20px; font-size: 13px; }
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; background: #fff; color: #0f1e3d; margin: 0; padding: 20px; font-size: 13px; }
         .cert-sheet { max-width: 820px; min-height: 1000px; margin: 0 auto; background: #fff; border: 2px solid #1a237e; padding: 40px 48px; position: relative; display: flex; flex-direction: column; }
         .cert-top { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
         .cert-school { display: flex; gap: 12px; align-items: center; text-align: left; flex: 1; }
         .cert-school img { height: 54px; width: 54px; object-fit: contain; border-radius: 10px; border: 1px solid #e5eaf1; background: #fff; padding: 4px; }
-        .cert-school-text h1 { font-family: 'Merriweather', Georgia, serif; font-size: 1.15rem; font-weight: 900; color: #1a237e; margin: 0; line-height: 1.35; }
+        .cert-school-text h1 { font-family: 'Merriweather', Georgia, 'Times New Roman', serif; font-size: 1.15rem; font-weight: 900; color: #1a237e; margin: 0; line-height: 1.35; }
         .cert-addr { font-size: 0.72rem; color: #475569; margin: 4px 0 0; font-weight: 600; }
         .cert-meta-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; font-weight: 600; color: #334155; margin: 6px 0; }
         .cert-title { text-align: center; margin: 18px 0 24px; }
-        .cert-title h2 { font-family: 'Merriweather', Georgia, serif; font-size: 1.25rem; font-weight: 900; color: #b91c1c; letter-spacing: 0.2em; text-transform: uppercase; margin: 0; }
+        .cert-title h2 { font-family: 'Merriweather', Georgia, 'Times New Roman', serif; font-size: 1.25rem; font-weight: 900; color: #b91c1c; letter-spacing: 0.2em; text-transform: uppercase; margin: 0; }
         .cert-title-bar { width: 72px; height: 3px; background: #c9a227; border-radius: 999px; margin: 9px auto 0; }
         .cert-body { flex: 1; font-size: 0.98rem; line-height: 2.1; text-align: justify; padding: 0 4px; }
         .cert-fill { text-decoration: underline; text-underline-offset: 3px; font-weight: 700; color: #0f172a; }
@@ -548,9 +602,9 @@ function renderServerBonafideA4Html($stu, $schoolName, $principalName, $logoBase
     <div class="cert-sheet">
         <div class="cert-top">
             <div class="cert-school">
-                <img src="{$logoBase64}" alt="Logo">
+                {$logoHtml}
                 <div class="cert-school-text">
-                    <h1>{$schoolName}</h1>
+                    <h1>{$safeSchoolName}</h1>
                     <p class="cert-addr">166, Railway Lines, Near Rang Bhawan, Church Street, Solapur-413 001</p>
                 </div>
             </div>
@@ -586,7 +640,7 @@ function renderServerBonafideA4Html($stu, $schoolName, $principalName, $logoBase
                 Date : <span style="font-family:'Merriweather',Georgia,serif;font-size:0.95rem;font-weight:700;color:#1a237e;text-decoration:underline;text-underline-offset:3px;padding:0 6px;">{$today}</span>
             </div>
             <div class="cert-photo">
-                <i class="fas fa-camera" style="font-size:1.1rem;"></i>Photo
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>Photo
             </div>
             <div class="cert-principal">
                 <div class="sig-line"></div>

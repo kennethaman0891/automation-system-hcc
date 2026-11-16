@@ -112,10 +112,15 @@
         return r.json();
       }
       let body = { action, ...(payload || {}) };
+      const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
       const r = await fetch(this.getBase() + '/api_whatsapp_templates.php?action=' + encodeURIComponent(action), {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {})
+        },
         body: JSON.stringify(body)
       });
       return r.json();

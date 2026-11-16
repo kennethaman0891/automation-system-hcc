@@ -47,9 +47,32 @@ foreach (preg_split('/\s+/', $adminName) as $part) {
     <link rel="stylesheet" href="../assets/vendor/inter-fonts.css">
     <link rel="stylesheet" href="../assets/css/admin.css?v=<?= filemtime(__DIR__ . '/../assets/css/admin.css') ?>">
     <link rel="stylesheet" href="<?= BASE_URL ?>assets/css/admission-followups.css?v=<?= filemtime(__DIR__ . '/../assets/css/admission-followups.css') ?>">
+    <style>
+        .af-ops-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin-bottom: 20px; }
+        .af-panel-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 16px 18px; box-shadow: 0 2px 8px rgba(15,23,42,0.04); display: flex; flex-direction: column; gap: 12px; }
+        .af-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+        .af-panel-title { display: flex; align-items: center; gap: 8px; font-size: 0.96rem; font-weight: 700; color: #0f172a; margin: 0; }
+        .af-panel-meta { font-size: 0.76rem; color: #64748b; }
+        .af-briefing-metrics { display: flex; flex-wrap: wrap; gap: 8px; }
+        .af-metric-pill { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 6px 10px; font-size: 0.78rem; color: #334155; font-weight: 600; }
+        .af-briefing-body { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; font-size: 0.83rem; line-height: 1.55; color: #1e293b; white-space: pre-wrap; max-height: 190px; overflow-y: auto; }
+        .af-signal-list { display: flex; flex-direction: column; gap: 10px; max-height: 260px; overflow-y: auto; }
+        .af-signal-item { border: 1px solid #e2e8f0; border-radius: 10px; padding: 11px 13px; background: #fff; display: flex; flex-direction: column; gap: 6px; }
+        .af-signal-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+        .af-signal-type { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; background: #e0f2fe; color: #0369a1; }
+        .af-signal-type--leave { background: #fef3c7; color: #92400e; }
+        .af-signal-type--fee_claim { background: #dcfce7; color: #166534; }
+        .af-signal-type--phone_change { background: #ede9fe; color: #5b21b6; }
+        .af-signal-type--ptm_confirm { background: #ccfbf1; color: #115e59; }
+        .af-signal-type--result_query { background: #e0e7ff; color: #3730a3; }
+        .af-signal-snippet { font-size: 0.82rem; color: #334155; }
+        .af-signal-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+        .af-btn-xs { font-size: 0.75rem; font-weight: 600; padding: 5px 10px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; color: #0f172a; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
+        .af-btn-xs--primary { background: #00a884; border-color: #00a884; color: #fff; }
+        .af-btn-xs--ghost { color: #64748b; }
+    </style>
 </head>
 <body>
-    <div class="sidebar-overlay" id="sidebarOverlay"></div>
     <div class="admin-layout">
         <?php require_once __DIR__ . '/includes/sidebar.php'; ?>
 
@@ -113,6 +136,50 @@ foreach (preg_split('/\s+/', $adminName) as $part) {
                         </button>
                     </div>
                 </div>
+            </div>
+
+            <!-- ═══ 8:30 AM Principal Daily Briefing & Inbound Signal Action Cards ═══ -->
+            <div class="af-ops-grid">
+                <section class="af-panel-card" id="principalBriefingCard" aria-label="Principal Daily Briefing">
+                    <div class="af-panel-head">
+                        <div>
+                            <h2 class="af-panel-title">
+                                <i class="fas fa-sun" style="color:#f59e0b;"></i>
+                                8:30 AM Principal Daily Briefing
+                            </h2>
+                            <div class="af-panel-meta" id="briefingUpdatedAt">Loading today's briefing…</div>
+                        </div>
+                        <button type="button" class="af-btn-xs af-btn-xs--primary" id="btnGenerateBriefing">
+                            <i class="fas fa-arrows-rotate"></i> Refresh Briefing
+                        </button>
+                    </div>
+                    <div class="af-briefing-metrics" id="briefingMetricsRow"></div>
+                    <div class="af-briefing-body" id="briefingContent">Fetching morning operational metrics…</div>
+                </section>
+
+                <section class="af-panel-card" id="signalCardsPanel" aria-label="Inbound Parent Signal Action Cards">
+                    <div class="af-panel-head">
+                        <div>
+                            <h2 class="af-panel-title">
+                                <i class="fas fa-bolt" style="color:#0ea5e9;"></i>
+                                Inbound Parent Signal Action Cards
+                                <span class="tab-badge" id="signalCardsCountBadge">0</span>
+                            </h2>
+                            <div class="af-panel-meta">Leave notices, phone updates, fee claims &amp; PTM confirmations extracted for one-click review</div>
+                        </div>
+                        <div style="display:flex;gap:6px;">
+                            <button type="button" class="af-btn-xs" id="btnScanSignals" title="Scan recent WhatsApp messages for signals">
+                                <i class="fas fa-magnifying-glass"></i> Scan Messages
+                            </button>
+                            <button type="button" class="af-btn-xs af-btn-xs--ghost" id="btnRefreshSignals" title="Reload pending signal cards">
+                                <i class="fas fa-rotate"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="af-signal-list" id="signalCardsList">
+                        <div class="af-panel-meta">Loading pending signal cards…</div>
+                    </div>
+                </section>
             </div>
 
             <!-- ═══ 7 Dashboard KPI Sections ═══ -->

@@ -3,12 +3,13 @@
  * Public Parent & Verification Portal — Official Bonafide Certificate
  * Hindustani Covenant Church High School & Junior College
  */
+$cspNonce = bin2hex(random_bytes(16));
 if (!headers_sent()) {
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: SAMEORIGIN');
     header('Referrer-Policy: strict-origin-when-cross-origin');
     header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
-    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'");
+    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-{$cspNonce}'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'");
 }
 require_once __DIR__ . '/includes/functions.php';
 
@@ -21,7 +22,7 @@ if ($grNo === '' || $certSerial === '' || $token === '') {
     die('Invalid certificate link. Required parameters are missing.');
 }
 
-// ── Verify tamper-proof HMAC signature ──
+// ── Verify tamper-proof URL-safe HMAC signature ──
 if (!rcVerifyParentToken('bonafide', [$grNo, $certSerial], $token)) {
     http_response_code(403);
     die('Access denied: Invalid or expired security token. Please request a fresh certificate link from the school administration.');
@@ -39,30 +40,55 @@ $schoolName = $settings['school_name'] ?? 'HINDUSTANI COVENANT CHURCH HIGH SCHOO
 if (trim($schoolName) === 'Hindustani Covenant Church High School') {
     $schoolName = 'HINDUSTANI COVENANT CHURCH HIGH SCHOOL & JUNIOR COLLEGE';
 }
-$schoolTagline = $settings['school_tagline'] ?? '';
+$schoolTagline = $settings['school_tagline'] ?? 'Excellence in Academic & Moral Education';
 $schoolLogo    = $settings['logo'] ?? 'assets/images/hcclogo.jpg';
 $contactAddr   = $settings['contact_address'] ?? 'Solapur - 413002';
 
 if (!$cert) {
-    // Fallback: If not logged yet, verify against default settings
-    $studentName = 'Student';
-    $std = '';
-    $division = '';
-    $ay = '2024-25';
-    $dob = '';
-    $dobWords = '';
-    $purpose = 'Educational Purpose';
-    $issuedDate = date('d-m-Y');
-} else {
-    $studentName = $cert['student_name'];
-    $std         = $cert['std'] ?? '';
-    $division    = $cert['division'] ?? '';
-    $ay          = $cert['academic_year'] ?? '2024-25';
-    $dob         = !empty($cert['date_of_birth']) ? date('d-m-Y', strtotime($cert['date_of_birth'])) : '';
-    $dobWords    = dobToWords($cert['date_of_birth'] ?? '');
-    $purpose     = $cert['purpose'] ?? 'Educational Purpose';
-    $issuedDate  = !empty($cert['issued_date']) ? date('d-m-Y', strtotime($cert['issued_date'])) : date('d-m-Y');
+    http_response_code(404);
+    ?>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="robots" content="noindex, nofollow">
+        <title>Unverified / Certificate Record Not Found — <?= sanitize($schoolName) ?></title>
+        <link rel="stylesheet" href="<?= BASE_URL ?>assets/vendor/font-awesome@6.5.0/css/all.min.css">
+        <link rel="stylesheet" href="<?= BASE_URL ?>assets/vendor/inter-fonts.css">
+        <style>
+            * { box-sizing: border-box; }
+            body { font-family: 'Inter', system-ui, sans-serif; background: #f8fafc; color: #0f172a; margin: 0; padding: 24px; display: grid; place-items: center; min-height: 100vh; }
+            .notfound-card { max-width: 520px; width: 100%; background: #fff; border: 2px solid #fecaca; border-radius: 14px; padding: 32px 28px; text-align: center; box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08); }
+            .notfound-icon { width: 64px; height: 64px; border-radius: 50%; background: #fef2f2; color: #dc2626; display: inline-flex; align-items: center; justify-content: center; font-size: 28px; margin-bottom: 16px; }
+            .notfound-card h1 { font-size: 1.25rem; font-weight: 800; color: #991b1b; margin: 0 0 10px; }
+            .notfound-card p { font-size: 0.9rem; line-height: 1.6; color: #475569; margin: 0 0 14px; }
+            .notfound-meta { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; font-size: 0.82rem; color: #334155; }
+        </style>
+    </head>
+    <body>
+        <div class="notfound-card">
+            <div class="notfound-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+            <h1>Unverified / Certificate Record Not Found</h1>
+            <p>No official issued Bonafide Certificate record exists in the school registry for this General Register and Serial number.</p>
+            <div class="notfound-meta">
+                G.R. No.: <strong><?= sanitize($grNo) ?></strong> &bull; Sr. No.: <strong><?= sanitize($certSerial) ?></strong>
+            </div>
+        </div>
+    </body>
+    </html>
+    <?php
+    exit;
 }
+
+$studentName = $cert['student_name'];
+$std         = $cert['std'] ?? '';
+$division    = $cert['division'] ?? '';
+$ay          = $cert['academic_year'] ?: rcGetActiveAcademicYear();
+$dob         = !empty($cert['date_of_birth']) ? date('d/m/Y', strtotime($cert['date_of_birth'])) : '';
+$dobWords    = dobToWords($dob);
+$purpose     = $cert['purpose'] ?? 'Educational Purpose';
+$issuedDate  = !empty($cert['issued_date']) ? date('d-m-Y', strtotime($cert['issued_date'])) : date('d-m-Y');
 
 $romanMap = ['1'=>'I','2'=>'II','3'=>'III','4'=>'IV','5'=>'V','6'=>'VI','7'=>'VII','8'=>'VIII','9'=>'IX','10'=>'X'];
 $romanStd = $romanMap[(string)$std] ?? $std;
@@ -310,11 +336,11 @@ $classFormatted = trim($romanStd . ($division ? ' ' . $division : ''));
 
     <div class="portal-bar">
         <div class="verified-badge">
-            <i class="fa-solid fa-circle-check"></i>
-            <span>Official Digitally Signed Bonafide Certificate</span>
+            <i class="fa-solid fa-shield-halved"></i>
+            <span>Cryptographically Verified Official Record</span>
         </div>
         <div class="action-btns">
-            <button class="btn-print" onclick="window.print()">
+            <button class="btn-print" id="printCertBtn" type="button">
                 <i class="fa-solid fa-print"></i> Print / Save as PDF
             </button>
         </div>
@@ -322,7 +348,7 @@ $classFormatted = trim($romanStd . ($division ? ' ' . $division : ''));
 
     <div class="cert-container">
         <div class="cert-top">
-            <img src="<?= BASE_URL . sanitize($schoolLogo) ?>" alt="School Logo">
+            <img src="<?= e_attr(BASE_URL . safeLogoSrc($schoolLogo)) ?>" alt="School Logo">
             <div class="cert-top-text">
                 <h1><?= sanitize($schoolName) ?></h1>
                 <?php if ($schoolTagline): ?>
@@ -378,13 +404,19 @@ $classFormatted = trim($romanStd . ($division ? ' ' . $division : ''));
 
         <div class="cert-verification-seal">
             <div>
-                <strong>Digital Verification:</strong> Verified against General Register #<?= sanitize($grNo) ?>
+                <strong>Cryptographically Verified Official Record:</strong> Registry G.R. #<?= sanitize($grNo) ?> &bull; Serial #<?= sanitize($certSerial) ?>
             </div>
             <div>
-                Token: <code><?= sanitize(substr($token, 0, 10)) ?>...</code> • Hindustani Covenant Church High School
+                HMAC Token: <code><?= sanitize(substr($token, 0, 12)) ?>&hellip;</code> &bull; <?= sanitize($schoolName) ?>
             </div>
         </div>
     </div>
 
+    <script nonce="<?= $cspNonce ?>">
+    (function () {
+        var btn = document.getElementById('printCertBtn');
+        if (btn) btn.addEventListener('click', function () { window.print(); });
+    })();
+    </script>
 </body>
 </html>

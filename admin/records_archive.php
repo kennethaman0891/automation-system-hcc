@@ -46,13 +46,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'export_promotions_csv') {
         'Promotion Status', 'Promoted By', 'Promotion Timestamp'
     ]);
     foreach ($rows as $r) {
-        fputcsv($out, [
+        fputcsv($out, array_map('rcCsvSafeCell', [
             $r['target_year'], $r['target_std'], $r['target_div'], $r['target_sem'],
             $r['roll_no'], $r['student_name'],
             $r['source_year'], $r['source_std'], $r['source_div'], $r['source_sem'],
             $r['prev_obtained'], $r['prev_max_total'], $r['prev_percentage'], $r['prev_grade'],
             $r['prev_status'], $r['promoted_by'], $r['promoted_at']
-        ]);
+        ]));
     }
     fclose($out);
     exit;
@@ -98,6 +98,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $lockYear = trim($_POST['year'] ?? '');
             $setLock  = (int)($_POST['lock_state'] ?? 1);
             if ($lockYear !== '') {
+                $db = getDB();
+                $chk = $db->prepare("SELECT 1 FROM academic_year_vault WHERE academic_year = ? LIMIT 1");
+                $chk->execute([$lockYear]);
+                if (!$chk->fetchColumn()) {
+                    $ins = $db->prepare("INSERT INTO academic_year_vault (academic_year, is_active, is_locked, archived_by, archived_at) VALUES (?, ?, 0, ?, NOW())");
+                    $ins->execute([$lockYear, ($lockYear === $activeYear ? 1 : 0), $adminUser]);
+                }
                 $ok = rcToggleArchiveLock($lockYear, $setLock === 1, $adminUser);
                 if ($ok) {
                     $success = "Academic Year {$lockYear} " . ($setLock === 1 ? 'successfully locked into read-only archive mode.' : 'unlocked for modifications.');
@@ -112,6 +119,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $notes   = trim($_POST['notes'] ?? '');
             if ($srcYear === '') {
                 $error = 'Source Academic Year is required.';
+            } elseif (rcIsVaultLocked($srcYear)) {
+                $error = "Academic Year {$srcYear} is already locked in the vault. Unlock it first before modifying archive metadata.";
+            } elseif ($tgtYear !== '' && rcIsVaultLocked($tgtYear)) {
+                $error = "Target Academic Year {$tgtYear} is locked in the archive vault and cannot be activated as an editable year.";
             } else {
                 $res = rcArchiveAcademicYear($srcYear, $tgtYear !== '' ? $tgtYear : null, $notes, $adminUser);
                 if ($res['ok']) {
@@ -146,6 +157,7 @@ if (!in_array($selectedYear, $yearKeys, true)) {
 // Fetch Detailed Data for Selected Year
 $detail           = rcGetYearArchiveDetail($selectedYear);
 $vaultMeta        = $detail['vault'];
+$isYearLocked     = !empty($vaultMeta['is_locked']) || rcIsVaultLocked($selectedYear);
 $resultsClasses   = $detail['results_classes'];
 $unitTestClasses  = $detail['unit_test_classes'];
 $bonafides        = $detail['bonafides'];
@@ -744,10 +756,12 @@ $romanMap = ['1'=>'I','2'=>'II','3'=>'III','4'=>'IV','5'=>'V','6'=>'VI','7'=>'VI
                                 <i class="fa-solid fa-calendar-check" style="color:var(--brand);font-size:18px;"></i>
                                 <?= sanitize($vy['academic_year']) ?>
                             </div>
-                            <?php if ($isActive): ?>
-                                <span class="year-status-pill status-active"><i class="fa-solid fa-bolt"></i> Live Active</span>
+                            <?php if ($isLocked && $isActive): ?>
+                                <span class="year-status-pill status-locked"><i class="fa-solid fa-lock"></i> Active (Locked)</span>
                             <?php elseif ($isLocked): ?>
-                                <span class="year-status-pill status-locked"><i class="fa-solid fa-lock"></i> Sealed & Locked</span>
+                                <span class="year-status-pill status-locked"><i class="fa-solid fa-lock"></i> Sealed &amp; Locked</span>
+                            <?php elseif ($isActive): ?>
+                                <span class="year-status-pill status-active"><i class="fa-solid fa-bolt"></i> Live Active</span>
                             <?php else: ?>
                                 <span class="year-status-pill status-active"><i class="fa-solid fa-unlock"></i> Stored Unlocked</span>
                             <?php endif; ?>
@@ -804,8 +818,8 @@ $romanMap = ['1'=>'I','2'=>'II','3'=>'III','4'=>'IV','5'=>'V','6'=>'VI','7'=>'VI
                             <h2>Academic Year <?= sanitize($selectedYear) ?> Storage Vault</h2>
                             <p style="margin:0;font-size:13px;color:var(--text-2);">
                                 Vault Status: 
-                                <?php if (!empty($vaultMeta['is_locked'])): ?>
-                                    <strong style="color:#991b1b;"><i class="fa-solid fa-lock"></i> Locked & Sealed (Read-Only Archive)</strong>
+                                <?php if ($isYearLocked): ?>
+                                    <strong style="color:#991b1b;"><i class="fa-solid fa-lock"></i> Locked &amp; Sealed (Read-Only Archive)</strong>
                                 <?php else: ?>
                                     <strong style="color:#15803d;"><i class="fa-solid fa-unlock"></i> Open / Active</strong>
                                 <?php endif; ?>
@@ -817,8 +831,8 @@ $romanMap = ['1'=>'I','2'=>'II','3'=>'III','4'=>'IV','5'=>'V','6'=>'VI','7'=>'VI
                     </div>
 
                     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                        <button type="button" class="btn btn-outline-secondary" onclick="openToggleLockModal('<?= e_attr($selectedYear) ?>', <?= !empty($vaultMeta['is_locked']) ? 0 : 1 ?>)">
-                            <?php if (!empty($vaultMeta['is_locked'])): ?>
+                        <button type="button" class="btn btn-outline-secondary" onclick="openToggleLockModal('<?= e_attr($selectedYear) ?>', <?= $isYearLocked ? 0 : 1 ?>)">
+                            <?php if ($isYearLocked): ?>
                                 <i class="fa-solid fa-lock-open"></i> Unlock Year for Editing
                             <?php else: ?>
                                 <i class="fa-solid fa-lock"></i> Lock Year (Read-Only)
@@ -829,6 +843,13 @@ $romanMap = ['1'=>'I','2'=>'II','3'=>'III','4'=>'IV','5'=>'V','6'=>'VI','7'=>'VI
                         </a>
                     </div>
                 </div>
+
+                <?php if ($isYearLocked): ?>
+                <div style="margin-bottom:18px;padding:12px 16px;border-radius:10px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-size:13px;display:flex;align-items:center;gap:10px;">
+                    <i class="fa-solid fa-shield-halved" style="font-size:16px;"></i>
+                    <div><strong>Read-Only Archive Lock Enforced for <?= sanitize($selectedYear) ?>:</strong> Viewing, printing, WhatsApp sharing, and CSV exports remain enabled, while Excel imports and batch promotions into this sealed cohort are locked.</div>
+                </div>
+                <?php endif; ?>
 
                 <!-- THE 4 DEDICATED CATEGORY CARDS -->
                 <div class="vault-categories-grid">
@@ -883,9 +904,15 @@ $romanMap = ['1'=>'I','2'=>'II','3'=>'III','4'=>'IV','5'=>'V','6'=>'VI','7'=>'VI
                             <a href="whatsapp_share.php?doc_type=report_card&year=<?= urlencode($selectedYear) ?>" class="btn-cat-action btn-cat-whatsapp">
                                 <i class="fa-brands fa-whatsapp"></i> Share on WhatsApp
                             </a>
+                            <?php if (!$isYearLocked): ?>
                             <a href="import_excel.php" class="btn-cat-action btn-cat-outline">
                                 <i class="fa-solid fa-file-excel"></i> Import Excel
                             </a>
+                            <?php else: ?>
+                            <span class="btn-cat-action btn-cat-outline" aria-disabled="true" style="opacity:0.55;cursor:not-allowed;" title="Year locked in archive vault">
+                                <i class="fa-solid fa-lock"></i> Import Locked
+                            </span>
+                            <?php endif; ?>
                         </div>
                     </div>
 
@@ -939,9 +966,15 @@ $romanMap = ['1'=>'I','2'=>'II','3'=>'III','4'=>'IV','5'=>'V','6'=>'VI','7'=>'VI
                             <a href="whatsapp_share.php?doc_type=unit_test&year=<?= urlencode($selectedYear) ?>" class="btn-cat-action btn-cat-whatsapp">
                                 <i class="fa-brands fa-whatsapp"></i> Share Slips via WhatsApp
                             </a>
+                            <?php if (!$isYearLocked): ?>
                             <a href="import_unit_tests.php" class="btn-cat-action btn-cat-outline">
                                 <i class="fa-solid fa-file-excel"></i> Import Unit Tests
                             </a>
+                            <?php else: ?>
+                            <span class="btn-cat-action btn-cat-outline" aria-disabled="true" style="opacity:0.55;cursor:not-allowed;" title="Year locked in archive vault">
+                                <i class="fa-solid fa-lock"></i> Import Locked
+                            </span>
+                            <?php endif; ?>
                         </div>
                     </div>
 
@@ -1072,9 +1105,15 @@ $romanMap = ['1'=>'I','2'=>'II','3'=>'III','4'=>'IV','5'=>'V','6'=>'VI','7'=>'VI
                             <a href="records_archive.php?action=export_promotions_csv&year=<?= urlencode($selectedYear) ?>" class="btn-cat-action btn-cat-outline">
                                 <i class="fa-solid fa-download"></i> Export Roster CSV
                             </a>
-                            <a href="promote_students.php" class="btn-cat-action btn-cat-outline">
+                            <?php if (!$isYearLocked): ?>
+                            <a href="promote_students.php?source_year=<?= urlencode($selectedYear) ?>" class="btn-cat-action btn-cat-outline">
                                 <i class="fa-solid fa-plus-circle"></i> Promote Next Batch
                             </a>
+                            <?php else: ?>
+                            <span class="btn-cat-action btn-cat-outline" aria-disabled="true" style="opacity:0.55;cursor:not-allowed;" title="Year locked in archive vault">
+                                <i class="fa-solid fa-lock"></i> Promotion Locked
+                            </span>
+                            <?php endif; ?>
                         </div>
                     </div>
 

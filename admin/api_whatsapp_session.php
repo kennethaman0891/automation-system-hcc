@@ -8,11 +8,24 @@ require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/includes/whatsapp_functions.php';
 require_once __DIR__ . '/auth_check.php';
 
-waRequireBridgeOrAuth();
+$auth = waRequireBridgeOrAuth();
 header('Content-Type: application/json; charset=utf-8');
 
 $db = waGetDB();
 $action = $_GET['action'] ?? ($_POST['action'] ?? 'status');
+$rawInput = json_decode(file_get_contents('php://input'), true);
+if (!is_array($rawInput)) {
+    $rawInput = $_POST;
+}
+
+if (in_array($action, ['sync', 'qr_push', 'poll', 'ensure', 'refresh_qr', 'logout'], true)) {
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+        waJsonResponse(['success' => false, 'error' => 'Method not allowed'], 405);
+    }
+    if (($auth['via'] ?? '') !== 'bridge_secret') {
+        waVerifyCSRF(is_array($rawInput) ? $rawInput : null);
+    }
+}
 
 function waEnsureSessionIngestColumns(PDO $db): void {
     static $ready = false;
@@ -32,6 +45,12 @@ function waEnsureSessionIngestColumns(PDO $db): void {
     }
     if (!in_array('is_syncing', $cols, true)) {
         $db->exec('ALTER TABLE whatsapp_sessions ADD COLUMN is_syncing TINYINT(1) NOT NULL DEFAULT 0');
+    }
+    if (!in_array('dom_health_status', $cols, true)) {
+        $db->exec('ALTER TABLE whatsapp_sessions ADD COLUMN dom_health_status VARCHAR(64) NULL DEFAULT NULL');
+    }
+    if (!in_array('dom_health_checked_at', $cols, true)) {
+        $db->exec('ALTER TABLE whatsapp_sessions ADD COLUMN dom_health_checked_at DATETIME NULL DEFAULT NULL');
     }
     $ready = true;
 }
@@ -67,7 +86,9 @@ switch ($action) {
                 'bridge_running' => $isBridgeRunning,
                 'is_syncing' => $isSyncing,
                 'last_ingest_at' => $session['last_ingest_at'] ?? null,
-                'last_skip_note' => $session['last_skip_note'] ?? null
+                'last_skip_note' => $session['last_skip_note'] ?? null,
+                'dom_health_status' => $session['dom_health_status'] ?? null,
+                'dom_health_checked_at' => $session['dom_health_checked_at'] ?? null
             ] : null
         ]);
         break;
@@ -107,10 +128,7 @@ switch ($action) {
         
     case 'sync':
         // Persist bridge session + QR state (POSTed as JSON by the Puppeteer bridge)
-        $payload = json_decode(file_get_contents('php://input'), true);
-        if (!is_array($payload)) {
-            $payload = $_POST;
-        }
+        $payload = $rawInput;
 
         $toMysql = function ($v) {
             if (!$v) return null;
@@ -118,10 +136,15 @@ switch ($action) {
             return $ts ? date('Y-m-d H:i:s', $ts) : null;
         };
 
+        $domHealth = isset($payload['dom_health_status']) && $payload['dom_health_status'] !== ''
+            ? mb_substr((string)$payload['dom_health_status'], 0, 64)
+            : null;
+        $domHealthAt = $domHealth !== null ? ($toMysql($payload['dom_health_checked_at'] ?? null) ?? date('Y-m-d H:i:s')) : null;
+
         $sql = "INSERT INTO whatsapp_sessions
                 (session_name, user_data_dir, qr_code, qr_expires_at, is_connected, connected_at,
-                 last_poll_at, phone_number, device_name, platform, cookies, local_storage, created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())
+                 last_poll_at, phone_number, device_name, platform, cookies, local_storage, dom_health_status, dom_health_checked_at, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())
                 ON DUPLICATE KEY UPDATE
                     user_data_dir = VALUES(user_data_dir),
                     qr_code = VALUES(qr_code),
@@ -134,6 +157,8 @@ switch ($action) {
                     platform = VALUES(platform),
                     cookies = VALUES(cookies),
                     local_storage = VALUES(local_storage),
+                    dom_health_status = COALESCE(VALUES(dom_health_status), dom_health_status),
+                    dom_health_checked_at = COALESCE(VALUES(dom_health_checked_at), dom_health_checked_at),
                     is_syncing = 0,
                     updated_at = NOW()";
 
@@ -141,17 +166,19 @@ switch ($action) {
         try {
             $stmt->execute([
                 $payload['session_name'] ?? 'default',
-                $payload['user_data_dir'] ? mb_substr((string)$payload['user_data_dir'], 0, 500) : null,
+                !empty($payload['user_data_dir']) ? mb_substr((string)$payload['user_data_dir'], 0, 500) : null,
                 $payload['qr_code'] ?? null,
                 $toMysql($payload['qr_expires_at'] ?? null),
                 !empty($payload['is_connected']) ? 1 : 0,
                 $toMysql($payload['connected_at'] ?? null),
                 $toMysql($payload['last_poll_at'] ?? null) ?? date('Y-m-d H:i:s'),
-                $payload['phone_number'] ? mb_substr((string)$payload['phone_number'], 0, 50) : null,
-                $payload['device_name'] ? mb_substr((string)$payload['device_name'], 0, 255) : null,
-                $payload['platform'] ? mb_substr((string)$payload['platform'], 0, 100) : null,
+                !empty($payload['phone_number']) ? mb_substr((string)$payload['phone_number'], 0, 50) : null,
+                !empty($payload['device_name']) ? mb_substr((string)$payload['device_name'], 0, 255) : null,
+                !empty($payload['platform']) ? mb_substr((string)$payload['platform'], 0, 100) : null,
                 isset($payload['cookies']) ? json_encode($payload['cookies']) : null,
                 isset($payload['local_storage']) ? json_encode($payload['local_storage']) : null,
+                $domHealth,
+                $domHealthAt,
             ]);
         } catch (Throwable $e) {
             waJsonResponse([
@@ -214,10 +241,7 @@ switch ($action) {
         break;
 
     case 'poll':
-        $payload = json_decode(file_get_contents('php://input'), true);
-        if (!is_array($payload)) {
-            $payload = $_POST;
-        }
+        $payload = $rawInput;
         $lastPoll = !empty($payload['last_poll_at']) ? date('Y-m-d H:i:s', strtotime((string)$payload['last_poll_at'])) : date('Y-m-d H:i:s');
         $sets = ['last_poll_at = ?', 'updated_at = NOW()'];
         $params = [$lastPoll];
@@ -236,6 +260,13 @@ switch ($action) {
         if (isset($payload['is_syncing'])) {
             $sets[] = 'is_syncing = ?';
             $params[] = !empty($payload['is_syncing']) ? 1 : 0;
+        }
+        if (!empty($payload['dom_health_status'])) {
+            $sets[] = 'dom_health_status = ?';
+            $params[] = mb_substr((string)$payload['dom_health_status'], 0, 64);
+            $sets[] = 'dom_health_checked_at = ?';
+            $checkedTs = !empty($payload['dom_health_checked_at']) ? strtotime((string)$payload['dom_health_checked_at']) : false;
+            $params[] = $checkedTs ? date('Y-m-d H:i:s', $checkedTs) : date('Y-m-d H:i:s');
         }
         $db->prepare('UPDATE whatsapp_sessions SET ' . implode(', ', $sets) . " WHERE session_name = 'default'")
            ->execute($params);

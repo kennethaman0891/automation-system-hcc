@@ -45,15 +45,57 @@ try {
     $db = null;
 }
 
+function ttDefaultAcademicYear(): string {
+    static $cached = null;
+    if ($cached !== null) return $cached;
+    try {
+        if (function_exists('rcGetActiveAcademicYear')) {
+            $yr = trim((string)rcGetActiveAcademicYear());
+            if ($yr !== '') {
+                return $cached = $yr;
+            }
+        }
+    } catch (\Throwable $e) {}
+    $y = (int)date('Y');
+    $m = (int)date('n');
+    $start = ($m >= 6) ? $y : ($y - 1);
+    return $cached = $start . '-' . substr((string)($start + 1), -2);
+}
+
+function ttRequireCsrfPost(array $payload = []): void {
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+        tt_json(['ok' => false, 'error' => 'Method not allowed'], 405);
+    }
+    $expected = (string)($_SESSION['csrf_token'] ?? '');
+    $candidate = (string)($payload['csrf_token'] ?? $_POST['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
+    if ($candidate !== '' && empty($_SERVER['HTTP_X_CSRF_TOKEN'])) {
+        $_SERVER['HTTP_X_CSRF_TOKEN'] = $candidate;
+    }
+    if ($expected === '' || $candidate === '' || !hash_equals($expected, $candidate) || !verifyCSRFToken()) {
+        tt_json(['ok' => false, 'error' => 'Invalid CSRF token'], 403);
+    }
+}
+
+function ttCsvSafe(string $val): string {
+    if (function_exists('rcCsvSafeCell')) {
+        return rcCsvSafeCell($val);
+    }
+    if ($val !== '' && (preg_match('/^[\t\r\n ]*[=+\-@]/u', $val) || $val[0] === "\t" || $val[0] === "\r")) {
+        return "'" . $val;
+    }
+    return $val;
+}
+
 /**
  * Normalizes timetable state for client-side TimetableMatrixController
  */
 function normalizeTimetableForClient($raw, $db = null) {
+    $defaultYear = ttDefaultAcademicYear();
     $meta = [
         'id'            => $raw['id'] ?? ($raw['metadata']['id'] ?? 1),
         'title'         => $raw['title'] ?? ($raw['metadata']['title'] ?? 'Examination Schedule'),
         'school_name'   => $raw['school_name'] ?? ($raw['metadata']['school_name'] ?? 'Hindustani Covenant Church High School'),
-        'academic_year' => $raw['academic_year'] ?? ($raw['metadata']['academic_year'] ?? '2026-2027'),
+        'academic_year' => $raw['academic_year'] ?? ($raw['metadata']['academic_year'] ?? $defaultYear),
         'exam_type'     => $raw['exam_type'] ?? ($raw['metadata']['exam_type'] ?? 'Semester Exam'),
         'instructions'  => $raw['notes'] ?? ($raw['metadata']['instructions'] ?? ''),
         'status'        => $raw['status'] ?? ($raw['metadata']['status'] ?? 'published')
@@ -166,13 +208,14 @@ if ($action === 'list') {
     }
 
     if (empty($list)) {
+        $defaultYear = ttDefaultAcademicYear();
         $all = getFileTimetables($storeFile);
         foreach ($all as $item) {
             $meta = $item['metadata'] ?? [];
             $list[] = [
                 'id'            => $meta['id'] ?? 1,
                 'title'         => $meta['title'] ?? 'First Semester Examination Time-Table',
-                'academic_year' => $meta['academic_year'] ?? '2026-2027',
+                'academic_year' => $meta['academic_year'] ?? $defaultYear,
                 'exam_type'     => $meta['exam_type'] ?? 'Semester Exam',
                 'status'        => $meta['status'] ?? 'published',
                 'updated_at'    => $item['updated_at'] ?? date('Y-m-d H:i:s')
@@ -277,27 +320,23 @@ if ($action === 'load') {
 
 /* ── 3. Action: SAVE ── */
 if ($action === 'save') {
-    if ($method !== 'POST') {
-        tt_json(['ok' => false, 'error' => 'Method not allowed'], 405);
-    }
-
     $rawInput = file_get_contents('php://input');
-    $payload = json_decode($rawInput, true) ?: $_POST;
+    $decodedInput = json_decode($rawInput, true);
+    $payload = is_array($decodedInput) ? $decodedInput : $_POST;
 
-    // Verify CSRF
-    $clientCsrf = $payload['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
-    if (!empty($_SESSION['csrf_token']) && $clientCsrf !== $_SESSION['csrf_token']) {
-        if (function_exists('verifyCSRFToken') && !verifyCSRFToken()) {
-            tt_json(['ok' => false, 'error' => 'Invalid CSRF token'], 403);
-        }
-    }
+    ttRequireCsrfPost($payload);
 
+    $defaultYear = ttDefaultAcademicYear();
     $meta = $payload['metadata'] ?? [];
-    $title = trim($meta['title'] ?? 'Examination Schedule');
-    $year = trim($meta['academic_year'] ?? '2026-2027');
-    $examType = trim($meta['exam_type'] ?? 'Semester Exam');
-    $instructions = trim($meta['instructions'] ?? '');
-    $status = trim($meta['status'] ?? 'published');
+    $title = trim((string)($meta['title'] ?? 'Examination Schedule'));
+    $year = trim((string)($meta['academic_year'] ?? $defaultYear));
+    if ($year === '') $year = $defaultYear;
+    $examType = trim((string)($meta['exam_type'] ?? 'Semester Exam'));
+    $instructions = trim((string)($meta['instructions'] ?? ''));
+    $status = trim((string)($meta['status'] ?? 'published'));
+    if (!in_array($status, ['draft', 'published', 'archived'], true)) {
+        $status = 'published';
+    }
     $id = !empty($meta['id']) ? (int)$meta['id'] : null;
 
     $jsonFull = json_encode($payload, JSON_UNESCAPED_UNICODE);
@@ -392,9 +431,12 @@ if ($action === 'save') {
 /* ── 4. Action: ADD PRESET ── */
 if ($action === 'add_preset') {
     $rawInput = file_get_contents('php://input');
-    $payload = json_decode($rawInput, true) ?: $_POST;
-    $type = trim($payload['type'] ?? '');
-    $val = trim($payload['value'] ?? '');
+    $decodedInput = json_decode($rawInput, true);
+    $payload = is_array($decodedInput) ? $decodedInput : $_POST;
+    ttRequireCsrfPost($payload);
+
+    $type = trim((string)($payload['type'] ?? ''));
+    $val = trim((string)($payload['value'] ?? ''));
 
     if ($val === '') {
         tt_json(['ok' => false, 'error' => 'Value required'], 400);
@@ -414,24 +456,33 @@ if ($action === 'add_preset') {
 /* ── 5. Action: GENERATE TEMPLATE ── */
 if ($action === 'generate_template') {
     $rawInput = file_get_contents('php://input');
-    $payload = json_decode($rawInput, true) ?: $_POST;
+    $decodedInput = json_decode($rawInput, true);
+    $payload = is_array($decodedInput) ? $decodedInput : $_POST;
+    ttRequireCsrfPost($payload);
 
-    $group = $payload['standards_group'] ?? 'std_v_x';
-    $year = $payload['academic_year'] ?? '2026-27';
-    $examType = $payload['exam_type'] ?? 'FIRST SEMESTER EXAMINATION TIME-TABLE (WRITTEN EXAM)';
-    $startDate = $payload['start_date'] ?? '2026-10-23';
-    $primarySlot = $payload['primary_slot'] ?? '8.00 AM - 10.15 AM';
-    $extendedSlot = $payload['extended_slot'] ?? '8.00 AM - 11.15 AM';
+    $defaultYear = ttDefaultAcademicYear();
+    $group = trim((string)($payload['standards_group'] ?? 'std_v_x'));
+    $year = trim((string)($payload['academic_year'] ?? '')) ?: $defaultYear;
+    $examType = trim((string)($payload['exam_type'] ?? '')) ?: 'EXAMINATION TIME-TABLE (WRITTEN EXAM)';
+    $defaultStart = date('Y-m-d', strtotime('+3 days'));
+    $rawStartDate = trim((string)($payload['start_date'] ?? ''));
+    $dtCheck = $rawStartDate !== '' ? DateTime::createFromFormat('Y-m-d', $rawStartDate) : false;
+    $startDate = ($dtCheck && $dtCheck->format('Y-m-d') === $rawStartDate) ? $rawStartDate : $defaultStart;
+    $primarySlot = trim((string)($payload['primary_slot'] ?? '')) ?: '8.00 AM - 10.15 AM';
+    $extendedSlot = trim((string)($payload['extended_slot'] ?? '')) ?: '8.00 AM - 11.15 AM';
     $hasExtended = !empty($payload['has_extended_slot']);
     $skipSundays = isset($payload['skip_sundays']) ? (bool)$payload['skip_sundays'] : true;
+    $extendedDaysParam = isset($payload['extended_days']) && is_array($payload['extended_days'])
+        ? array_map('intval', $payload['extended_days'])
+        : null;
     $days = $payload['days'] ?? [];
 
     if (empty($days)) {
         $days = [
-            ['dayNum' => 1, 'subject' => 'ENGLISH', 'hsSubject' => 'ALGEBRA(M-1)'],
-            ['dayNum' => 2, 'subject' => 'MARATHI', 'hsSubject' => 'ENGLISH'],
-            ['dayNum' => 3, 'subject' => 'HINDI / SANSKRIT', 'hsSubject' => 'MARATHI'],
-            ['dayNum' => 4, 'subject' => 'MATHS', 'hsSubject' => 'HINDI / SANSKRIT'],
+            ['dayNum' => 1, 'subject' => 'ENGLISH', 'hsSubject' => 'ENGLISH'],
+            ['dayNum' => 2, 'subject' => 'MARATHI', 'hsSubject' => 'MARATHI'],
+            ['dayNum' => 3, 'subject' => 'HINDI / SANSKRIT', 'hsSubject' => 'HINDI / SANSKRIT'],
+            ['dayNum' => 4, 'subject' => 'MATHS', 'hsSubject' => 'ALGEBRA(M-1)'],
             ['dayNum' => 5, 'subject' => 'EVS - I', 'hsSubject' => 'SCIENCE-1'],
             ['dayNum' => 6, 'subject' => 'SCIENCE', 'hsSubject' => 'GEOMETRY'],
             ['dayNum' => 7, 'subject' => 'COMP. SCI.', 'hsSubject' => 'SCIENCE-2'],
@@ -453,6 +504,11 @@ if ($action === 'generate_template') {
             ['id' => 'col_2', 'label' => 'STD II'],
             ['id' => 'col_3', 'label' => 'STD III'],
             ['id' => 'col_4', 'label' => 'STD IV']
+        ];
+    } elseif ($group === 'std_ix_x') {
+        $columns = [
+            ['id' => 'col_9', 'label' => 'STD IX'],
+            ['id' => 'col_10', 'label' => 'STD X']
         ];
     } else {
         $columns = [
@@ -482,47 +538,50 @@ if ($action === 'generate_template') {
         $dayName = $currDate->format('l');
         $dateId = 'd_' . ($idx + 1);
 
-        $sub = $d['subject'] ?? 'ENGLISH';
-        $hsSub = $d['hsSubject'] ?? $sub;
+        $sub = trim((string)($d['subject'] ?? 'ENGLISH'));
+        $hsSub = trim((string)($d['hsSubject'] ?? $sub));
+        $isHsOnly = !empty($d['hs_only']) || ($sub === '' || $sub === '--------');
+        $isExtendedForDay = $hasExtended && (
+            !empty($d['extended'])
+            || ($extendedDaysParam !== null && in_array((int)$idx, $extendedDaysParam, true))
+            || ($extendedDaysParam === null && $extendedSlot !== $primarySlot && strcasecmp($sub, $hsSub) !== 0 && !$isHsOnly)
+        );
 
         $slots = [];
-        if ($hasExtended && $group === 'std_v_x' && ($idx >= 1 && $idx <= 3)) {
+        if ($isHsOnly) {
+            $cells = [];
+            foreach ($columns as $c) {
+                $isHsCol = in_array($c['id'], ['std_ix_x', 'col_9', 'col_10'], true);
+                $cells[$c['id']] = $isHsCol ? ($hsSub !== '' ? $hsSub : '--------') : '--------';
+            }
+            $slots[] = [
+                'slotId' => $dateId . '_s1',
+                'time' => $hasExtended && $extendedSlot !== '' ? $extendedSlot : $primarySlot,
+                'cells' => $cells
+            ];
+        } elseif ($isExtendedForDay) {
+            $s1Cells = [];
+            $s2Cells = [];
+            foreach ($columns as $c) {
+                $isHsCol = in_array($c['id'], ['std_ix_x', 'col_9', 'col_10'], true);
+                $s1Cells[$c['id']] = $isHsCol ? '--------' : $sub;
+                $s2Cells[$c['id']] = $isHsCol ? $hsSub : '--------';
+            }
             $slots[] = [
                 'slotId' => $dateId . '_s1',
                 'time' => $primarySlot,
-                'cells' => [
-                    'std_v' => $sub,
-                    'std_vi_viii' => $sub,
-                    'std_ix_x' => '--------'
-                ]
+                'cells' => $s1Cells
             ];
             $slots[] = [
                 'slotId' => $dateId . '_s2',
                 'time' => $extendedSlot,
-                'cells' => [
-                    'std_v' => '--------',
-                    'std_vi_viii' => '--------',
-                    'std_ix_x' => $hsSub
-                ]
-            ];
-        } elseif ($group === 'std_v_x' && $idx === 0) {
-            $slots[] = [
-                'slotId' => $dateId . '_s1',
-                'time' => $primarySlot,
-                'cells' => [
-                    'std_v' => '--------',
-                    'std_vi_viii' => '--------',
-                    'std_ix_x' => $hsSub
-                ]
+                'cells' => $s2Cells
             ];
         } else {
             $cells = [];
             foreach ($columns as $c) {
-                if ($c['id'] === 'std_ix_x' || $c['id'] === 'col_9' || $c['id'] === 'col_10') {
-                    $cells[$c['id']] = $hsSub;
-                } else {
-                    $cells[$c['id']] = $sub;
-                }
+                $isHsCol = in_array($c['id'], ['std_ix_x', 'col_9', 'col_10'], true);
+                $cells[$c['id']] = $isHsCol ? $hsSub : $sub;
             }
             $slots[] = [
                 'slotId' => $dateId . '_s1',
@@ -541,7 +600,7 @@ if ($action === 'generate_template') {
         $currDate->modify('+1 day');
     }
 
-    $groupLabel = $group === 'std_v_x' ? 'STD V-X' : ($group === 'std_i_iv' ? 'STD I-IV' : 'STD I-X');
+    $groupLabel = $group === 'std_v_x' ? 'STD V-X' : ($group === 'std_i_iv' ? 'STD I-IV' : ($group === 'std_ix_x' ? 'STD IX & X' : 'STD I-X'));
     $result = [
         'metadata' => [
             'id' => null,
@@ -557,6 +616,79 @@ if ($action === 'generate_template') {
     ];
 
     tt_json(['ok' => true, 'timetable' => $result]);
+}
+
+/* ── 6. Action: EXPORT CSV (formula-injection safe via rcCsvSafeCell) ── */
+if ($action === 'export_csv') {
+    $id = trim((string)($_GET['id'] ?? ''));
+    $tt = null;
+    if ($db instanceof PDO) {
+        try {
+            if ($id !== '') {
+                $st = $db->prepare("SELECT * FROM timetables WHERE id = ?");
+                $st->execute([(int)$id]);
+            } else {
+                $st = $db->query("SELECT * FROM timetables ORDER BY id DESC LIMIT 1");
+            }
+            $row = $st ? $st->fetch(PDO::FETCH_ASSOC) : null;
+            if ($row && !empty($row['grid_data_json'])) {
+                $dec = json_decode($row['grid_data_json'], true);
+                if (is_array($dec)) {
+                    $dec['id'] = $row['id'];
+                    $dec['title'] = $row['title'];
+                    $dec['academic_year'] = $row['academic_year'];
+                    $dec['exam_type'] = $row['exam_type'];
+                    $dec['notes'] = $row['notes'];
+                    $dec['status'] = $row['status'];
+                    $tt = normalizeTimetableForClient($dec, $db);
+                }
+            }
+        } catch (\Throwable $e) {}
+    }
+    if (!$tt) {
+        tt_json(['ok' => false, 'error' => 'Timetable not found'], 404);
+    }
+    $meta = $tt['metadata'];
+    $cols = $tt['columns'];
+    $rows = $tt['rows'];
+
+    if (!headers_sent()) {
+        $safeSlug = preg_replace('/[^A-Za-z0-9_-]+/', '_', (string)($meta['title'] ?? 'Timetable'));
+        header('Content-Type: text/csv; charset=UTF-8');
+        header('Content-Disposition: attachment; filename="Timetable_' . $safeSlug . '.csv"');
+        header('Pragma: no-cache');
+        header('Expires: 0');
+    }
+    $out = fopen('php://output', 'w');
+    fwrite($out, "\xEF\xBB\xBF");
+    $writeRow = static function ($handle, array $cells): void {
+        fputcsv($handle, array_map(static fn($v) => ttCsvSafe((string)$v), $cells));
+    };
+    $writeRow($out, [strtoupper((string)($meta['school_name'] ?? ''))]);
+    $writeRow($out, [strtoupper((string)($meta['title'] ?? ''))]);
+    $writeRow($out, ['Academic Year: ' . (string)($meta['academic_year'] ?? ttDefaultAcademicYear())]);
+    $writeRow($out, []);
+    $hdr = ['DAY', 'DATE', 'TIME'];
+    foreach ($cols as $c) {
+        $hdr[] = strtoupper((string)($c['label'] ?? ''));
+    }
+    $writeRow($out, $hdr);
+    foreach ($rows as $r) {
+        foreach (($r['slots'] ?? []) as $slot) {
+            $line = [
+                strtoupper((string)($r['day'] ?? '')),
+                (string)($r['date'] ?? ''),
+                (string)($slot['time'] ?? '')
+            ];
+            foreach ($cols as $c) {
+                $val = trim((string)($slot['cells'][$c['id']] ?? ''));
+                $line[] = $val !== '' ? strtoupper($val) : '--------';
+            }
+            $writeRow($out, $line);
+        }
+    }
+    fclose($out);
+    exit;
 }
 
 tt_json(['ok' => false, 'error' => 'Invalid action'], 400);

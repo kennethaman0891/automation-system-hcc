@@ -9,7 +9,14 @@
  */
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/includes/whatsapp_functions.php';
+require_once __DIR__ . '/auth_check.php';
 
+$auth = waRequireBridgeOrAuth();
+if (($auth['via'] ?? '') !== 'bridge_secret' && ($auth['admin_role'] ?? '') !== 'admin') {
+    waJsonResponse(['success' => false, 'error' => 'Forbidden'], 403);
+}
+
+header('Cache-Control: no-store');
 header('Content-Type: application/json; charset=utf-8');
 
 $db = waGetDB();
@@ -70,12 +77,12 @@ if ($hasTeacherTable) {
     }
 }
 
-// Get whatsapp_contacts with student_link or teacher_link source
+// Get whatsapp_contacts (all known contacts including push_name and wa_lid)
 $linkedContacts = [];
 $stmt = $db->query("
-    SELECT wa_id, phone_e164, name, source, linked_student_roll, linked_class_key
+    SELECT wa_id, wa_lid, phone_e164, name, push_name, source, linked_student_roll, linked_class_key
     FROM whatsapp_contacts
-    WHERE source IN ('student_link', 'teacher_link', 'direct_chat', 'manual')
+    WHERE wa_id IS NOT NULL AND wa_id != ''
 ");
 while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $linkedContacts[] = $row;
@@ -95,7 +102,7 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
 
 $knownChats = [];
 $stmt = $db->query("
-    SELECT wa_chat_id, name
+    SELECT wa_chat_id, wa_lid, name
     FROM whatsapp_chats
     WHERE chat_type = 'individual'
       AND wa_chat_id NOT IN ('', '@c.us')
@@ -105,6 +112,7 @@ $stmt = $db->query("
 while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $knownChats[] = [
         'wa_chat_id' => $row['wa_chat_id'],
+        'wa_lid' => $row['wa_lid'],
         'name' => $row['name'],
     ];
 }

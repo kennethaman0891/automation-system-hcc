@@ -27,20 +27,50 @@ if (!function_exists('verifyCSRFToken') || !verifyCSRFToken()) {
 $roll     = trim((string)($_POST['roll'] ?? ''));
 $sign     = ((int)($_POST['sign'] ?? 0)) === 1 ? 1 : 0;
 $classKey = trim((string)($_POST['class_key'] ?? ''));
+$table    = trim((string)($_POST['table'] ?? 'report_card'));
 
 if ($roll === '') {
     http_response_code(422);
     psign_json(['ok' => false, 'error' => 'Roll number required']);
 }
 
+if (!in_array($table, ['report_card', 'unit_test_results'], true)) {
+    http_response_code(422);
+    psign_json(['ok' => false, 'error' => 'Invalid target table']);
+}
+
 try {
     $db = getDB();
+
+    if ($table === 'unit_test_results') {
+        $year     = trim((string)($_POST['year'] ?? ''));
+        $std      = trim((string)($_POST['std'] ?? ''));
+        $division = trim((string)($_POST['division'] ?? ''));
+        $testType = trim((string)($_POST['test_type'] ?? ''));
+        if ($year !== '' && rcIsVaultLocked($year)) {
+            http_response_code(423);
+            psign_json(['ok' => false, 'error' => "Academic year {$year} is locked in the Records Archive."]);
+        }
+        $sql    = 'UPDATE unit_test_results SET parents_sign = ? WHERE roll_no = ?';
+        $params = [$sign, $roll];
+        if ($year !== '')     { $sql .= ' AND academic_year = ?'; $params[] = $year; }
+        if ($std !== '')      { $sql .= ' AND std = ?';           $params[] = $std; }
+        if ($division !== '') { $sql .= ' AND division = ?';      $params[] = $division; }
+        if ($testType !== '') { $sql .= ' AND test_type = ?';     $params[] = $testType; }
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        psign_json(['ok' => true, 'updated' => $stmt->rowCount(), 'sign' => $sign]);
+    }
 
     $sql    = 'UPDATE report_card SET parents_sign = ? WHERE roll_no = ?';
     $params = [$sign, $roll];
 
     if ($classKey !== '') {
         $c = rcParseClassKey(urldecode($classKey));
+        if (!empty($c['academic_year']) && rcIsVaultLocked($c['academic_year'], $c['semester'] ?? null)) {
+            http_response_code(423);
+            psign_json(['ok' => false, 'error' => "Academic year {$c['academic_year']} is locked in the Records Archive."]);
+        }
         if (!empty($c['academic_year'])) { $sql .= ' AND academic_year = ?'; $params[] = $c['academic_year']; }
         if (!empty($c['std']))           { $sql .= ' AND std = ?';           $params[] = $c['std']; }
         if (!empty($c['division']))      { $sql .= ' AND division = ?';      $params[] = $c['division']; }

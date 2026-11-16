@@ -23,6 +23,7 @@ $input = json_decode(file_get_contents('php://input'), true);
 if (!is_array($input)) {
     $input = $_POST;
 }
+waVerifyCSRF($input);
 
 $chatId = (int)($input['chat_id'] ?? 0);
 $studentName = trim($input['student_name'] ?? '');
@@ -67,7 +68,7 @@ $msgData = [
     'from_me'       => false,
     'sender_id'     => $chat['wa_chat_id'],
     'sender_name'   => "Parent of {$studentName}",
-    'sender_avatar' => $chat['avatar_url'] ?: "https://api.dicebear.com/7.x/initials/svg?seed=" . urlencode($studentName),
+    'sender_avatar' => $chat['avatar_url'] ?: null,
     'msg_type'      => 'text',
     'body'          => $chosenBody,
     'media_url'     => null,

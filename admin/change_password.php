@@ -14,7 +14,8 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High Schoo
 $schoolLogo = $settings['logo'] ?? 'assets/images/hcclogo.jpg';
 $adminUser  = $_SESSION['admin_name'] ?? 'Admin';
 $adminId    = (int)($_SESSION['admin_id'] ?? 0);
-$adminRole  = $_SESSION['admin_role'] ?? 'admin';
+$adminRole  = $_SESSION['admin_role'] ?? 'editor';
+$isAdmin    = ($adminRole === 'admin');
 
 $db = getDB();
 $stmt = $db->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
@@ -150,70 +151,84 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // ── 4. Save Outgoing SMTP Settings Action ─────────────────────────────
         } elseif ($action === 'save_smtp') {
-            $smtpHost   = trim($_POST['smtp_host'] ?? 'smtp.gmail.com');
-            $smtpPort   = (int)($_POST['smtp_port'] ?? 587);
-            $smtpUser   = trim($_POST['smtp_user'] ?? '');
-            $smtpPass   = trim($_POST['smtp_pass'] ?? '');
-            $smtpSecure = trim($_POST['smtp_secure'] ?? 'tls');
-            $syncEmail  = !empty($_POST['sync_recovery_email']);
-
-            // Validate before persisting so a typo cannot silently break mail delivery.
-            if ($smtpUser !== '' && !filter_var($smtpUser, FILTER_VALIDATE_EMAIL)) {
-                $smtpError = 'Enter a valid sender address, for example hccschool@gmail.com.';
-            }
-            if ($smtpError === '' && $smtpPass !== '') {
-                $compactPass = preg_replace('/\s+/', '', $smtpPass);
-                if (strlen($compactPass) !== 16) {
-                    $smtpError = 'A Google app password is exactly 16 characters — you entered '
-                        . strlen($compactPass)
-                        . '. Copy it again from myaccount.google.com/apppasswords (spaces are fine).';
-                }
-            }
-
-            if ($smtpError === '') {
-            saveSetting('smtp_host', $smtpHost);
-            saveSetting('smtp_port', (string)$smtpPort);
-            saveSetting('smtp_user', $smtpUser);
-            if ($smtpPass !== '') {
-                saveSetting('smtp_pass', preg_replace('/\s+/', '', $smtpPass));
-            }
-            saveSetting('smtp_secure', $smtpSecure);
-
-            $settings = getAllSettings();
-
-            // Auto-sync recovery email if current email is placeholder or sync requested
-            $currEmail = trim($currentUser['email'] ?? '');
-            $isLocal = ($currEmail === '' || str_ends_with(strtolower($currEmail), '.local'));
-            if ($smtpUser !== '' && filter_var($smtpUser, FILTER_VALIDATE_EMAIL) && ($syncEmail || $isLocal)) {
-                $chk = $db->prepare("SELECT id FROM users WHERE email = ? AND id != ? LIMIT 1");
-                $chk->execute([$smtpUser, $adminId]);
-                if (!$chk->fetch()) {
-                    $upd = $db->prepare("UPDATE users SET email = ? WHERE id = ?");
-                    $upd->execute([$smtpUser, $adminId]);
-                    $currentUser['email'] = $smtpUser;
-                }
-                $smtpSuccess = 'Outgoing SMTP mail server settings saved successfully! Also connected ' . htmlspecialchars($smtpUser) . ' as your account recovery email.';
+            if (!$isAdmin) {
+                http_response_code(403);
+                $smtpError = 'Forbidden: Only administrators can modify global SMTP mail settings.';
+                $pwdError  = $smtpError;
+                rcLogAudit('unauthorized_settings_change', 'user', 'Unauthorized save_smtp attempt by user: ' . ($currentUser['username'] ?? 'id:' . $adminId));
             } else {
-                $smtpSuccess = 'Outgoing SMTP mail server settings saved successfully!';
-            }
-            rcLogAudit('smtp_settings_updated', 'user', 'Updated SMTP outgoing server settings.');
+                $smtpHost   = trim($_POST['smtp_host'] ?? 'smtp.gmail.com');
+                $smtpPort   = (int)($_POST['smtp_port'] ?? 587);
+                $smtpUser   = trim($_POST['smtp_user'] ?? '');
+                $smtpPass   = trim($_POST['smtp_pass'] ?? '');
+                $smtpSecure = trim($_POST['smtp_secure'] ?? 'tls');
+                $syncEmail  = !empty($_POST['sync_recovery_email']);
+
+                // Validate before persisting so a typo cannot silently break mail delivery.
+                if ($smtpUser !== '' && !filter_var($smtpUser, FILTER_VALIDATE_EMAIL)) {
+                    $smtpError = 'Enter a valid sender address, for example hccschool@gmail.com.';
+                }
+                if ($smtpError === '' && $smtpPass !== '') {
+                    $compactPass = preg_replace('/\s+/', '', $smtpPass);
+                    if (strlen($compactPass) !== 16) {
+                        $smtpError = 'A Google app password is exactly 16 characters — you entered '
+                            . strlen($compactPass)
+                            . '. Copy it again from myaccount.google.com/apppasswords (spaces are fine).';
+                    }
+                }
+
+                if ($smtpError === '') {
+                saveSetting('smtp_host', $smtpHost);
+                saveSetting('smtp_port', (string)$smtpPort);
+                saveSetting('smtp_user', $smtpUser);
+                if ($smtpPass !== '') {
+                    saveSetting('smtp_pass', preg_replace('/\s+/', '', $smtpPass));
+                }
+                saveSetting('smtp_secure', $smtpSecure);
+
+                $settings = getAllSettings();
+
+                // Auto-sync recovery email if current email is placeholder or sync requested
+                $currEmail = trim($currentUser['email'] ?? '');
+                $isLocal = ($currEmail === '' || str_ends_with(strtolower($currEmail), '.local'));
+                if ($smtpUser !== '' && filter_var($smtpUser, FILTER_VALIDATE_EMAIL) && ($syncEmail || $isLocal)) {
+                    $chk = $db->prepare("SELECT id FROM users WHERE email = ? AND id != ? LIMIT 1");
+                    $chk->execute([$smtpUser, $adminId]);
+                    if (!$chk->fetch()) {
+                        $upd = $db->prepare("UPDATE users SET email = ? WHERE id = ?");
+                        $upd->execute([$smtpUser, $adminId]);
+                        $currentUser['email'] = $smtpUser;
+                    }
+                    $smtpSuccess = 'Outgoing SMTP mail server settings saved successfully! Also connected ' . htmlspecialchars($smtpUser) . ' as your account recovery email.';
+                } else {
+                    $smtpSuccess = 'Outgoing SMTP mail server settings saved successfully!';
+                }
+                rcLogAudit('smtp_settings_updated', 'user', 'Updated SMTP outgoing server settings.');
+                }
             }
 
         // ── 5. Save Google OAuth & Drive Settings Action ──────────────────────
         } elseif ($action === 'save_google_oauth') {
-            $gClientId     = trim($_POST['google_client_id'] ?? '');
-            $gClientSecret = trim($_POST['google_client_secret'] ?? '');
-            $gRedirectUri  = trim($_POST['google_redirect_uri'] ?? '');
+            if (!$isAdmin) {
+                http_response_code(403);
+                $googleError = 'Forbidden: Only administrators can modify global Google OAuth settings.';
+                $pwdError    = $googleError;
+                rcLogAudit('unauthorized_settings_change', 'user', 'Unauthorized save_google_oauth attempt by user: ' . ($currentUser['username'] ?? 'id:' . $adminId));
+            } else {
+                $gClientId     = trim($_POST['google_client_id'] ?? '');
+                $gClientSecret = trim($_POST['google_client_secret'] ?? '');
+                $gRedirectUri  = trim($_POST['google_redirect_uri'] ?? '');
 
-            saveSetting('google_client_id', $gClientId);
-            if ($gClientSecret !== '') {
-                saveSetting('google_client_secret', $gClientSecret);
+                saveSetting('google_client_id', $gClientId);
+                if ($gClientSecret !== '') {
+                    saveSetting('google_client_secret', $gClientSecret);
+                }
+                saveSetting('google_redirect_uri', $gRedirectUri);
+
+                $settings = getAllSettings();
+                $googleSuccess = 'Google Sign-In & Drive Workspace configuration saved successfully!';
+                rcLogAudit('google_oauth_settings_updated', 'user', 'Updated Google Cloud OAuth client configuration.');
             }
-            saveSetting('google_redirect_uri', $gRedirectUri);
-
-            $settings = getAllSettings();
-            $googleSuccess = 'Google Sign-In & Drive Workspace configuration saved successfully!';
-            rcLogAudit('google_oauth_settings_updated', 'user', 'Updated Google Cloud OAuth client configuration.');
         }
     }
 }
@@ -880,6 +895,7 @@ $googleConfigured = !empty($settings['google_client_id']) && !empty($settings['g
                                 <div>When you click <em>"Forgot password?"</em> on the sign-in page, a 6-digit code is sent to this address. It expires in 10 minutes. Enter the code, then choose a new password.</div>
                             </div>
 
+                            <?php if ($isAdmin): ?>
                             <!-- Optional: Outgoing Mail Server (Free Gmail SMTP) Configuration Drawer -->
                             <div class="smtp-accordion">
                                 <button type="button" class="smtp-toggle-btn" onclick="toggleSmtpDrawer()">
@@ -1138,6 +1154,7 @@ $googleConfigured = !empty($settings['google_client_id']) && !empty($settings['g
                                     </form>
                                 </div>
                             </div>
+                            <?php endif; ?>
 
                         </div>
 
@@ -1246,13 +1263,13 @@ $googleConfigured = !empty($settings['google_client_id']) && !empty($settings['g
         }
     }
 
-    <?php if ($smtpSuccess || $smtpError || (($action ?? '') === 'save_smtp')): ?>
+    <?php if ($isAdmin && ($smtpSuccess || $smtpError || (($action ?? '') === 'save_smtp'))): ?>
     document.addEventListener('DOMContentLoaded', function() {
         toggleSmtpDrawer();
     });
     <?php endif; ?>
 
-    <?php if ($googleSuccess || $googleError || (($action ?? '') === 'save_google_oauth')): ?>
+    <?php if ($isAdmin && ($googleSuccess || $googleError || (($action ?? '') === 'save_google_oauth'))): ?>
     document.addEventListener('DOMContentLoaded', function() {
         toggleGoogleDrawer();
     });

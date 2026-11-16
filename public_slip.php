@@ -1,11 +1,12 @@
 <?php
 /* Public Parent View — Official Unit Test Progress Slip */
+$cspNonce = bin2hex(random_bytes(16));
 if (!headers_sent()) {
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: SAMEORIGIN');
     header('Referrer-Policy: strict-origin-when-cross-origin');
     header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
-    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'");
+    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-{$cspNonce}'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'");
 }
 require_once __DIR__ . '/includes/functions.php';
 
@@ -46,6 +47,8 @@ if (!$student) {
 
 $settings = getAllSettings();
 $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church English Medium School, Solapur';
+$schoolTagline = $settings['school_tagline'] ?? 'Excellence in Academic & Moral Education';
+$schoolLogo = $settings['logo'] ?? 'assets/images/hcclogo.jpg';
 
 $romanMap = ['1'=>'I','2'=>'II','3'=>'III','4'=>'IV','5'=>'V','6'=>'VI','7'=>'VII','8'=>'VIII','9'=>'IX','10'=>'X'];
 $romanStd = $romanMap[(string)$std] ?? $std;
@@ -90,16 +93,20 @@ $romanStd = $romanMap[(string)$std] ?? $std;
 
     <div class="parent-toolbar no-print">
         <div class="school-seal-badge">
-            <i class="fas fa-check-circle" style="color:#16a34a;"></i> Official Progress Slip
+            <i class="fas fa-shield-halved" style="color:#16a34a;"></i> Cryptographically Verified Official Record
         </div>
-        <button class="btn-whatsapp" type="button" onclick="window.print()">
+        <button class="btn-whatsapp" id="printSlipBtn" type="button">
             <i class="fas fa-print"></i> Print / Save
         </button>
     </div>
 
     <div class="slip-box">
         <div class="slip-header">
+            <img src="<?= e_attr(BASE_URL . safeLogoSrc($schoolLogo)) ?>" alt="School Logo" style="height:44px;width:auto;object-fit:contain;margin-bottom:6px;">
             <div class="slip-school-name"><?= sanitize($schoolName) ?></div>
+            <?php if ($schoolTagline !== ''): ?>
+                <div style="font-size:0.75rem;color:#475569;margin-top:2px;"><?= sanitize($schoolTagline) ?></div>
+            <?php endif; ?>
             <div class="slip-badge"><?= strtoupper(sanitize($testType)) ?> PROGRESS SLIP (<?= sanitize($year) ?>)</div>
         </div>
 
@@ -122,7 +129,7 @@ $romanStd = $romanMap[(string)$std] ?? $std;
                 <?php foreach ($subjects as $s): 
                     $sName = $s['subject_name'];
                     $sm = $student['subjects'][$sName] ?? null;
-                    $val = '0';
+                    $val = '—';
                     if ($sm) {
                         if ($sm['is_absent']) $val = 'Absent';
                         elseif ($sm['marks_obtained'] !== null) $val = (string)$sm['marks_obtained'];
@@ -152,7 +159,17 @@ $romanStd = $romanMap[(string)$std] ?? $std;
             <div>Class Teacher</div>
             <div>Parent's Signature</div>
         </div>
+        <div style="margin-top:12px;padding-top:8px;border-top:1px solid #e2e8f0;font-size:0.72rem;color:#64748b;display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;">
+            <span><i class="fas fa-shield-halved" style="color:#16a34a;"></i> Cryptographically Verified Official Record</span>
+            <span>Token: <code><?= sanitize(substr($token, 0, 10)) ?>&hellip;</code></span>
+        </div>
     </div>
 
+    <script nonce="<?= $cspNonce ?>">
+    (function () {
+        var btn = document.getElementById('printSlipBtn');
+        if (btn) btn.addEventListener('click', function () { window.print(); });
+    })();
+    </script>
 </body>
 </html>

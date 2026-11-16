@@ -29,6 +29,91 @@ if (!$currentUser) {
     exit;
 }
 
+/**
+ * Validate Google Drive / Docs URLs: only https:// and host in ['drive.google.com', 'docs.google.com'].
+ */
+function hccValidateDriveUrl(?string $url): ?string {
+    $url = trim((string)$url);
+    if ($url === '' || preg_match('/[\r\n\0]/', $url)) {
+        return null;
+    }
+    $parts = parse_url($url);
+    if (!is_array($parts)) {
+        return null;
+    }
+    $scheme = strtolower((string)($parts['scheme'] ?? ''));
+    $host   = strtolower((string)($parts['host'] ?? ''));
+    if ($scheme !== 'https' || !in_array($host, ['drive.google.com', 'docs.google.com'], true)) {
+        return null;
+    }
+    if (isset($parts['user']) || isset($parts['pass'])) {
+        return null;
+    }
+    if (!filter_var($url, FILTER_VALIDATE_URL)) {
+        return null;
+    }
+    return $url;
+}
+
+$workspaceCategories = [
+    'marks'      => '01. Semester Marksheets & Results',
+    'unit_tests' => '02. Unit Tests & Exams',
+    'analytics'  => '03. Class Analytics Reports',
+    'reports'    => '04. Student Report Cards & Slips',
+    'general'    => '05. General Workspace Documents',
+];
+
+// Authenticated download proxy for uploaded workspace files (strictly confined to storage/workspace/)
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET' && ($_GET['action'] ?? '') === 'download_file') {
+    $dlCategory = trim((string)($_GET['category'] ?? ''));
+    $dlFile     = (string)($_GET['file'] ?? '');
+
+    if (!array_key_exists($dlCategory, $workspaceCategories)) {
+        http_response_code(400);
+        exit('Invalid workspace category.');
+    }
+    if ($dlFile === '' || strpos($dlFile, "\0") !== false || $dlFile === '.' || $dlFile === '..' || basename($dlFile) !== $dlFile) {
+        http_response_code(400);
+        exit('Invalid file parameter.');
+    }
+
+    $workspaceBase = realpath(__DIR__ . '/../storage/workspace');
+    $catBase       = $workspaceBase !== false ? realpath($workspaceBase . DIRECTORY_SEPARATOR . $dlCategory) : false;
+    if ($workspaceBase === false || $catBase === false || !str_starts_with($catBase, $workspaceBase . DIRECTORY_SEPARATOR)) {
+        http_response_code(404);
+        exit('Workspace file not found.');
+    }
+
+    $targetFile = realpath($catBase . DIRECTORY_SEPARATOR . $dlFile);
+    if ($targetFile === false) {
+        http_response_code(404);
+        exit('Workspace file not found.');
+    }
+    if (!str_starts_with($targetFile, $catBase . DIRECTORY_SEPARATOR) || !is_file($targetFile) || !is_readable($targetFile)) {
+        http_response_code(403);
+        exit('Forbidden.');
+    }
+
+    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+    $detectedMime = $finfo ? (string)finfo_file($finfo, $targetFile) : 'application/octet-stream';
+    if ($finfo) {
+        finfo_close($finfo);
+    }
+    $cleanMime = strtolower(trim(explode(';', str_replace(["\r", "\n", "\0"], '', $detectedMime), 2)[0]));
+    if ($cleanMime === '' || in_array($cleanMime, ['text/html', 'application/xhtml+xml', 'image/svg+xml'], true)) {
+        $cleanMime = 'application/octet-stream';
+    }
+    $safeDownloadName = preg_replace('/[^A-Za-z0-9._-]/', '_', basename($targetFile)) ?: 'document';
+
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Type: ' . $cleanMime);
+    header('Content-Disposition: attachment; filename="' . $safeDownloadName . '"');
+    header('Content-Length: ' . filesize($targetFile));
+    header('Cache-Control: private, no-store');
+    readfile($targetFile);
+    exit;
+}
+
 // -------------------------------------------------------------------------
 // 1. HANDLE POST ACTIONS (Manual Link, Unlink, File Upload)
 // -------------------------------------------------------------------------
@@ -51,38 +136,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
         }
 
-        // Extract folder ID from URL if full URL is supplied
+        // Accept either a bare Drive folder ID OR an explicit https://(drive|docs).google.com URL
         $extractedId = '';
-        if (preg_match('/folders\/([a-zA-Z0-9_-]+)/', $folderUrlInput, $matches)) {
-            $extractedId = $matches[1];
-        } elseif (preg_match('/id=([a-zA-Z0-9_-]+)/', $folderUrlInput, $matches)) {
-            $extractedId = $matches[1];
-        } elseif (preg_match('/^[a-zA-Z0-9_-]{15,}$/', $folderUrlInput)) {
+        $cleanUrl = null;
+        if (preg_match('/^[a-zA-Z0-9_-]{15,128}$/', $folderUrlInput)) {
             $extractedId = $folderUrlInput;
+            $cleanUrl = "https://drive.google.com/drive/folders/{$extractedId}";
+        } else {
+            $validatedUrl = hccValidateDriveUrl($folderUrlInput);
+            if ($validatedUrl === null) {
+                $_SESSION['flash_error'] = 'Invalid Google Drive URL. Only https://drive.google.com or https://docs.google.com links (or valid Drive folder IDs) are permitted.';
+                header('Location: shared_workspace.php');
+                exit;
+            }
+            if (preg_match('/folders\/([a-zA-Z0-9_-]+)/', $validatedUrl, $matches)) {
+                $extractedId = $matches[1];
+                $cleanUrl = "https://drive.google.com/drive/folders/{$extractedId}";
+            } elseif (preg_match('/id=([a-zA-Z0-9_-]+)/', $validatedUrl, $matches)) {
+                $extractedId = $matches[1];
+                $cleanUrl = "https://drive.google.com/drive/folders/{$extractedId}";
+            } else {
+                $cleanUrl = $validatedUrl;
+            }
         }
 
-        $cleanUrl = $extractedId ? "https://drive.google.com/drive/folders/{$extractedId}" : $folderUrlInput;
         $folderId = $extractedId ?: substr(md5($cleanUrl), 0, 24);
 
-        // Subfolders
-        $subfolders = [
-            'marks'      => [
-                'name' => '01_Semester_Marksheets_and_Results',
-                'url'  => trim($_POST['subfolder_marks'] ?? '') ?: $cleanUrl
-            ],
-            'unit_tests' => [
-                'name' => '02_Unit_Tests_and_Exams',
-                'url'  => trim($_POST['subfolder_unit_tests'] ?? '') ?: $cleanUrl
-            ],
-            'analytics'  => [
-                'name' => '03_Class_Analytics_Reports',
-                'url'  => trim($_POST['subfolder_analytics'] ?? '') ?: $cleanUrl
-            ],
-            'reports'    => [
-                'name' => '04_Student_Report_Cards',
-                'url'  => trim($_POST['subfolder_reports'] ?? '') ?: $cleanUrl
-            ],
+        // Validate optional subfolder URLs
+        $subInputs = [
+            'marks'      => ['label' => 'Semester Marksheets', 'name' => '01_Semester_Marksheets_and_Results', 'raw' => trim((string)($_POST['subfolder_marks'] ?? ''))],
+            'unit_tests' => ['label' => 'Unit Tests & Exams', 'name' => '02_Unit_Tests_and_Exams', 'raw' => trim((string)($_POST['subfolder_unit_tests'] ?? ''))],
+            'analytics'  => ['label' => 'Class Analytics Reports', 'name' => '03_Class_Analytics_Reports', 'raw' => trim((string)($_POST['subfolder_analytics'] ?? ''))],
+            'reports'    => ['label' => 'Student Report Cards', 'name' => '04_Student_Report_Cards', 'raw' => trim((string)($_POST['subfolder_reports'] ?? ''))],
         ];
+        $subfolders = [];
+        foreach ($subInputs as $k => $info) {
+            if ($info['raw'] !== '') {
+                $subUrl = hccValidateDriveUrl($info['raw']);
+                if ($subUrl === null) {
+                    $_SESSION['flash_error'] = "Invalid URL for {$info['label']}. Only https://drive.google.com or https://docs.google.com URLs are permitted.";
+                    header('Location: shared_workspace.php');
+                    exit;
+                }
+            } else {
+                $subUrl = $cleanUrl;
+            }
+            $subfolders[$k] = [
+                'name' => $info['name'],
+                'url'  => $subUrl,
+            ];
+        }
 
         try {
             $upd = $db->prepare("UPDATE users SET google_drive_folder_id = ?, google_drive_folder_url = ?, google_drive_subfolders = ? WHERE id = ?");
@@ -147,11 +250,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
         }
 
-        // Allowed extensions
+        // Allowed extensions + MIME validation via finfo_file()
         $ext = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
-        $allowedExts = ['pdf', 'xlsx', 'xls', 'docx', 'doc', 'csv', 'png', 'jpg', 'jpeg', 'zip'];
-        if (!in_array($ext, $allowedExts, true)) {
+        $allowedMimeMap = [
+            'pdf'  => ['application/pdf'],
+            'png'  => ['image/png'],
+            'jpg'  => ['image/jpeg'],
+            'jpeg' => ['image/jpeg'],
+            'zip'  => ['application/zip', 'application/x-zip-compressed'],
+            'xlsx' => ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/zip', 'application/x-zip-compressed'],
+            'docx' => ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/zip', 'application/x-zip-compressed'],
+            'xls'  => ['application/vnd.ms-excel', 'application/x-ole-storage', 'application/cdfv2', 'application/msword'],
+            'doc'  => ['application/msword', 'application/x-ole-storage', 'application/cdfv2'],
+            'csv'  => ['text/csv', 'text/plain', 'application/csv'],
+        ];
+        if (!array_key_exists($ext, $allowedMimeMap)) {
             $_SESSION['flash_error'] = 'File type not supported. Allowed: PDF, Excel, Word, CSV, ZIP, Images.';
+            header('Location: shared_workspace.php');
+            exit;
+        }
+
+        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+        $detectedMime = $finfo ? strtolower(trim((string)finfo_file($finfo, $fileTmp))) : '';
+        if ($finfo) {
+            finfo_close($finfo);
+        }
+        $detectedMime = explode(';', $detectedMime, 2)[0];
+        if ($detectedMime === '' || !in_array($detectedMime, $allowedMimeMap[$ext], true)) {
+            $_SESSION['flash_error'] = 'Uploaded file content does not match the allowed file type.';
             header('Location: shared_workspace.php');
             exit;
         }
@@ -191,19 +317,66 @@ $colleagues = $staffStmt->fetchAll(PDO::FETCH_ASSOC);
 
 $isGoogleOAuthConnected = !empty($currentUser['google_id']) || !empty($_SESSION['google_logged_in']);
 $driveFolderId          = $currentUser['google_drive_folder_id'] ?? ($_SESSION['google_drive_folder_id'] ?? '');
-$driveFolderUrl         = $currentUser['google_drive_folder_url'] ?? ($_SESSION['google_drive_folder_url'] ?? '');
+$rawDriveFolderUrl      = $currentUser['google_drive_folder_url'] ?? ($_SESSION['google_drive_folder_url'] ?? '');
+$driveFolderUrl         = hccValidateDriveUrl($rawDriveFolderUrl) ?? '';
 
-if ($driveFolderId && !$driveFolderUrl) {
+if ($driveFolderId && !$driveFolderUrl && HCCGoogleDrive::isValidDriveId((string)$driveFolderId)) {
     $driveFolderUrl = "https://drive.google.com/drive/folders/{$driveFolderId}";
 }
 
-$isWorkspaceConnected = (!empty($driveFolderUrl) || !empty($driveFolderId));
+$isWorkspaceConnected = ($driveFolderUrl !== '' || ($driveFolderId !== '' && HCCGoogleDrive::isValidDriveId((string)$driveFolderId)));
 
 $subfolders = [];
 if (!empty($currentUser['google_drive_subfolders'])) {
     $subfolders = json_decode($currentUser['google_drive_subfolders'], true) ?: [];
 } elseif (!empty($_SESSION['google_drive_subfolders'])) {
     $subfolders = $_SESSION['google_drive_subfolders'];
+}
+foreach ($subfolders as $sk => $sv) {
+    if (is_array($sv)) {
+        $subfolders[$sk]['url'] = hccValidateDriveUrl($sv['url'] ?? '') ?? $driveFolderUrl;
+    }
+}
+
+// Gather locally uploaded workspace files safely
+$workspaceFiles = [];
+$workspaceStorageRoot = realpath(__DIR__ . '/../storage/workspace');
+if ($workspaceStorageRoot !== false) {
+    foreach ($workspaceCategories as $catKey => $catLabel) {
+        $catDir = realpath($workspaceStorageRoot . DIRECTORY_SEPARATOR . $catKey);
+        if ($catDir === false || !str_starts_with($catDir, $workspaceStorageRoot . DIRECTORY_SEPARATOR) || !is_dir($catDir)) {
+            continue;
+        }
+        $entries = @scandir($catDir);
+        if (!is_array($entries)) {
+            continue;
+        }
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..' || str_starts_with($entry, '.')) {
+                continue;
+            }
+            $full = realpath($catDir . DIRECTORY_SEPARATOR . $entry);
+            if ($full !== false && str_starts_with($full, $catDir . DIRECTORY_SEPARATOR) && is_file($full)) {
+                $mtime = (int)@filemtime($full);
+                $workspaceFiles[] = [
+                    'category'  => $catKey,
+                    'cat_label' => $catLabel,
+                    'filename'  => $entry,
+                    'size'      => (int)@filesize($full),
+                    'mtime'     => $mtime,
+                ];
+            }
+        }
+    }
+    usort($workspaceFiles, fn($a, $b) => $b['mtime'] <=> $a['mtime']);
+}
+
+$safeGoogleAvatar = '';
+if (!empty($currentUser['google_avatar'])) {
+    $av = trim((string)$currentUser['google_avatar']);
+    if (preg_match('#^https://#i', $av) && filter_var($av, FILTER_VALIDATE_URL)) {
+        $safeGoogleAvatar = $av;
+    }
 }
 
 // Generate connect Google URL if OAuth is configured
@@ -739,8 +912,8 @@ $connectedColleagueCount = count(array_filter($colleagues, fn($c) => !empty($c['
                     <!-- Connected Workspace Hero Banner -->
                     <div class="workspace-hero">
                         <div class="hero-info">
-                            <?php if (!empty($currentUser['google_avatar'])): ?>
-                                <img src="<?= htmlspecialchars($currentUser['google_avatar']) ?>" alt="Avatar" class="hero-avatar">
+                            <?php if ($safeGoogleAvatar !== ''): ?>
+                                <img src="<?= htmlspecialchars($safeGoogleAvatar) ?>" alt="Avatar" class="hero-avatar">
                             <?php else: ?>
                                 <div class="hero-avatar">
                                     <?= htmlspecialchars(mb_strtoupper(mb_substr(trim($currentUser['full_name'] ?: $adminUser), 0, 1))) ?>
@@ -761,17 +934,17 @@ $connectedColleagueCount = count(array_filter($colleagues, fn($c) => !empty($c['
                                 </h2>
                                 <p class="hero-sub">
                                     <span><i class="fa-solid fa-envelope"></i> <?= htmlspecialchars($currentUser['email']) ?></span>
-                                    <span><i class="fa-solid fa-folder-tree"></i> Academic Year 2024-25</span>
+                                    <span><i class="fa-solid fa-folder-tree"></i> Academic Year <?= htmlspecialchars(rcGetActiveAcademicYear()) ?></span>
                                     <span><i class="fa-solid fa-users"></i> <?= (int)$connectedColleagueCount ?> Colleagues Active</span>
                                 </p>
                             </div>
                         </div>
 
                         <div class="hero-actions">
-                            <a href="<?= htmlspecialchars($driveFolderUrl) ?>" target="_blank" rel="noopener" class="btn-drive-main">
+                            <a href="<?= htmlspecialchars($driveFolderUrl ?: '#') ?>" target="_blank" rel="noopener noreferrer" class="btn-drive-main">
                                 <i class="fa-solid fa-arrow-up-right-from-square"></i> Open in Google Drive
                             </a>
-                            <button type="button" class="btn-drive-action" onclick="copyDriveLink('<?= htmlspecialchars($driveFolderUrl) ?>')">
+                            <button type="button" class="btn-drive-action" onclick="copyDriveLink(<?= htmlspecialchars(json_encode($driveFolderUrl, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT), ENT_QUOTES, 'UTF-8') ?>)">
                                 <i class="fa-solid fa-link"></i> Copy Link
                             </button>
                             <button type="button" class="btn-drive-action" onclick="openEditModal()">
@@ -793,7 +966,7 @@ $connectedColleagueCount = count(array_filter($colleagues, fn($c) => !empty($c['
 
                     <div class="folder-grid">
                         <!-- 1. Semester Marksheets -->
-                        <a href="<?= htmlspecialchars($subfolders['marks']['url'] ?? $driveFolderUrl) ?>" target="_blank" class="folder-card">
+                        <a href="<?= htmlspecialchars(($subfolders['marks']['url'] ?? '') ?: ($driveFolderUrl ?: '#')) ?>" target="_blank" rel="noopener noreferrer" class="folder-card">
                             <div>
                                 <div class="folder-icon"><i class="fa-solid fa-table-list"></i></div>
                                 <h4 class="folder-title">Semester Marksheets</h4>
@@ -806,7 +979,7 @@ $connectedColleagueCount = count(array_filter($colleagues, fn($c) => !empty($c['
                         </a>
 
                         <!-- 2. Unit Tests -->
-                        <a href="<?= htmlspecialchars($subfolders['unit_tests']['url'] ?? $driveFolderUrl) ?>" target="_blank" class="folder-card">
+                        <a href="<?= htmlspecialchars(($subfolders['unit_tests']['url'] ?? '') ?: ($driveFolderUrl ?: '#')) ?>" target="_blank" rel="noopener noreferrer" class="folder-card">
                             <div>
                                 <div class="folder-icon ut"><i class="fa-solid fa-table-cells"></i></div>
                                 <h4 class="folder-title">Unit Tests &amp; Exams</h4>
@@ -819,7 +992,7 @@ $connectedColleagueCount = count(array_filter($colleagues, fn($c) => !empty($c['
                         </a>
 
                         <!-- 3. Class Analytics -->
-                        <a href="<?= htmlspecialchars($subfolders['analytics']['url'] ?? $driveFolderUrl) ?>" target="_blank" class="folder-card">
+                        <a href="<?= htmlspecialchars(($subfolders['analytics']['url'] ?? '') ?: ($driveFolderUrl ?: '#')) ?>" target="_blank" rel="noopener noreferrer" class="folder-card">
                             <div>
                                 <div class="folder-icon an"><i class="fa-solid fa-chart-line"></i></div>
                                 <h4 class="folder-title">Class Analytics Reports</h4>
@@ -832,7 +1005,7 @@ $connectedColleagueCount = count(array_filter($colleagues, fn($c) => !empty($c['
                         </a>
 
                         <!-- 4. Student Report Cards -->
-                        <a href="<?= htmlspecialchars($subfolders['reports']['url'] ?? $driveFolderUrl) ?>" target="_blank" class="folder-card">
+                        <a href="<?= htmlspecialchars(($subfolders['reports']['url'] ?? '') ?: ($driveFolderUrl ?: '#')) ?>" target="_blank" rel="noopener noreferrer" class="folder-card">
                             <div>
                                 <div class="folder-icon rc"><i class="fa-solid fa-file-invoice"></i></div>
                                 <h4 class="folder-title">Student Report Cards</h4>
@@ -930,6 +1103,52 @@ $connectedColleagueCount = count(array_filter($colleagues, fn($c) => !empty($c['
                         </div>
                     </div>
 
+                    <!-- Uploaded Workspace Files Archive -->
+                    <div class="panel-card" style="margin-bottom:28px;">
+                        <div class="panel-header" style="justify-content:space-between; flex-wrap:wrap; gap:10px;">
+                            <div style="display:flex; align-items:center; gap:14px;">
+                                <div class="panel-icon emerald"><i class="fa-solid fa-box-archive"></i></div>
+                                <div>
+                                    <h3>Uploaded Workspace Files Archive</h3>
+                                    <p>Files uploaded directly to portal workspace storage (authenticated download only).</p>
+                                </div>
+                            </div>
+                            <span style="font-size:0.82rem; color:#64748b; font-weight:600;">
+                                <?= count($workspaceFiles) ?> file<?= count($workspaceFiles) === 1 ? '' : 's' ?> stored
+                            </span>
+                        </div>
+
+                        <div class="staff-directory-wrap">
+                            <?php if (empty($workspaceFiles)): ?>
+                                <p style="padding:20px; color:#64748b; text-align:center; margin:0;">No workspace files uploaded yet.</p>
+                            <?php else: ?>
+                                <?php foreach ($workspaceFiles as $wf):
+                                    $kb = $wf['size'] >= 1048576
+                                        ? number_format($wf['size'] / 1048576, 2) . ' MB'
+                                        : max(1, (int)round($wf['size'] / 1024)) . ' KB';
+                                    $dlHref = 'shared_workspace.php?action=download_file&category=' . urlencode($wf['category']) . '&file=' . urlencode($wf['filename']);
+                                ?>
+                                    <div class="staff-item">
+                                        <div class="staff-user-meta">
+                                            <div class="staff-avatar-mini" style="background:#ecfdf5; color:#059669;">
+                                                <i class="fa-solid fa-file-lines"></i>
+                                            </div>
+                                            <div class="staff-names">
+                                                <strong><?= htmlspecialchars($wf['filename']) ?></strong>
+                                                <span><?= htmlspecialchars($wf['cat_label']) ?> &bull; <?= htmlspecialchars($kb) ?> &bull; <?= htmlspecialchars(date('d M Y, h:i A', $wf['mtime'])) ?></span>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <a href="<?= htmlspecialchars($dlHref) ?>" class="btn-staff-open">
+                                                <i class="fa-solid fa-download"></i> <span>Download</span>
+                                            </a>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
                     <!-- Staff Collaboration Directory -->
                     <div class="panel-card">
                         <div class="panel-header" style="justify-content:space-between; flex-wrap:wrap; gap:10px;">
@@ -951,7 +1170,8 @@ $connectedColleagueCount = count(array_filter($colleagues, fn($c) => !empty($c['
                             <?php else: ?>
                                 <div id="staffList">
                                     <?php foreach ($colleagues as $staff): 
-                                        $hasDrive = !empty($staff['google_drive_folder_url']);
+                                        $safeStaffUrl = hccValidateDriveUrl($staff['google_drive_folder_url'] ?? '');
+                                        $hasDrive = ($safeStaffUrl !== null);
                                     ?>
                                         <div class="staff-item" data-search="<?= strtolower(htmlspecialchars($staff['full_name'] . ' ' . $staff['email'] . ' ' . $staff['role'])) ?>">
                                             <div class="staff-user-meta">
@@ -968,10 +1188,10 @@ $connectedColleagueCount = count(array_filter($colleagues, fn($c) => !empty($c['
                                                     <span class="badge" style="background:#ecfdf5; color:#059669; border:1px solid #a7f3d0; font-size:0.72rem; padding:4px 8px; border-radius:6px;">
                                                         <i class="fa-solid fa-circle-check"></i> Drive Active
                                                     </span>
-                                                    <a href="<?= htmlspecialchars($staff['google_drive_folder_url']) ?>" target="_blank" rel="noopener" class="btn-staff-open" title="Open Teacher's Google Drive">
+                                                    <a href="<?= htmlspecialchars($safeStaffUrl) ?>" target="_blank" rel="noopener noreferrer" class="btn-staff-open" title="Open Teacher's Google Drive">
                                                         <span>Open</span> <i class="fa-solid fa-arrow-up-right-from-square"></i>
                                                     </a>
-                                                    <button type="button" class="btn-staff-open" style="background:#f8fafc; color:#475569; border-color:#cbd5e1;" onclick="copyDriveLink('<?= htmlspecialchars($staff['google_drive_folder_url']) ?>')" title="Copy Link">
+                                                    <button type="button" class="btn-staff-open" style="background:#f8fafc; color:#475569; border-color:#cbd5e1;" onclick="copyDriveLink(<?= htmlspecialchars(json_encode($safeStaffUrl, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT), ENT_QUOTES, 'UTF-8') ?>)" title="Copy Link">
                                                         <i class="fa-solid fa-link"></i>
                                                     </button>
                                                 <?php else: ?>

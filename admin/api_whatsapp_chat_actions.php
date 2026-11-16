@@ -17,6 +17,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 $db = waGetDB();
 $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+waVerifyCSRF(is_array($input) ? $input : null);
 
 $chatId = (int)($input['chat_id'] ?? 0);
 $action = $input['action'] ?? '';

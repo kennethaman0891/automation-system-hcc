@@ -11,11 +11,13 @@ require_once __DIR__ . '/../includes/google_drive.php';
 require_once __DIR__ . '/auth_check.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
     echo json_encode(['success' => false, 'error' => 'Method not allowed.']);
     exit;
 }
 
 if (!verifyCSRFToken()) {
+    http_response_code(403);
     echo json_encode(['success' => false, 'error' => 'Security token invalid or expired. Please refresh the page.']);
     exit;
 }
@@ -27,6 +29,7 @@ $stmt->execute([$adminId]);
 $currentUser = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$currentUser) {
+    http_response_code(401);
     echo json_encode(['success' => false, 'error' => 'User account not found.']);
     exit;
 }
@@ -36,12 +39,20 @@ $role           = in_array($_POST['role'] ?? '', ['reader', 'writer'], true) ? $
 $folderId       = trim($_POST['folder_id'] ?? ($currentUser['google_drive_folder_id'] ?? ''));
 
 if ($colleagueEmail === '' || !filter_var($colleagueEmail, FILTER_VALIDATE_EMAIL)) {
+    http_response_code(400);
     echo json_encode(['success' => false, 'error' => 'Please provide a valid colleague email address.']);
     exit;
 }
 
 if ($folderId === '') {
+    http_response_code(400);
     echo json_encode(['success' => false, 'error' => 'No Google Drive workspace folder found for your account. Please re-authenticate with Google.']);
+    exit;
+}
+
+if (!preg_match('/^[A-Za-z0-9_-]{5,128}$/', $folderId)) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Invalid Google Drive folder ID.']);
     exit;
 }
 

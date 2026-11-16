@@ -43,14 +43,26 @@ $fmtNum = function ($v) {
 
 // Handle POST actions
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (($_POST['action'] ?? '') === 'mark_notifs_read') {
+        header('Content-Type: application/json');
+        if (!verifyCSRFToken()) {
+            echo json_encode(['ok' => false, 'error' => 'Security check failed']);
+            exit;
+        }
+        rcMarkNotificationsRead();
+        echo json_encode(['ok' => true]);
+        exit;
+    }
+
     if (!verifyCSRFToken()) {
         $error = 'Security check failed. Please refresh and try again.';
     } else {
         $act = trim($_POST['action'] ?? '');
 
         if ($act === 'save') {
+            $activeYear = rcGetActiveAcademicYear();
             $data = [
-                'academic_year' => trim($_POST['academic_year'] ?? '2025-26'),
+                'academic_year' => trim($_POST['academic_year'] ?? $activeYear),
                 'std'           => trim($_POST['std'] ?? ''),
                 'division'      => trim($_POST['division'] ?? ''),
                 'semester'      => trim($_POST['semester'] ?? 'Sem 1'),
@@ -63,6 +75,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'parents_sign'  => isset($_POST['parents_sign']) ? 1 : 0,
                 'subjects'      => []
             ];
+            $origRoll = trim((string)($_POST['original_roll_no'] ?? ''));
 
             // Collect subject marks
             $subjNames = $_POST['subject_name'] ?? [];
@@ -86,21 +99,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error = 'STD, Roll No and Student Name are required.';
             } elseif (empty($data['subjects'])) {
                 $error = 'Please add at least one subject row.';
+            } elseif (rcIsVaultLocked($data['academic_year'], $data['semester'])) {
+                $error = "Academic year {$data['academic_year']} is locked in the Records Archive.";
             } else {
-                $res = rcSaveEntry($data);
-                if ($res['ok']) {
-                    $newClassKey = rcClassKey($data['academic_year'], $data['std'], $data['division'], $data['semester']);
-                    $savedRoll   = $data['roll_no'];
-
-                    if (isset($_POST['submit_action']) && $_POST['submit_action'] === 'save_and_add_next') {
-                        header('Location: entry.php?class=' . urlencode($newClassKey) . '&mode=new&msg=saved');
-                        exit;
+                // Safe roll_no change check against duplicate roll numbers in the same cohort
+                $rollCheckOk = true;
+                if ($origRoll !== '' && $origRoll !== $data['roll_no']) {
+                    $dupStmt = $db->prepare("SELECT 1 FROM report_card WHERE academic_year=? AND std=? AND division=? AND semester=? AND roll_no=? LIMIT 1");
+                    $dupStmt->execute([$data['academic_year'], $data['std'], $data['division'], $data['semester'], $data['roll_no']]);
+                    if ($dupStmt->fetchColumn()) {
+                        $rollCheckOk = false;
+                        $error = "Roll number {$data['roll_no']} already exists in STD {$data['std']} {$data['division']} ({$data['semester']}). Choose a different roll number.";
                     } else {
-                        header('Location: entry.php?class=' . urlencode($newClassKey) . '&roll=' . urlencode($savedRoll) . '&msg=saved');
-                        exit;
+                        $phoneStmt = $db->prepare("SELECT MAX(NULLIF(parent_phone,'')) FROM report_card WHERE academic_year=? AND std=? AND division=? AND semester=? AND roll_no=?");
+                        $phoneStmt->execute([$data['academic_year'], $data['std'], $data['division'], $data['semester'], $origRoll]);
+                        $prevPhone = $phoneStmt->fetchColumn();
+                        if ($prevPhone) {
+                            $data['parent_phone'] = (string)$prevPhone;
+                        }
                     }
-                } else {
-                    $error = 'Save failed: ' . $res['error'];
+                }
+
+                if ($rollCheckOk) {
+                    $res = rcSaveEntry($data);
+                    if ($res['ok']) {
+                        if ($origRoll !== '' && $origRoll !== $data['roll_no']) {
+                            $db->prepare("DELETE FROM report_card WHERE academic_year=? AND std=? AND division=? AND semester=? AND roll_no=?")
+                               ->execute([$data['academic_year'], $data['std'], $data['division'], $data['semester'], $origRoll]);
+                        }
+                        $newClassKey = rcClassKey($data['academic_year'], $data['std'], $data['division'], $data['semester']);
+                        $savedRoll   = $data['roll_no'];
+
+                        if (isset($_POST['submit_action']) && $_POST['submit_action'] === 'save_and_add_next') {
+                            header('Location: entry.php?class=' . urlencode($newClassKey) . '&mode=new&msg=saved');
+                            exit;
+                        } else {
+                            header('Location: entry.php?class=' . urlencode($newClassKey) . '&roll=' . urlencode($savedRoll) . '&msg=saved');
+                            exit;
+                        }
+                    } else {
+                        $error = 'Save failed: ' . $res['error'];
+                    }
                 }
             }
         } elseif ($act === 'save_subjects') {
@@ -156,12 +195,13 @@ if (isset($_GET['msg'])) {
 }
 
 // Parse class context
+$activeAcYear = rcGetActiveAcademicYear();
 $parsedKey = $classKey !== ''
     ? rcParseClassKey(urldecode($classKey))
-    : ['academic_year' => '2025-26', 'std' => '1', 'division' => 'A', 'semester' => 'Sem 1'];
+    : ['academic_year' => $activeAcYear, 'std' => '1', 'division' => 'A', 'semester' => 'Sem 1'];
 
 $ctx = [
-    'academic_year' => $parsedKey['academic_year'] ?: '2025-26',
+    'academic_year' => $parsedKey['academic_year'] ?: $activeAcYear,
     'std'           => $parsedKey['std'] ?: '1',
     'division'      => $parsedKey['division'] ?: 'A',
     'semester'      => $parsedKey['semester'] ?: 'Sem 1',
@@ -615,23 +655,30 @@ $currentClassLabel = "STD {$rStd} {$ctx['division']} — {$ctx['semester']} ({$c
                 <p class="page-sub"><?= sanitize($schoolName) ?> &bull; Manual Report Card Entry & Management</p>
             </div>
             <div style="display:flex;align-items:center;gap:12px;">
-                <!-- Activity Alerts / Notification Bell -->
-                <div class="notif-container" style="position:relative;">
-                    <button type="button" class="btn btn-outline" style="padding:7px 12px;font-size:13px;" onclick="document.getElementById('notifMenu').classList.toggle('show')">
+                <!-- Activity Alerts / Notification Bell (matched with admin.js) -->
+                <div class="notif-container" id="notifContainer" style="position:relative;">
+                    <button type="button" class="btn btn-outline notif-trigger" id="notifTrigger" style="padding:7px 12px;font-size:13px;" title="Recent Activity Notifications" aria-label="Notifications">
                         <i class="fas fa-bell"></i>
                         <?php if ($notifData['unread'] > 0): ?>
-                            <span style="background:#dc2626;color:white;font-size:10px;font-weight:700;padding:1px 5px;border-radius:10px;margin-left:4px;"><?= (int)$notifData['unread'] ?></span>
+                            <span class="notif-badge" id="notifBadge" style="background:#dc2626;color:white;font-size:10px;font-weight:700;padding:1px 5px;border-radius:10px;margin-left:4px;"><?= (int)$notifData['unread'] ?></span>
                         <?php endif; ?>
                     </button>
-                    <div id="notifMenu" class="notif-dropdown" style="display:none;position:absolute;right:0;top:40px;width:340px;background:white;border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow-lg);z-index:100;padding:12px;">
-                        <h4 style="margin:0 0 8px 0;font-size:13px;font-weight:700;">Recent System Activity</h4>
-                        <div style="max-height:260px;overflow-y:auto;font-size:12px;">
-                            <?php foreach ($notifData['items'] as $nt): ?>
-                            <div style="padding:6px 0;border-bottom:1px solid #f1f5f9;">
-                                <strong><?= sanitize($nt['title']) ?></strong>
-                                <div style="color:var(--text-2);"><?= sanitize($nt['message']) ?></div>
-                            </div>
-                            <?php endforeach; ?>
+                    <div id="notifDropdown" class="notif-dropdown" style="position:absolute;right:0;top:40px;width:340px;background:white;border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow-lg);z-index:100;padding:12px;">
+                        <div class="notif-dropdown-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                            <span style="font-size:13px;font-weight:700;"><i class="fas fa-bell"></i> Recent System Activity</span>
+                            <span style="font-size:11px;color:var(--text-3);"><?= count($notifData['items']) ?> events</span>
+                        </div>
+                        <div class="notif-dropdown-list" style="max-height:260px;overflow-y:auto;font-size:12px;">
+                            <?php if (empty($notifData['items'])): ?>
+                                <div style="padding:18px;text-align:center;color:var(--text-3);">No recent notifications.</div>
+                            <?php else: ?>
+                                <?php foreach ($notifData['items'] as $nt): ?>
+                                <a href="<?= !empty($nt['link']) ? sanitize($nt['link']) : '#' ?>" class="notif-item" style="display:block;padding:6px 0;border-bottom:1px solid #f1f5f9;text-decoration:none;color:inherit;">
+                                    <strong><?= sanitize($nt['title']) ?></strong>
+                                    <div style="color:var(--text-2);"><?= sanitize($nt['message']) ?></div>
+                                </a>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
                         </div>
                     </div>
                 </div>
@@ -658,6 +705,11 @@ $currentClassLabel = "STD {$rStd} {$ctx['division']} — {$ctx['semester']} ({$c
                 <div class="class-picker-wrap">
                     <label for="classSelector" style="font-weight:700;font-size:13px;"><i class="fa-solid fa-chalkboard"></i> Target Class:</label>
                     <select id="classSelector" class="form-control" style="font-weight:600;min-width:260px;" onchange="location.href='entry.php?class=' + encodeURIComponent(this.value)">
+                        <?php if (empty($classes)): ?>
+                        <option value="<?= e_attr($effClassKey) ?>" selected>
+                            STD <?= sanitize($romanMap[(string)$ctx['std']] ?? $ctx['std']) ?>-<?= sanitize($ctx['division']) ?> &bull; <?= sanitize($ctx['semester']) ?> (<?= sanitize($ctx['academic_year']) ?>) — New
+                        </option>
+                        <?php else: ?>
                         <?php foreach ($classes as $c): 
                             $ck = rcClassKey($c['academic_year'], $c['std'], $c['division'], $c['semester']);
                             $rS = $romanMap[(string)$c['std']] ?? $c['std'];
@@ -667,7 +719,12 @@ $currentClassLabel = "STD {$rStd} {$ctx['division']} — {$ctx['semester']} ({$c
                             STD <?= sanitize($rS) ?>-<?= sanitize($c['division']) ?> &bull; <?= sanitize($c['semester']) ?> (<?= sanitize($c['academic_year']) ?>)
                         </option>
                         <?php endforeach; ?>
+                        <?php endif; ?>
                     </select>
+
+                    <button type="button" id="toggleNewClassBtn" class="btn btn-outline btn-sm" title="Type a custom Academic Year, STD, Division or Semester below">
+                        <i class="fas fa-folder-plus"></i> <?= empty($classes) ? 'Creating New Class' : 'New / Custom Class' ?>
+                    </button>
 
                     <span class="class-badge-pill">
                         <i class="fa-solid fa-school"></i> <?= sanitize($currentClassLabel) ?>
@@ -764,33 +821,35 @@ $currentClassLabel = "STD {$rStd} {$ctx['division']} — {$ctx['semester']} ({$c
                         <?php endif; ?>
                     </div>
                     <div class="panel-body" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:18px;">
+                        <?php $lockClassFields = !empty($classes); ?>
                         <div class="form-group" style="margin:0;">
-                            <label class="form-label">Academic Year *</label>
-                            <input type="text" name="academic_year" class="form-control" value="<?= sanitize($report['academic_year'] ?? $ctx['academic_year']) ?>" readonly style="background:#f8fafc;" required>
+                            <label class="form-label" for="acYearInput">Academic Year *</label>
+                            <input type="text" id="acYearInput" name="academic_year" class="form-control js-class-meta-input" value="<?= sanitize($report['academic_year'] ?? $ctx['academic_year']) ?>" <?= $lockClassFields ? 'readonly style="background:#f8fafc;"' : '' ?> placeholder="e.g. <?= e_attr($activeAcYear) ?>" required>
                         </div>
                         <div class="form-group" style="margin:0;">
-                            <label class="form-label">Standard (STD) *</label>
-                            <input type="text" name="std" id="stdInput" class="form-control" value="<?= sanitize($report['std'] ?? $ctx['std']) ?>" readonly style="background:#f8fafc;" required>
+                            <label class="form-label" for="stdInput">Standard (STD) *</label>
+                            <input type="text" name="std" id="stdInput" class="form-control js-class-meta-input" value="<?= sanitize($report['std'] ?? $ctx['std']) ?>" <?= $lockClassFields ? 'readonly style="background:#f8fafc;"' : '' ?> placeholder="e.g. 1 to 10" required>
                         </div>
                         <div class="form-group" style="margin:0;">
-                            <label class="form-label">Division *</label>
-                            <input type="text" name="division" class="form-control" value="<?= sanitize($report['division'] ?? $ctx['division']) ?>" readonly style="background:#f8fafc;" required>
+                            <label class="form-label" for="divInput">Division *</label>
+                            <input type="text" id="divInput" name="division" class="form-control js-class-meta-input" value="<?= sanitize($report['division'] ?? $ctx['division']) ?>" <?= $lockClassFields ? 'readonly style="background:#f8fafc;"' : '' ?> placeholder="e.g. A" required>
                         </div>
                         <div class="form-group" style="margin:0;">
-                            <label class="form-label">Semester *</label>
-                            <input type="text" name="semester" class="form-control" value="<?= sanitize($report['semester'] ?? $ctx['semester']) ?>" readonly style="background:#f8fafc;" required>
+                            <label class="form-label" for="semInput">Semester *</label>
+                            <input type="text" id="semInput" name="semester" class="form-control js-class-meta-input" value="<?= sanitize($report['semester'] ?? $ctx['semester']) ?>" <?= $lockClassFields ? 'readonly style="background:#f8fafc;"' : '' ?> placeholder="e.g. Sem 1" required>
                         </div>
                         <div class="form-group" style="margin:0;">
-                            <label class="form-label">Roll Number *</label>
-                            <input type="text" name="roll_no" class="form-control" value="<?= sanitize($edit ? $report['roll'] : $targetRoll) ?>" required <?= $edit ? 'readonly style="background:#f8fafc;"' : '' ?>>
+                            <label class="form-label" for="rollNoInput">Roll Number *</label>
+                            <input type="hidden" name="original_roll_no" value="<?= e_attr($edit ? $report['roll'] : '') ?>">
+                            <input type="text" id="rollNoInput" name="roll_no" class="form-control" value="<?= sanitize($edit ? $report['roll'] : $targetRoll) ?>" required>
                         </div>
                         <div class="form-group" style="margin:0;">
-                            <label class="form-label">Student Full Name *</label>
-                            <input type="text" name="student_name" class="form-control" value="<?= sanitize($report['name'] ?? '') ?>" placeholder="e.g. SURYAWANSHI AARAV AMIT" required>
+                            <label class="form-label" for="stuNameInput">Student Full Name *</label>
+                            <input type="text" id="stuNameInput" name="student_name" class="form-control" value="<?= sanitize($report['name'] ?? '') ?>" placeholder="e.g. SURYAWANSHI AARAV AMIT" required>
                         </div>
                         <div class="form-group" style="margin:0;">
-                            <label class="form-label">Date of Birth (DOB) <small id="dobWordsDisplay" style="color:var(--brand-main);font-weight:600;"></small></label>
-                            <input type="text" name="date_of_birth" id="dobInput" class="form-control" value="<?= sanitize($report['date_of_birth'] ?? '') ?>" placeholder="YYYY-MM-DD or DD/MM/YYYY">
+                            <label class="form-label" for="dobInput">Date of Birth (dd/mm/yyyy) <small id="dobWordsDisplay" style="color:var(--brand-main);font-weight:600;"></small></label>
+                            <input type="text" name="date_of_birth" id="dobInput" class="form-control" value="<?= sanitize($report['date_of_birth'] ?? '') ?>" placeholder="dd/mm/yyyy (e.g. 15/08/2014)">
                         </div>
                         <div class="form-group" style="margin:0;">
                             <label class="form-label">Attendance Record</label>

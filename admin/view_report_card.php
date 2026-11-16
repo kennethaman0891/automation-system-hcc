@@ -1,11 +1,12 @@
 <?php
 /* Individual Student Report Card — detailed subject-wise view */
+$cspNonce = bin2hex(random_bytes(16));
 if (!headers_sent()) {
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: SAMEORIGIN');
     header('Referrer-Policy: strict-origin-when-cross-origin');
     header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
-    header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'");
+    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-{$cspNonce}'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'");
 }
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/auth_check.php';
@@ -13,7 +14,10 @@ require_once __DIR__ . '/auth_check.php';
 $db = getDB();
 $settings = getAllSettings();
 $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High School';
-$schoolTagline = $settings['school_tagline'] ?? '';
+$schoolTagline = trim((string)($settings['school_tagline'] ?? ''));
+if ($schoolTagline === '') {
+    $schoolTagline = 'Excellence in Academic & Moral Education';
+}
 $schoolLogo = $settings['logo'] ?? 'assets/images/hcclogo.jpg';
 
 $classKey = trim($_GET['class'] ?? '');
@@ -34,6 +38,9 @@ $c = rcParseClassKey(urldecode($classKey));
 $clsLabel = 'STD ' . $c['std'] . ' ' . $c['division'] . ' — ' . $c['semester'];
 $fileBase = preg_replace('/[^A-Za-z0-9_-]+/', '_', 'Report_Card_' . $report['name'] . '_' . $report['roll'] . '_' . $clsLabel . '_' . $c['academic_year']);
 $today = date('d-m-Y');
+$publicCardUrl = rcGetPublicCardUrl($classKey, (string)$report['roll']);
+$qrDataUri = rcRenderQrSvgDataUri($publicCardUrl, 2);
+$parentPhone = preg_replace('/\D+/', '', (string)($report['rows'][0]['parent_phone'] ?? ''));
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -98,6 +105,13 @@ $today = date('d-m-Y');
         .print-foot { display: flex; justify-content: space-between; gap: 16px; padding: 26px 24px 20px; font-size: 0.82rem; color: #475569; }
         .print-foot .sig { text-align: center; flex: 1; }
         .print-foot .sig-line { width: 180px; border-bottom: 1.5px solid #94a3b8; height: 34px; margin: 0 auto 5px; }
+        .qr-verify-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 24px 12px; border-top: 1px dashed #cbd5e1; background: #f8fafc; page-break-inside: avoid; }
+        .qr-verify-info { display: flex; flex-direction: column; gap: 2px; font-size: 0.74rem; color: #475569; }
+        .qr-verify-info strong { color: #1a237e; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; display: inline-flex; align-items: center; gap: 6px; }
+        .qr-verify-info a { color: #1d4ed8; text-decoration: none; font-weight: 600; word-break: break-all; font-size: 0.7rem; }
+        .qr-verify-info a:hover { text-decoration: underline; }
+        .qr-verify-badge { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+        .qr-verify-badge img { width: 58px; height: 58px; border: 1px solid #cbd5e1; border-radius: 6px; padding: 2px; background: #fff; display: block; }
         .empty-note { text-align: center; padding: 40px; color: #94a3b8; }
         .error-box { max-width: 600px; margin: 40px auto; padding: 32px; background: #fff; border: 2px solid #fee2e2; border-radius: 12px; text-align: center; }
         .error-box h1 { color: #dc2626; margin-bottom: 12px; }
@@ -131,7 +145,7 @@ $today = date('d-m-Y');
 
     <div class="print-sheet">
         <div class="print-hdr">
-            <img src="<?= e_attr(BASE_URL . safeLogoSrc($schoolLogo)) ?>" alt="Logo" onerror="this.style.display='none'">
+            <img src="<?= e_attr(BASE_URL . safeLogoSrc($schoolLogo)) ?>" alt="Logo" id="schoolLogoImg">
             <h1><?= sanitize($schoolName) ?></h1>
             <?php if ($schoolTagline): ?><h2><?= sanitize($schoolTagline) ?></h2><?php endif; ?>
         </div>
@@ -251,18 +265,34 @@ $today = date('d-m-Y');
             <div class="sig"><div class="sig-line"></div>Coordinator</div>
             <div class="sig"><div class="sig-line"></div>Principal</div>
         </div>
+
+        <div class="qr-verify-bar">
+            <div class="qr-verify-info">
+                <strong><i class="fas fa-shield-check" style="color:#16a34a;"></i> Digital Record Verification</strong>
+                <span>Scan QR code or open link to verify authenticity on the official school portal.</span>
+                <a href="<?= e_attr($publicCardUrl) ?>" target="_blank" rel="noopener"><?= sanitize($publicCardUrl) ?></a>
+            </div>
+            <a class="qr-verify-badge" href="<?= e_attr($publicCardUrl) ?>" target="_blank" rel="noopener" title="Verify Report Card Online">
+                <img src="<?= e_attr($qrDataUri) ?>" alt="QR Verification Code">
+            </a>
+        </div>
     </div>
 
     <script src="<?= BASE_URL ?>assets/vendor/html2canvas@1.4.1/html2canvas.min.js"></script>
     <script src="<?= BASE_URL ?>assets/vendor/jspdf@2.5.1/jspdf.umd.min.js"></script>
     <script src="<?= BASE_URL ?>assets/js/whatsapp-share.js?v=<?= filemtime(__DIR__ . '/../assets/js/whatsapp-share.js') ?>"></script>
-    <script>
+    <script nonce="<?= $cspNonce ?>">
     (function () {
         'use strict';
 
+        const logoImg = document.getElementById('schoolLogoImg');
+        if (logoImg) {
+            logoImg.addEventListener('error', function () { logoImg.style.display = 'none'; });
+        }
+
         const printSheet = document.querySelector('.print-sheet');
-        const rollStr = <?= json_encode(str_pad((string)$report['roll'], 2, '0', STR_PAD_LEFT)) ?>;
-        const studentName = <?= json_encode($report['name']) ?>;
+        const rollStr = <?= json_encode(str_pad((string)$report['roll'], 2, '0', STR_PAD_LEFT), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+        const studentName = <?= json_encode($report['name'], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
         const cleanName = studentName.replace(/[^a-zA-Z0-9_\-]/g, '_');
         const pdfFileName = 'Report_Card_Roll_' + rollStr + '_' + cleanName + '.pdf';
 
@@ -276,7 +306,16 @@ $today = date('d-m-Y');
                 const imgData = canvas.toDataURL('image/jpeg', 0.95);
                 const jsPDF = window.jspdf.jsPDF;
                 const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-                pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+                const imgProps = pdf.getImageProperties(imgData);
+                const pageW = 210, pageH = 297;
+                let pdfW = pageW;
+                let pdfH = (imgProps.height * pageW) / imgProps.width;
+                if (pdfH > pageH) {
+                    pdfH = pageH;
+                    pdfW = (imgProps.width * pageH) / imgProps.height;
+                }
+                const offsetX = (pageW - pdfW) / 2;
+                pdf.addImage(imgData, 'JPEG', offsetX, 0, pdfW, pdfH, undefined, 'FAST');
                 return {
                     pdf: pdf,
                     blob: pdf.output('blob'),
@@ -321,27 +360,32 @@ $today = date('d-m-Y');
                 waBtn.disabled = true;
                 waBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing PDF...';
 
+                const jsonFlags = true;
                 const msg = HCCWhatsApp.templates.reportCard({
-                    schoolName: <?= json_encode($schoolName) ?>,
+                    schoolName: <?= json_encode($schoolName, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
                     studentName: studentName,
-                    roll: <?= json_encode($report['roll']) ?>,
-                    className: <?= json_encode($clsLabel) ?>,
-                    semester: <?= json_encode($c['semester']) ?>,
-                    obtained: <?= json_encode(number_format($report['obtained'], 1)) ?>,
-                    maxTotal: <?= json_encode(number_format($report['grandTotal'], 1)) ?>,
-                    percentage: <?= json_encode($report['percentage']) ?>,
-                    grade: <?= json_encode($report['grade']) ?>,
-                    status: <?= json_encode($report['passed'] ? 'PASS' : 'FAIL') ?>,
-                    attendance: <?= json_encode($report['attendance']) ?>,
-                    remark: <?= json_encode(rcDisplayRemark($report['remark'] ?? '', $report['percentage'] ?? 0)) ?>
+                    roll: <?= json_encode($report['roll'], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                    className: <?= json_encode($clsLabel, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                    semester: <?= json_encode($c['semester'], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                    academicYear: <?= json_encode($c['academic_year'], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                    obtained: <?= json_encode(number_format($report['obtained'], 1), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                    maxTotal: <?= json_encode(number_format($report['grandTotal'], 1), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                    percentage: <?= json_encode($report['percentage'], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                    grade: <?= json_encode($report['grade'], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                    status: <?= json_encode($report['passed'] ? 'PASS' : 'FAIL', JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                    attendance: <?= json_encode($report['attendance'], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                    remark: <?= json_encode(rcDisplayRemark($report['remark'] ?? '', $report['percentage'] ?? 0), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>
                 });
+
+                const parentPhone = <?= json_encode($parentPhone, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
 
                 generateCardPdfBlob().then(function (res) {
                     HCCWhatsApp.openModal({
                         studentName: studentName,
-                        roll: <?= json_encode($report['roll']) ?>,
-                        className: <?= json_encode($clsLabel) ?>,
-                        classKey: <?= json_encode($classKey) ?>,
+                        roll: <?= json_encode($report['roll'], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                        className: <?= json_encode($clsLabel, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                        classKey: <?= json_encode($classKey, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                        phone: parentPhone,
                         messageText: msg,
                         pdfBlob: res.blob,
                         fileName: res.fileName,
@@ -353,9 +397,10 @@ $today = date('d-m-Y');
                     console.error(err);
                     HCCWhatsApp.openModal({
                         studentName: studentName,
-                        roll: <?= json_encode($report['roll']) ?>,
-                        className: <?= json_encode($clsLabel) ?>,
-                        classKey: <?= json_encode($classKey) ?>,
+                        roll: <?= json_encode($report['roll'], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                        className: <?= json_encode($clsLabel, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                        classKey: <?= json_encode($classKey, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>,
+                        phone: parentPhone,
                         messageText: msg
                     });
                 }).finally(function () {

@@ -194,6 +194,13 @@ this.browser = null;
     this.lastChatListSummary = '';
     this.lastIngestAt = null;
     this.lastSkipNote = '';
+    this.domHealthStatus = 'ok';
+    this.domHealthCheckedAt = null;
+    this.domHealthWarned = false;
+    this.persistedMediaIds = new Set();
+    this.pairingTimer = null;
+    this.healthTimer = null;
+    this.outboundQueueTimer = null;
     if (!this.config.bridgeSecret || String(this.config.bridgeSecret).length < 16) {
       this.log('error', 'WHATSAPP_BRIDGE_SECRET is missing or shorter than 16 characters; ingest posts will be refused');
     }
@@ -268,8 +275,11 @@ this.browser = null;
         if (data.linked_contacts && Array.isArray(data.linked_contacts)) {
           for (const entry of data.linked_contacts) {
             if (entry.wa_id) this.privacyFilter.rosterNumbers.add(entry.wa_id.toLowerCase());
+            if (entry.wa_lid) this.privacyFilter.rosterNumbers.add(String(entry.wa_lid).toLowerCase());
             if (entry.phone_e164) this.privacyFilter.rosterPhones.add(entry.phone_e164.toLowerCase());
-            rememberName(entry.name, entry.wa_id);
+            const jid = entry.wa_id || entry.wa_lid || '';
+            rememberName(entry.name, jid);
+            rememberName(entry.push_name, jid);
           }
         }
 
@@ -277,10 +287,14 @@ this.browser = null;
         if (data.known_chats && Array.isArray(data.known_chats)) {
           for (const entry of data.known_chats) {
             const jid = entry && entry.wa_chat_id ? String(entry.wa_chat_id).toLowerCase() : '';
+            const lid = entry && entry.wa_lid ? String(entry.wa_lid).toLowerCase() : '';
             if (jid) {
               this.privacyFilter.rosterNumbers.add(jid);
             }
-            rememberName(entry && entry.name, jid);
+            if (lid) {
+              this.privacyFilter.rosterNumbers.add(lid);
+            }
+            rememberName(entry && entry.name, jid || lid);
           }
         }
 
@@ -303,7 +317,9 @@ this.browser = null;
         
         // Update admission keywords
         if (data.admission_keywords && Array.isArray(data.admission_keywords)) {
-          this.privacyFilter.admissionKeywords = data.admission_keywords.map(k => k.toLowerCase());
+          this.privacyFilter.admissionKeywords = data.admission_keywords
+            .map(k => String(k || '').trim().toLowerCase())
+            .filter(k => k.length >= 2);
         }
         
         this.privacyFilter.lastRefreshed = Date.now();
@@ -331,6 +347,20 @@ this.browser = null;
       clearInterval(this.filterRefreshTimer);
       this.filterRefreshTimer = null;
     }
+  }
+
+  hasAdmissionKeyword(text) {
+    const clean = String(text || '').trim().toLowerCase();
+    if (!clean) return false;
+    for (const kw of this.privacyFilter.admissionKeywords || []) {
+      const k = String(kw || '').trim().toLowerCase();
+      if (!k || k.length < 2) continue;
+      const escaped = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`\\b${escaped}\\b`, 'i').test(clean)) {
+        return k;
+      }
+    }
+    return false;
   }
 
   isChatAllowed(chat) {
@@ -372,7 +402,7 @@ this.browser = null;
       return { allowed: false, reason: 'unknown_group' };
     }
 
-    // 3. For individual chats, check roster allowlist
+    // 3. For individual chats, check roster / known enquiry allowlist strictly
     if (chatType === 'individual') {
       // Admin / self chat is always allowed
       if (chat.is_self || (this.phoneNumber && waChatId.startsWith(this.normalizePhoneDigits(this.phoneNumber)))) {
@@ -415,7 +445,14 @@ this.browser = null;
         return { allowed: true, reason: 'roster_name' };
       }
 
-      // Direct 1-to-1 chats to the school account are allowed so prospective parents and new students are received
+      // Allow previously unlinked 1-on-1 chat with keyword tag if matched, otherwise allow direct 1-on-1
+      const previewText = chat.preview_text || chat.last_message || '';
+      const matchedKw = this.hasAdmissionKeyword(previewText);
+      if (matchedKw) {
+        return { allowed: true, reason: `admission_keyword:${matchedKw}` };
+      }
+
+      // Direct 1-to-1 chats to the school account are allowed so prospective parents and existing parents via @lid are received
       return { allowed: true, reason: 'individual_direct' };
     }
 
@@ -467,19 +504,18 @@ this.browser = null;
       return { allowed: true, reason: `chat_allowed_${chatCheck.reason}` };
     }
 
-    // 3. Check for admission keywords in message body (new enquiry detection)
-    for (const keyword of this.privacyFilter.admissionKeywords) {
-      if (body.includes(keyword)) {
-        return { allowed: true, reason: `admission_keyword:${keyword}` };
-      }
+    // 3. Check for admission keywords with word boundaries (new enquiry detection)
+    const matchedKw = this.hasAdmissionKeyword(body);
+    if (matchedKw) {
+      return { allowed: true, reason: `admission_keyword:${matchedKw}` };
     }
 
-    // 4. If it's a group message and group is not allowed, reject
+    // 4. Reject non-allowlisted group and broadcast messages
     if (chatType === 'group' || chatType === 'broadcast') {
       return { allowed: false, reason: 'unauthorized_group' };
     }
 
-    // 5. Individual chat from prospective parent / admission enquiry
+    // 5. Individual chat from prospective parent / admission enquiry / parent reply
     if (chatType === 'individual') {
       return { allowed: true, reason: 'individual_admission_enquiry' };
     }
@@ -721,12 +757,12 @@ this.browser = null;
               }
               const virtual = el.querySelector('[data-virtualized="true"]');
               const hasText = !!el.querySelector('.selectable-text, [data-testid="msg-text"]');
-              const hasMedia = !!el.querySelector('img[src*="blob:"], video, audio');
+              const hasMedia = !!el.querySelector('img[src*="blob:"], a[href^="blob:"], video, audio');
               if (virtual && !hasText && !hasMedia) return;
               const textNodes = el.querySelectorAll('.selectable-text, [data-testid="msg-text"]');
               const textEl = textNodes.length ? textNodes[textNodes.length - 1] : null;
               const body = textEl?.textContent?.trim() || '';
-              const mediaEl = el.querySelector('img[src*="blob:"], video, audio');
+              const mediaEl = el.querySelector('img[src*="blob:"], a[href^="blob:"], video, audio');
               if (!body && !mediaEl) return;
 
               if (!msgId) {
@@ -786,16 +822,21 @@ this.browser = null;
               else if (/msg-dblcheck|Delivered/i.test(iconText)) status = 'delivered';
 
               const mediaTag = mediaEl ? mediaEl.tagName.toLowerCase() : '';
-              const mediaType = mediaTag === 'img' ? 'image' : (mediaTag === 'video' ? 'video' : (mediaTag === 'audio' ? 'audio' : 'text'));
-              const resolvedBody = body || (mediaEl ? (mediaTag === 'img' ? '📷 [Photo]' : mediaTag === 'video' ? '🎥 [Video]' : '🎤 [Voice message]') : '');
+              const mediaType = mediaTag === 'img'
+                ? 'image'
+                : (mediaTag === 'a'
+                  ? 'document'
+                  : (mediaTag === 'video' ? 'video' : (mediaTag === 'audio' ? 'audio' : 'text')));
+              const rawMediaUrl = mediaTag === 'a' ? (mediaEl?.href || '') : (mediaEl?.src || '');
+              const resolvedBody = body || (mediaEl ? (mediaTag === 'img' ? '📷 [Photo]' : (mediaTag === 'a' ? '📄 [Document]' : (mediaTag === 'video' ? '🎥 [Video]' : '🎤 [Voice message]'))) : '');
 
               messages.push({
                 wa_msg_id: msgId,
                 wa_chat_id: idMatch ? idMatch[2] : '',
                 from_me: fromMe,
-                msg_type: !body && mediaEl ? mediaType : 'text',
+                msg_type: (mediaTag === 'img' || mediaTag === 'a') ? mediaType : (!body && mediaEl ? mediaType : 'text'),
                 body: resolvedBody,
-                media_url: mediaEl?.src || '',
+                media_url: rawMediaUrl,
                 timestamp: timestamp,
                 timestamp_parsed: false,
                 time_raw: timeRaw.slice(0, 180),
@@ -1258,11 +1299,12 @@ this.browser = null;
           return { logged: false, hasQr: false, qrRef: '', expired: false, hasLogInWithQR: false, linkError: '', isSyncing: false };
         });
 
-        // A live QR must not be marked "syncing" — that hides the code in the admin page.
-        const scanInProgress = (this.qrMisses || 0) >= 3;
+        // A live QR (or an active expired-QR reload) must not be marked "syncing" — that hides the code in the admin page.
+        const refreshingQr = (Date.now() - (this.lastQrRefreshClickAt || 0)) < 15000;
+        const scanInProgress = !refreshingQr && (this.qrMisses || 0) >= 3;
         await this.apiPost('api_whatsapp_session.php?action=poll', {
           last_poll_at: new Date().toISOString(),
-          is_syncing: (state.isSyncing || scanInProgress) ? 1 : 0
+          is_syncing: (state.isSyncing || (!refreshingQr && scanInProgress)) ? 1 : 0
         }).catch(() => {});
 
         // 1) Logged in — done
@@ -1372,6 +1414,11 @@ this.browser = null;
 
         // 3) No QR and not logged in
         if (!this.hasSeenQr) {
+          return;
+        }
+
+        if (refreshingQr) {
+          this.qrMisses = 0;
           return;
         }
 
@@ -1582,7 +1629,9 @@ this.browser = null;
         device_name: this.deviceInfo.device,
         platform: this.deviceInfo.platform,
         cookies: cookies,
-        local_storage: localStorage
+        local_storage: localStorage,
+        dom_health_status: this.domHealthStatus || 'ok',
+        dom_health_checked_at: this.domHealthCheckedAt || new Date().toISOString()
       };
       
       await this.apiPost('api_whatsapp_session.php?action=sync', data);
@@ -1840,7 +1889,7 @@ this.browser = null;
     return Math.floor(Date.now() / 1000);
   }
 
-  // URL phone= wins, then the jid parsed from a message data-id, then the header.
+  // URL phone= wins, then non-@lid phone/group JIDs, then header/roster lookups, falling back to @lid.
   resolveWaChatId(contactInfo, messageJid = '') {
     let url = '';
     try { url = this.page && this.page.url ? this.page.url() : ''; } catch (e) { url = ''; }
@@ -1850,31 +1899,37 @@ this.browser = null;
       if (digits) return digits + '@c.us';
     }
 
-    const fromMessage = this.jidToWaChatId(messageJid);
-    if (fromMessage) return fromMessage;
+    // "Message yourself" has no phone in the header. It is the linked account.
+    if (contactInfo && contactInfo.is_self && this.phoneNumber) {
+      const selfDigits = this.normalizePhoneDigits(String(this.phoneNumber));
+      if (selfDigits) return selfDigits + '@c.us';
+    }
 
+    const fromMessage = this.jidToWaChatId(messageJid);
     const direct = contactInfo && contactInfo.wa_chat_id ? String(contactInfo.wa_chat_id).trim().toLowerCase() : '';
     const fromHeader = this.jidToWaChatId(direct);
-    if (fromHeader) return fromHeader;
+
+    if (fromMessage && !fromMessage.includes('@lid')) return fromMessage;
+    if (fromHeader && !fromHeader.includes('@lid')) return fromHeader;
 
     const fromStatus = this.phoneDigitsFromLabel(contactInfo && contactInfo.status);
     if (fromStatus) return fromStatus + '@c.us';
     const fromName = this.phoneDigitsFromLabel(contactInfo && contactInfo.name);
     if (fromName) return fromName + '@c.us';
 
-    // Name match against known chats / roster
+    // Name match against known chats / roster / remembered titles
     if (contactInfo && contactInfo.name) {
       const cleanName = String(contactInfo.name).trim().toLowerCase();
       if (this.privacyFilter.nameToJidMap && this.privacyFilter.nameToJidMap.has(cleanName)) {
-        return this.privacyFilter.nameToJidMap.get(cleanName);
+        const mapped = this.privacyFilter.nameToJidMap.get(cleanName);
+        if (mapped) return mapped;
       }
+      const remembered = this.phoneForTitle(contactInfo.name);
+      if (remembered) return remembered;
     }
 
-    // "Message yourself" has no phone in the header. It is the linked account.
-    if (contactInfo && contactInfo.is_self && this.phoneNumber) {
-      const selfDigits = this.normalizePhoneDigits(String(this.phoneNumber));
-      if (selfDigits) return selfDigits + '@c.us';
-    }
+    if (fromMessage) return fromMessage;
+    if (fromHeader) return fromHeader;
     return '';
   }
 
@@ -2295,14 +2350,28 @@ this.browser = null;
       this.jidToWaChatId(knownWaChatId) || this.resolveWaChatId(chatInfo, messageJid) || ''
     ).trim().toLowerCase();
     const incomingOnScreen = messages.filter(msg => msg && msg.wa_msg_id && !msg.from_me).length;
-    if (!waChatId && incomingOnScreen) {
-      const titleKey = (chatInfo && chatInfo.name) || messageJid || 'open';
-      const drawerKey = 'drawer:' + titleKey;
-      const lastDrawer = this.ingestNotices.get(drawerKey) || 0;
-      if (Date.now() - lastDrawer > 60000) {
-        this.ingestNotices.set(drawerKey, Date.now());
-        const fromDrawer = await this.readPhoneFromContactDrawer();
-        if (fromDrawer) waChatId = fromDrawer + '@c.us';
+    let discoveredPhone = '';
+    if ((!waChatId || waChatId.includes('@lid')) && incomingOnScreen) {
+      const remembered = (chatInfo && chatInfo.name) ? this.phoneForTitle(chatInfo.name) : '';
+      if (remembered && /^\d+@c\.us$/i.test(remembered)) {
+        discoveredPhone = remembered.split('@')[0];
+      } else {
+        const titleKey = (chatInfo && chatInfo.name) || messageJid || 'open';
+        const drawerKey = 'drawer:' + titleKey;
+        const lastDrawer = this.ingestNotices.get(drawerKey) || 0;
+        if (Date.now() - lastDrawer > 60000) {
+          this.ingestNotices.set(drawerKey, Date.now());
+          const fromDrawer = await this.readPhoneFromContactDrawer();
+          if (fromDrawer) discoveredPhone = fromDrawer;
+        }
+      }
+      if (discoveredPhone) {
+        if (!knownWaChatId || !String(knownWaChatId).toLowerCase().includes('@lid')) {
+          waChatId = discoveredPhone + '@c.us';
+        }
+        if (chatInfo && chatInfo.name) {
+          this.rememberTitlePhone(chatInfo.name, discoveredPhone + '@c.us');
+        }
       }
     }
     // Last resort for Linked-ID chats: scrape any @lid from the open conversation DOM
@@ -2396,6 +2465,7 @@ this.browser = null;
 
     const allowedMessages = [];
     let filteredMessages = 0;
+    const resolvedSenderDigits = discoveredPhone || (/^\d+@c\.us$/i.test(waChatId) ? waChatId.split('@')[0] : '');
     for (const msg of fresh) {
       const enriched = {
         ...msg,
@@ -2403,6 +2473,7 @@ this.browser = null;
         chat_name: (chatInfo && chatInfo.name) || '',
         chat_avatar: (chatInfo && chatInfo.avatar) || '',
         sender_wa_id: msg.from_me ? 'me' : waChatId,
+        ...( !msg.from_me && resolvedSenderDigits ? { sender_phone: '+' + resolvedSenderDigits } : {} ),
         sender_name: msg.from_me ? 'You' : ((chatInfo && chatInfo.name) || ''),
         sender_avatar: (chatInfo && chatInfo.avatar) || '',
         timestamp: this.saneTimestamp(msg.timestamp),
@@ -2461,6 +2532,8 @@ this.browser = null;
       result = { success: storedMessages.length > 0, inserted };
     }
     for (const msg of storedMessages) this.rememberIngested(msg.wa_msg_id);
+    // Automation #10: safely persist inbound image/document blob URLs (<= 8MB)
+    await this.persistInboundBlobMedia(storedMessages).catch(() => {});
     if (storedMessages.length) {
       this.lastMsgTimestamp = Math.max(this.lastMsgTimestamp || 0, ...storedMessages.map(m => Number(m.timestamp) || 0));
     }
@@ -2779,6 +2852,104 @@ this.browser = null;
     }
   }
 
+  // Automation #14: DOM Selector Sanity Watchdog
+  async checkDomSelectorHealth() {
+    if (!this.page || !this.isConnected) return this.domHealthStatus || 'ok';
+    try {
+      const check = await this.page.evaluate(() => {
+        const hasChatList = !!(
+          document.querySelector('#pane-side') ||
+          document.querySelector('[data-testid="chat-list"]')
+        );
+        const hasMain = !!document.querySelector('#main');
+        const hasCompose = !!(
+          document.querySelector('[data-testid="conversation-compose-box-input"]') ||
+          document.querySelector('#main footer [contenteditable="true"]') ||
+          document.querySelector('[contenteditable="true"][data-tab="10"]')
+        );
+        return { hasChatList, hasMain, hasCompose };
+      });
+      const healthy = Boolean(check && check.hasChatList && (!check.hasMain || check.hasCompose));
+      const nextStatus = healthy ? 'ok' : 'degraded_selectors';
+      if (nextStatus === 'degraded_selectors' && !this.domHealthWarned) {
+        this.log('warn', 'DOM Selector Sanity Watchdog detected degraded WhatsApp Web selectors', check);
+        this.domHealthWarned = true;
+      } else if (nextStatus === 'ok') {
+        this.domHealthWarned = false;
+      }
+      this.domHealthStatus = nextStatus;
+      this.domHealthCheckedAt = new Date().toISOString();
+    } catch (e) {
+      this.domHealthStatus = 'degraded_selectors';
+      this.domHealthCheckedAt = new Date().toISOString();
+    }
+    return this.domHealthStatus;
+  }
+
+  // Automation #10: Safely read blob: media URL inside page context (<= 8MB) and upload via save_media
+  async persistInboundBlobMedia(messages) {
+    if (!this.page || !Array.isArray(messages) || !messages.length || !this.hasBridgeSecret()) return;
+    const MAX_BYTES = 8 * 1024 * 1024;
+    for (const msg of messages) {
+      if (!msg || msg.from_me) continue;
+      if (!['image', 'document'].includes(msg.msg_type)) continue;
+      if (!msg.wa_msg_id || this.persistedMediaIds.has(msg.wa_msg_id)) continue;
+      const blobUrl = typeof msg.media_url === 'string' ? msg.media_url.trim() : '';
+      if (!blobUrl || (!blobUrl.startsWith('blob:') && !blobUrl.startsWith('data:'))) continue;
+
+      try {
+        let dataUrl = null;
+        if (blobUrl.startsWith('blob:')) {
+          dataUrl = await this.page.evaluate(async (url, maxBytes) => {
+            try {
+              const resp = await fetch(url);
+              if (!resp.ok) return null;
+              const blob = await resp.blob();
+              if (!blob || blob.size <= 0 || blob.size > maxBytes) return null;
+              const mime = String(blob.type || '').split(';')[0].trim().toLowerCase();
+              if (!/^image\/(jpeg|jpg|png|webp|gif)$/.test(mime) && mime !== 'application/pdf') {
+                return null;
+              }
+              return await new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+                reader.onerror = () => resolve(null);
+                reader.readAsDataURL(blob);
+              });
+            } catch (err) {
+              return null;
+            }
+          }, blobUrl, MAX_BYTES);
+        } else if (blobUrl.startsWith('data:')) {
+          dataUrl = blobUrl;
+        }
+
+        if (!dataUrl || typeof dataUrl !== 'string') continue;
+        const commaIdx = dataUrl.indexOf(',');
+        const b64Part = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
+        if (Buffer.byteLength(b64Part, 'base64') > MAX_BYTES) {
+          this.log('warn', `Skipping inbound media ${msg.wa_msg_id}: exceeds 8MB cap`);
+          continue;
+        }
+
+        const saved = await this.apiPost('api_whatsapp_ingest.php?action=save_media', {
+          wa_msg_id: msg.wa_msg_id,
+          data_base64: dataUrl
+        });
+        if (saved && saved.success) {
+          this.persistedMediaIds.add(msg.wa_msg_id);
+          if (this.persistedMediaIds.size > 2000) {
+            const first = this.persistedMediaIds.values().next().value;
+            this.persistedMediaIds.delete(first);
+          }
+          this.log('info', `Persisted inbound media ${msg.wa_msg_id} (${saved.mime_type}, ${saved.file_size} bytes)`);
+        }
+      } catch (e) {
+        this.log('debug', `Inbound media persist skipped for ${msg.wa_msg_id}: ${e.message}`);
+      }
+    }
+  }
+
   async pollMessages() {
     if (this.loggingOut || !this.isConnected || !this.page || this.pollingNow) return;
     this.pollingNow = true;
@@ -2801,6 +2972,9 @@ this.browser = null;
       }
       this.consecutiveQrDetections = 0;
 
+      // Run DOM Selector Sanity Watchdog periodically
+      await this.checkDomSelectorHealth();
+
       // Do not navigate away while a send owns the open chat.
       if (!this.sending) {
         try {
@@ -2818,7 +2992,9 @@ this.browser = null;
       await this.apiPost('api_whatsapp_session.php?action=poll', {
         last_poll_at: new Date().toISOString(),
         last_ingest_at: this.lastIngestAt,
-        last_skip_note: this.lastSkipNote || ''
+        last_skip_note: this.lastSkipNote || '',
+        dom_health_status: this.domHealthStatus || 'ok',
+        dom_health_checked_at: this.domHealthCheckedAt || new Date().toISOString()
       });
     } finally {
       this.pollingNow = false;
@@ -2970,14 +3146,38 @@ this.browser = null;
     ];
     for (const f of shotFlags) {
       if (!fs.existsSync(f)) continue;
-      let dest = path.join(this.config.ipcDir, 'hcc-bridge-page.png');
+      const tmpRoot = (() => {
+        try { return fs.realpathSync(os.tmpdir()); } catch (e) { return path.resolve(os.tmpdir()); }
+      })();
+      let dest = path.join(tmpRoot, 'hcc-bridge-page.png');
       try {
         const raw = fs.readFileSync(f, 'utf8').trim();
-        if (raw) dest = raw;
-      } catch (e) {}
+        if (raw) {
+          const candidate = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(tmpRoot, raw);
+          const base = path.basename(candidate);
+          const parentReal = (() => {
+            try { return fs.realpathSync(path.dirname(candidate)); } catch (e) { return path.resolve(path.dirname(candidate)); }
+          })();
+          const rel = path.relative(tmpRoot, path.join(parentReal, base));
+          if (
+            rel &&
+            !rel.startsWith('..') &&
+            !path.isAbsolute(rel) &&
+            !rel.includes(path.sep) &&
+            /^[A-Za-z0-9_.-]+\.png$/.test(base)
+          ) {
+            dest = path.join(tmpRoot, base);
+          } else {
+            this.log('warn', 'Rejected unsafe IPC screenshot destination path outside os.tmpdir()');
+            dest = null;
+          }
+        }
+      } catch (e) {
+        dest = null;
+      }
       try { fs.unlinkSync(f); } catch (e) {}
       try {
-        if (this.page) {
+        if (this.page && dest) {
           await this.page.screenshot({ path: dest, fullPage: false });
           this.log('info', 'Saved bridge page screenshot to ' + dest);
         }
@@ -4224,11 +4424,13 @@ this.browser = null;
   // ============ API COMMUNICATION ============
   
   async apiPost(endpoint, data) {
-    const isIngest = String(endpoint).split('?')[0].endsWith('api_whatsapp_ingest.php');
+    const [endpointPath, endpointQuery = ''] = String(endpoint).split('?');
+    const isIngest = endpointPath.endsWith('api_whatsapp_ingest.php');
+    const isMediaSave = isIngest && /(?:^|&)action=save_media(?:&|$)/.test(endpointQuery);
     if (isIngest && !this.hasBridgeSecret()) {
       throw new Error('Refusing ingest: WHATSAPP_BRIDGE_SECRET missing or shorter than 16 characters');
     }
-    if (isIngest) data = this.scrubIngestPayload(data);
+    if (isIngest && !isMediaSave) data = this.scrubIngestPayload(data);
 
     // Sign and send the same bytes. Axios would re-serialize an object and
     // PHP's hash of php://input would not match.
@@ -4267,12 +4469,16 @@ this.browser = null;
     const clean = (value, depth) => {
       if (depth > 6) return null;
       if (typeof value === 'string') {
-        let s = value
-          .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+        let s = value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+        if (/^(data:|blob:)/i.test(s)) return '';
+        // Slice by Unicode codepoints BEFORE stripping unpaired surrogates so emoji pairs are never split
+        const codepoints = Array.from(s);
+        if (codepoints.length > 4000) {
+          s = codepoints.slice(0, 4000).join('');
+        }
+        s = s
           .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')
           .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '');
-        if (/^(data:|blob:)/i.test(s)) return '';
-        if (s.length > 4000) s = s.slice(0, 4000);
         return s;
       }
       if (Array.isArray(value)) return value.map(item => clean(item, depth + 1));
@@ -4295,7 +4501,10 @@ this.browser = null;
       params,
       headers: { 'X-Bridge-Secret': this.config.bridgeSecret },
       timeout: 30000
-    }).then(r => r.data).catch(e => {
+    }).then(r => {
+      this.lastHeartbeatOkAt = Date.now();
+      return r.data;
+    }).catch(e => {
       this.log('error', `API GET ${endpoint} failed`, e.message);
       throw e;
     });
@@ -4314,6 +4523,7 @@ this.browser = null;
     this.shuttingDown = true;
     this.log('info', 'Shutting down bridge...');
     this.stopPolling();
+    this.stopFilterRefreshTimer();
     if (this.sessionWatchTimer) {
       clearInterval(this.sessionWatchTimer);
       this.sessionWatchTimer = null;
@@ -4325,6 +4535,18 @@ this.browser = null;
     if (this.sessionSyncTimer) {
       clearInterval(this.sessionSyncTimer);
       this.sessionSyncTimer = null;
+    }
+    if (this.pairingTimer) {
+      clearInterval(this.pairingTimer);
+      this.pairingTimer = null;
+    }
+    if (this.healthTimer) {
+      clearInterval(this.healthTimer);
+      this.healthTimer = null;
+    }
+    if (this.outboundQueueTimer) {
+      clearInterval(this.outboundQueueTimer);
+      this.outboundQueueTimer = null;
     }
     
     if (this.browser) {
@@ -4396,7 +4618,7 @@ async function main() {
   bridge.startHealthWatch();
 
   // Start outbound queue processor
-  setInterval(() => bridge.processOutboundQueue(), 5000);
+  bridge.outboundQueueTimer = setInterval(() => bridge.processOutboundQueue(), 5000);
 
   // Keep alive
   console.log('Bridge running. Press Ctrl+C to stop.');

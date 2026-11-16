@@ -17,6 +17,7 @@
 
       this.apiBase = options.apiBase || 'api_timetable.php';
       this.csrfToken = options.csrfToken || (document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '');
+      this.defaultAcademicYear = options.defaultAcademicYear || '2025-26';
       this.activeInput = null;
       this.isDirty = false;
       this.savedTimetables = [];
@@ -25,12 +26,17 @@
       this.isFullscreen = false;
 
       // Priority #1: Prompt & Fixed Statement Generator State
+      const defaultStartDate = (() => {
+        const d = new Date();
+        d.setDate(d.getDate() + 3);
+        return d.toISOString().split('T')[0];
+      })();
       this.generatorState = {
         useFixedStatement: true,
-        academicYear: '2026-27',
+        academicYear: this.defaultAcademicYear,
         examType: 'FIRST SEMESTER EXAMINATION TIME-TABLE (WRITTEN EXAM)',
         standardsGroup: 'std_v_x',
-        startDate: '2026-10-23',
+        startDate: defaultStartDate,
         primarySlot: '8.00 AM - 10.15 AM',
         hasExtendedSlot: true,
         extendedSlot: '8.00 AM - 11.15 AM',
@@ -46,7 +52,7 @@
           { dayNum: 8, subject: 'EVS-II', hsSubject: 'HISTORY' },
           { dayNum: 9, subject: 'DRAWING', hsSubject: 'GEOGRAPHY' }
         ],
-        freeformPrompt: 'Generate a First Semester Examination timetable for STD V to X starting 23-10-2026 with English, Marathi, Hindi, Maths, Science, History, Drawing, Computer Science, and Geography.'
+        freeformPrompt: 'Generate a First Semester Examination timetable for STD V to X with English, Marathi, Hindi, Maths, Science, History, Drawing, Computer Science, and Geography.'
       };
 
       // Initial State
@@ -80,9 +86,9 @@
       return {
         metadata: {
           id: null,
-          title: 'Second Semester Examination Schedule 2025-26',
-          academic_year: '2025-26',
-          exam_type: 'Semester 2',
+          title: `Examination Schedule ${this.defaultAcademicYear}`,
+          academic_year: this.defaultAcademicYear,
+          exam_type: 'Semester 1',
           instructions: '1. Students must report 15 minutes before exam time in full school uniform.\n2. Bring your own exam stationery and clipboard.\n3. Hall ticket is mandatory for all examination sessions.',
           status: 'draft'
         },
@@ -646,31 +652,120 @@
      */
 
     /**
-     * 1. Add Class Column dynamically
+     * 1. Add Class Column dynamically (via custom dialog, replacing native prompt())
      */
     addClassColumn() {
-      const name = prompt('Enter Class Name (e.g., STD XI, LKG, STD XII):');
-      if (!name || !name.trim()) return;
+      this.openAddClassModal();
+    }
 
-      const trimmedName = name.trim();
-      const colId = 'col_' + Date.now();
+    openAddClassModal() {
+      this.closeAddClassModal();
+      const quickSuggestions = ['STD XI', 'STD XII', 'LKG', 'UKG', 'JR. KG', 'SR. KG', 'STD V-X'];
+      const modalHtml = `
+        <div class="tt-modal-backdrop" id="ttAddClassModal">
+          <div class="tt-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="addClassModalTitle" style="max-width:460px;">
+            <div class="tt-modal-header">
+              <h3 id="addClassModalTitle">
+                <i class="fa-solid fa-chalkboard-user"></i>
+                <span>Add Class / Standard Column</span>
+              </h3>
+              <button type="button" class="tt-modal-close" data-action="close-add-class-modal" title="Close (Esc)">&times;</button>
+            </div>
+            <div class="tt-modal-body">
+              <div class="tt-modal-section-title" style="margin-top:0;">
+                <span>Quick Standard Presets</span>
+              </div>
+              <div class="tt-preset-chips-grid" style="margin-bottom:14px;">
+                ${quickSuggestions.map((label) => `
+                  <button type="button" class="tt-preset-chip-btn" data-action="pick-add-class-preset" data-label="${this.escapeHtml(label)}">
+                    <span>${this.escapeHtml(label)}</span>
+                  </button>
+                `).join('')}
+              </div>
+              <div class="tt-modal-section-title">
+                <span>Or Enter Custom Column Name</span>
+              </div>
+              <div class="tt-custom-fill-row">
+                <input type="text" id="addClassColumnInput" class="tt-custom-fill-input" placeholder="e.g., STD XI, LKG, STD XII..." maxlength="60" autocomplete="off">
+              </div>
+            </div>
+            <div class="tt-modal-footer">
+              <button type="button" class="btn-timetable btn-secondary" data-action="close-add-class-modal">Cancel</button>
+              <button type="button" class="btn-timetable btn-primary" data-action="confirm-add-class">
+                <i class="fa-solid fa-plus"></i> Add Column
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.insertAdjacentHTML('beforeend', modalHtml);
 
-      this.state.columns.push({
-        id: colId,
-        label: trimmedName
-      });
+      const modalEl = document.getElementById('ttAddClassModal');
+      const inputEl = document.getElementById('addClassColumnInput');
+      if (inputEl) inputEl.focus();
 
-      // Ensure all slots have an entry for this new column
-      this.state.rows.forEach((r) => {
-        r.slots.forEach((s) => {
-          if (!s.cells) s.cells = {};
-          s.cells[colId] = '';
+      const submitColumn = (rawName) => {
+        const trimmedName = (rawName || '').trim();
+        if (!trimmedName) {
+          this.showToast('Please enter a class/standard column name.', 'warning');
+          if (inputEl) inputEl.focus();
+          return;
+        }
+        const colId = 'col_' + Date.now();
+        this.state.columns.push({ id: colId, label: trimmedName });
+        this.state.rows.forEach((r) => {
+          r.slots.forEach((s) => {
+            if (!s.cells) s.cells = {};
+            s.cells[colId] = '';
+          });
         });
-      });
+        this.closeAddClassModal();
+        this.setDirty(true);
+        this.render();
+        this.showToast(`Class Column "${trimmedName}" added`, 'success');
+      };
 
-      this.setDirty(true);
-      this.render();
-      this.showToast(`Class Column "${trimmedName}" added`, 'success');
+      const onClick = (e) => {
+        if (e.target === modalEl) {
+          this.closeAddClassModal();
+          return;
+        }
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        const act = btn.dataset.action;
+        if (act === 'close-add-class-modal') {
+          this.closeAddClassModal();
+        } else if (act === 'pick-add-class-preset') {
+          submitColumn(btn.dataset.label || '');
+        } else if (act === 'confirm-add-class') {
+          submitColumn(inputEl ? inputEl.value : '');
+        }
+      };
+
+      const onKey = (e) => {
+        if (e.key === 'Escape') {
+          this.closeAddClassModal();
+        } else if (e.key === 'Enter' && e.target === inputEl) {
+          e.preventDefault();
+          submitColumn(inputEl ? inputEl.value : '');
+        }
+      };
+
+      modalEl.addEventListener('click', onClick);
+      window.addEventListener('keydown', onKey);
+      this._addClassCleanup = () => {
+        modalEl.removeEventListener('click', onClick);
+        window.removeEventListener('keydown', onKey);
+      };
+    }
+
+    closeAddClassModal() {
+      if (this._addClassCleanup) {
+        this._addClassCleanup();
+        this._addClassCleanup = null;
+      }
+      const existing = document.getElementById('ttAddClassModal');
+      if (existing) existing.remove();
     }
 
     /**
@@ -1035,6 +1130,15 @@
         presets: this.state.presets
       };
 
+      const saveLocalRecoveryBackup = () => {
+        try {
+          localStorage.setItem(
+            'hcc_timetable_recovery_backup',
+            JSON.stringify({ savedAt: new Date().toISOString(), state: payload })
+          );
+        } catch (storageErr) {}
+      };
+
       try {
         const resp = await fetch(`${this.apiBase}?action=save`, {
           method: 'POST',
@@ -1045,23 +1149,36 @@
           body: JSON.stringify(payload)
         });
 
-        const res = await resp.json();
+        let res = null;
+        try {
+          res = await resp.json();
+        } catch (parseErr) {
+          res = null;
+        }
 
-        if (res.ok) {
+        if (resp.ok && res && res.ok) {
           if (res.id) {
             this.state.metadata.id = res.id;
           }
+          try {
+            localStorage.removeItem('hcc_timetable_recovery_backup');
+          } catch (storageErr) {}
           this.setDirty(false);
           this.showToast('Exam Timetable saved successfully!', 'success');
           await this.loadTimetablesList();
+          return true;
         } else {
-          this.showToast(res.error || 'Failed to save timetable', 'error');
+          saveLocalRecoveryBackup();
+          this.setDirty(true);
+          this.showToast((res && res.error) ? `${res.error} — recovery backup stored locally. Please retry.` : 'Server save failed — recovery backup stored locally. Please retry.', 'error');
+          return false;
         }
       } catch (err) {
         console.error('Save error:', err);
-        // Fallback local save indication
-        this.setDirty(false);
-        this.showToast('Saved locally (Offline Cache Active)', 'success');
+        saveLocalRecoveryBackup();
+        this.setDirty(true);
+        this.showToast('Network/DB save failed — local recovery backup stored. Please check connection and click Save Schedule to retry.', 'error');
+        return false;
       } finally {
         if (saveBtn) {
           saveBtn.disabled = false;
@@ -1103,57 +1220,101 @@
       this.showToast('Duplicated current timetable as new draft', 'success');
     }
 
+    openUnsavedPreviewWindow() {
+      try {
+        sessionStorage.setItem('hcc_timetable_preview_data', JSON.stringify(this.state));
+      } catch (e) {}
+
+      // Post unsaved JSON directly to timetable_print.php so server renders preview reliably
+      if (this.csrfToken) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = 'timetable_print.php';
+        form.target = '_blank';
+        form.style.display = 'none';
+
+        const csrfInput = document.createElement('input');
+        csrfInput.type = 'hidden';
+        csrfInput.name = 'csrf_token';
+        csrfInput.value = this.csrfToken;
+        form.appendChild(csrfInput);
+
+        const dataInput = document.createElement('input');
+        dataInput.type = 'hidden';
+        dataInput.name = 'preview_json';
+        dataInput.value = JSON.stringify(this.state);
+        form.appendChild(dataInput);
+
+        document.body.appendChild(form);
+        form.submit();
+        setTimeout(() => form.remove(), 500);
+        return;
+      }
+
+      window.open('timetable_print.php?id=preview', '_blank');
+    }
+
     openPrintPreview() {
       const id = this.state.metadata.id;
-      if (this.isDirty) {
+      if (this.isDirty || !id) {
         const confirmFn = window.hccConfirm || ((opts) => Promise.resolve(confirm(typeof opts === 'string' ? opts : opts.message)));
         confirmFn({
           title: 'Unsaved Timetable Changes',
-          message: 'You have unsaved changes. Would you like to save before opening print preview?',
-          confirmText: 'Save & Preview',
+          message: 'You have unsaved changes. Save before printing, or open a draft preview of your unsaved edits?',
+          confirmText: 'Save & Print',
           cancelText: 'Preview Unsaved',
           type: 'warning'
         }).then((confirmed) => {
           if (confirmed) {
-            this.saveTimetable().then(() => {
-              window.open(`timetable_print.php?id=${encodeURIComponent(this.state.metadata.id || 'draft')}`, '_blank');
+            this.saveTimetable().then((savedOk) => {
+              if (savedOk && this.state.metadata.id) {
+                window.open(`timetable_print.php?id=${encodeURIComponent(this.state.metadata.id)}`, '_blank');
+              } else {
+                this.openUnsavedPreviewWindow();
+              }
             });
           } else {
-            sessionStorage.setItem('hcc_timetable_preview_data', JSON.stringify(this.state));
-            window.open(`timetable_print.php?id=${encodeURIComponent(id || 'preview')}`, '_blank');
+            this.openUnsavedPreviewWindow();
           }
         });
         return;
       }
 
-      // Store current state in sessionStorage for instant preview even before saving
-      sessionStorage.setItem('hcc_timetable_preview_data', JSON.stringify(this.state));
-      window.open(`timetable_print.php?id=${encodeURIComponent(id || 'preview')}`, '_blank');
+      window.open(`timetable_print.php?id=${encodeURIComponent(id)}`, '_blank');
+    }
+
+    csvSafeCell(val) {
+      const str = val === null || val === undefined ? '' : String(val);
+      const neutralized = /^[ \t\r\n]*[=+\-@]/.test(str) || str.startsWith('\t') || str.startsWith('\r')
+        ? `'${str}`
+        : str;
+      return `"${neutralized.replace(/"/g, '""')}"`;
     }
 
     exportToCSV() {
       let csv = '\uFEFF'; // UTF-8 BOM
-      csv += `Hindustani Covenant Church High School - Examination Schedule\n`;
-      csv += `Title:,"${this.state.metadata.title.replace(/"/g, '""')}"\n`;
-      csv += `Academic Year:,"${this.state.metadata.academic_year}"\n`;
-      csv += `Exam Type:,"${this.state.metadata.exam_type}"\n\n`;
+      csv += `${this.csvSafeCell('Hindustani Covenant Church High School - Examination Schedule')}\n`;
+      csv += `Title:,${this.csvSafeCell(this.state.metadata.title || '')}\n`;
+      csv += `Academic Year:,${this.csvSafeCell(this.state.metadata.academic_year || '')}\n`;
+      csv += `Exam Type:,${this.csvSafeCell(this.state.metadata.exam_type || '')}\n\n`;
 
       // Header Row
-      const headers = ['DAY', 'DATE', 'TIME'];
-      this.state.columns.forEach((c) => headers.push(`"${c.label.replace(/"/g, '""')}"`));
+      const headers = ['DAY', 'DATE', 'TIME'].map((h) => this.csvSafeCell(h));
+      this.state.columns.forEach((c) => headers.push(this.csvSafeCell(c.label || '')));
       csv += headers.join(',') + '\n';
 
       // Rows
       this.state.rows.forEach((dateObj) => {
-        dateObj.slots.forEach((slotObj, sIdx) => {
-          const rowData = [];
-          rowData.push(`"${dateObj.day}"`);
-          rowData.push(`"${dateObj.date}"`);
-          rowData.push(`"${slotObj.time.replace(/"/g, '""')}"`);
+        dateObj.slots.forEach((slotObj) => {
+          const rowData = [
+            this.csvSafeCell(dateObj.day || ''),
+            this.csvSafeCell(dateObj.date || ''),
+            this.csvSafeCell(slotObj.time || '')
+          ];
 
           this.state.columns.forEach((c) => {
-            const val = slotObj.cells[c.id] || '';
-            rowData.push(`"${val.replace(/"/g, '""')}"`);
+            const val = (slotObj.cells && slotObj.cells[c.id]) || '';
+            rowData.push(this.csvSafeCell(val));
           });
 
           csv += rowData.join(',') + '\n';
@@ -1164,7 +1325,7 @@
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.setAttribute('href', url);
-      link.setAttribute('download', `${this.state.metadata.title.replace(/[^a-zA-Z0-9_-]/g, '_')}.csv`);
+      link.setAttribute('download', `${(this.state.metadata.title || 'Timetable').replace(/[^a-zA-Z0-9_-]/g, '_')}.csv`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -1187,12 +1348,14 @@
         document.body.appendChild(container);
       }
 
+      const safeType = ['info', 'success', 'error', 'warning'].includes(type) ? type : 'info';
       const toast = document.createElement('div');
-      toast.className = `timetable-toast ${type}`;
+      toast.className = `timetable-toast ${safeType}`;
 
       let icon = 'fa-info-circle';
-      if (type === 'success') icon = 'fa-circle-check';
-      if (type === 'error') icon = 'fa-circle-exclamation';
+      if (safeType === 'success') icon = 'fa-circle-check';
+      if (safeType === 'error') icon = 'fa-circle-exclamation';
+      if (safeType === 'warning') icon = 'fa-triangle-exclamation';
 
       toast.innerHTML = `<i class="fa-solid ${icon}"></i><span>${this.escapeHtml(message)}</span>`;
       container.appendChild(toast);
@@ -1244,7 +1407,7 @@
      */
     calculateGeneratorDates() {
       const gs = this.generatorState;
-      let curr = new Date((gs.startDate || '2026-10-23') + 'T00:00:00');
+      let curr = gs.startDate ? new Date(gs.startDate + 'T00:00:00') : new Date();
       if (isNaN(curr.getTime())) curr = new Date();
 
       const daysArr = [];
@@ -1277,6 +1440,11 @@
       };
     }
 
+    sanitizeStatus(rawStatus) {
+      const s = String(rawStatus || 'draft').trim().toLowerCase();
+      return ['draft', 'published', 'archived'].includes(s) ? s : 'draft';
+    }
+
     /**
      * Live Schedule Breakdown Banner
      */
@@ -1288,8 +1456,8 @@
         <div class="tt-live-schedule-banner" id="genLiveScheduleBanner">
           <i class="fa-solid fa-calendar-check"></i>
           <div class="banner-text">
-            <strong>Schedule Breakdown:</strong> ${gs.days.length} Examination Days from <strong>${calc.startDateFormatted}</strong> to <strong>${calc.endDateFormatted}</strong>
-            ${calc.sundaysSkipped > 0 ? `<span class="banner-pill"><i class="fa-solid fa-ban" style="color:#dc2626;"></i> ${calc.sundaysSkipped} Sundays Skipped</span>` : ''}
+            <strong>Schedule Breakdown:</strong> ${Number(gs.days.length) || 0} Examination Days from <strong>${this.escapeHtml(calc.startDateFormatted)}</strong> to <strong>${this.escapeHtml(calc.endDateFormatted)}</strong>
+            ${calc.sundaysSkipped > 0 ? `<span class="banner-pill"><i class="fa-solid fa-ban" style="color:#dc2626;"></i> ${Number(calc.sundaysSkipped) || 0} Sundays Skipped</span>` : ''}
             <span class="banner-pill"><i class="fa-regular fa-clock" style="color:var(--tt-brand);"></i> Primary: ${this.escapeHtml(gs.primarySlot)}</span>
             ${gs.hasExtendedSlot ? `<span class="banner-pill"><i class="fa-solid fa-bolt" style="color:var(--tt-gold-dark);"></i> Extended High School: ${this.escapeHtml(gs.extendedSlot)}</span>` : ''}
           </div>
@@ -1302,8 +1470,8 @@
      */
     renderOverviewStripHtml() {
       const title = this.state.metadata.title || 'Examination Schedule';
-      const year = this.state.metadata.academic_year || '2026-27';
-      const status = this.state.metadata.status || 'draft';
+      const year = this.state.metadata.academic_year || this.defaultAcademicYear;
+      const status = this.sanitizeStatus(this.state.metadata.status);
       const daysCount = this.state.rows.length;
       const classCount = this.state.columns.length;
       const slotsCount = this.getTotalSlotsCount();
@@ -1331,8 +1499,8 @@
               <span class="tt-metric-label">Active Examination</span>
               <span class="tt-metric-value" title="${this.escapeHtml(title)}">${this.escapeHtml(title)}</span>
               <span class="tt-metric-sub">
-                <span class="badge-status ${status}" style="padding:2px 8px;font-size:0.68rem;">
-                  <span class="beacon-dot"></span> ${status.toUpperCase()}
+                <span class="badge-status ${this.escapeHtml(status)}" style="padding:2px 8px;font-size:0.68rem;">
+                  <span class="beacon-dot"></span> ${this.escapeHtml(status.toUpperCase())}
                 </span>
                 <span>• AY ${this.escapeHtml(year)}</span>
               </span>
@@ -1345,8 +1513,8 @@
             </div>
             <div class="tt-metric-body">
               <span class="tt-metric-label">Schedule Span</span>
-              <span class="tt-metric-value">${daysCount} Exam Days</span>
-              <span class="tt-metric-sub"><i class="fa-regular fa-calendar-check" style="color:#0284c7;"></i> ${dateRangeStr}</span>
+              <span class="tt-metric-value">${Number(daysCount) || 0} Exam Days</span>
+              <span class="tt-metric-sub"><i class="fa-regular fa-calendar-check" style="color:#0284c7;"></i> ${this.escapeHtml(dateRangeStr)}</span>
             </div>
           </div>
 
@@ -1356,8 +1524,8 @@
             </div>
             <div class="tt-metric-body">
               <span class="tt-metric-label">Standards Covered</span>
-              <span class="tt-metric-value">${classCount} Classes</span>
-              <span class="tt-metric-sub"><i class="fa-solid fa-layer-group" style="color:#8a6d0f;"></i> ${this.state.columns.map((c) => c.label).slice(0, 3).join(', ')}${classCount > 3 ? '...' : ''}</span>
+              <span class="tt-metric-value">${Number(classCount) || 0} Classes</span>
+              <span class="tt-metric-sub"><i class="fa-solid fa-layer-group" style="color:#8a6d0f;"></i> ${this.state.columns.slice(0, 3).map((c) => this.escapeHtml(c.label)).join(', ')}${classCount > 3 ? '...' : ''}</span>
             </div>
           </div>
 
@@ -1536,7 +1704,7 @@
               ${slots
                 .map(
                   (s, idx) => `
-                <option value="${s.slotId}" ${s.slotId === slotId ? 'selected' : ''}>
+                <option value="${this.escapeHtml(s.slotId)}" ${s.slotId === slotId ? 'selected' : ''}>
                   Slot ${idx + 1}: ${this.escapeHtml(s.time || 'Untitled')}
                 </option>
               `
@@ -1547,10 +1715,10 @@
         `;
       } else if (slots.length === 1) {
         slotOptionsHtml = `
-          <input type="hidden" id="fillTargetSlotSelect" value="${slots[0].slotId}">
+          <input type="hidden" id="fillTargetSlotSelect" value="${this.escapeHtml(slots[0].slotId)}">
           <div style="font-size:0.8rem;color:var(--tt-brand-deep);font-weight:600;">
             <i class="fa-regular fa-clock" style="color:var(--tt-gold-dark);margin-right:4px;"></i>
-            Slot: <strong>${this.escapeHtml(slots[0].time || 'Standard Slot')}</strong> (${this.state.columns.length} Classes)
+            Slot: <strong>${this.escapeHtml(slots[0].time || 'Standard Slot')}</strong> (${Number(this.state.columns.length) || 0} Classes)
           </div>
         `;
       }
@@ -1562,7 +1730,7 @@
           const cat = this.getSubjectCategory(sub);
           return `
             <button type="button" class="tt-preset-chip-btn ${isOff ? 'chip-off' : ''}" data-action="apply-fill-preset" data-subject="${this.escapeHtml(sub)}">
-              <span class="chip-dot" style="width:7px;height:7px;border-radius:50%;background:var(--tt-cat-${cat}, #7a2238);display:inline-block;"></span>
+              <span class="chip-dot" style="width:7px;height:7px;border-radius:50%;background:var(--tt-cat-${this.escapeHtml(cat)}, #7a2238);display:inline-block;"></span>
               <span>${this.escapeHtml(sub)}</span>
             </button>
           `;
@@ -1803,10 +1971,10 @@
             </select>
             <span>timetable for academic year</span>
             <select class="statement-select" data-gen="academicYear">
-              <option value="2024-25" ${gs.academicYear === '2024-25' ? 'selected' : ''}>2024-25</option>
-              <option value="2025-26" ${gs.academicYear === '2025-26' ? 'selected' : ''}>2025-26</option>
-              <option value="2026-27" ${gs.academicYear === '2026-27' ? 'selected' : ''}>2026-27</option>
-              <option value="2027-28" ${gs.academicYear === '2027-28' ? 'selected' : ''}>2027-28</option>
+              ${Array.from(new Set(['2024-25', '2025-26', '2026-27', '2027-28', this.defaultAcademicYear, gs.academicYear].filter(Boolean)))
+                .sort()
+                .map((yr) => `<option value="${this.escapeHtml(yr)}" ${gs.academicYear === yr ? 'selected' : ''}>${this.escapeHtml(yr)}</option>`)
+                .join('')}
             </select>
             <span>covering standards</span>
             <select class="statement-select" data-gen="standardsGroup">
@@ -1875,8 +2043,8 @@
         <div class="statement-day-card">
           <div class="day-card-number">
             <span class="badge-dot"></span>
-            <span class="day-title">Day ${d.dayNum || idx + 1}</span>
-            <span class="day-card-date-chip">${calc.days[idx]?.formatted || ''}</span>
+            <span class="day-title">Day ${Number(d.dayNum || idx + 1)}</span>
+            <span class="day-card-date-chip">${this.escapeHtml(calc.days[idx]?.formatted || '')}</span>
           </div>
           <div class="day-card-inputs">
             <select class="day-card-select" data-action="change-gen-day-subject" data-day-index="${idx}">
@@ -1956,10 +2124,10 @@
               <div class="meta-field">
                 <label for="ttAcademicYear">Academic Year</label>
                 <select id="ttAcademicYear" class="meta-input">
-                  <option value="2024-25" ${this.state.metadata.academic_year === '2024-25' ? 'selected' : ''}>2024-25</option>
-                  <option value="2025-26" ${this.state.metadata.academic_year === '2025-26' ? 'selected' : ''}>2025-26</option>
-                  <option value="2026-27" ${this.state.metadata.academic_year === '2026-27' ? 'selected' : ''}>2026-27</option>
-                  <option value="2027-28" ${this.state.metadata.academic_year === '2027-28' ? 'selected' : ''}>2027-28</option>
+                  ${Array.from(new Set(['2024-25', '2025-26', '2026-27', '2027-28', this.defaultAcademicYear, this.state.metadata.academic_year].filter(Boolean)))
+                    .sort()
+                    .map((yr) => `<option value="${this.escapeHtml(yr)}" ${this.state.metadata.academic_year === yr ? 'selected' : ''}>${this.escapeHtml(yr)}</option>`)
+                    .join('')}
                 </select>
               </div>
               <div class="meta-field">
@@ -2350,9 +2518,9 @@
                 </select>
                 <i class="fa-solid fa-chevron-down select-chevron"></i>
               </div>
-              <span class="badge-status ${this.state.metadata.status}">
+              <span class="badge-status ${this.sanitizeStatus(this.state.metadata.status)}">
                 <span class="beacon-dot"></span>
-                ${this.state.metadata.status}
+                ${this.escapeHtml(this.sanitizeStatus(this.state.metadata.status))}
               </span>
               <span id="ttDirtyBadge" class="badge-status dirty" style="display: ${this.isDirty ? 'inline-flex' : 'none'};">
                 <i class="fa-solid fa-asterisk" style="font-size:0.55rem;"></i>
@@ -2422,10 +2590,10 @@
                   ${this.state.columns
                     .map(
                       (col) => `
-                    <th class="th-class-col" data-col-id="${col.id}">
+                    <th class="th-class-col" data-col-id="${this.escapeHtml(col.id)}">
                       <div class="th-class-content">
                         <span class="th-class-label">${this.escapeHtml(col.label)}</span>
-                        <button type="button" class="btn-remove-col" data-action="remove-column" data-col-id="${col.id}" title="Remove Column">&times;</button>
+                        <button type="button" class="btn-remove-col" data-action="remove-column" data-col-id="${this.escapeHtml(col.id)}" title="Remove Column">&times;</button>
                       </div>
                     </th>
                   `
@@ -2497,16 +2665,18 @@
         const N = slots.length;
 
         slots.forEach((slotObj, sIdx) => {
-          html += `<tr data-date-id="${dateObj.dateId}" data-slot-id="${slotObj.slotId}">`;
+          const safeDateId = this.escapeHtml(dateObj.dateId);
+          const safeSlotId = this.escapeHtml(slotObj.slotId);
+          html += `<tr data-date-id="${safeDateId}" data-slot-id="${safeSlotId}">`;
 
           // Slot 0: Renders the spanned Day and Date cells
           if (sIdx === 0) {
             html += `
               <td class="td-sticky-day" rowspan="${N}">
-                <span class="day-badge" data-date-id="${dateObj.dateId}">${this.escapeHtml(dateObj.day)}</span>
+                <span class="day-badge" data-date-id="${safeDateId}">${this.escapeHtml(dateObj.day)}</span>
               </td>
               <td class="td-sticky-date" rowspan="${N}">
-                <input type="date" class="date-picker-input" data-date-id="${dateObj.dateId}" value="${this.escapeHtml(dateObj.date)}">
+                <input type="date" class="date-picker-input" data-date-id="${safeDateId}" value="${this.escapeHtml(dateObj.date)}">
               </td>
             `;
           }
@@ -2516,11 +2686,11 @@
           html += `
             <td class="td-sticky-time">
               <div class="time-slot-wrapper">
-                <input type="text" class="time-slot-input" list="timeSlotsList" data-date-id="${dateObj.dateId}" data-slot-id="${slotObj.slotId}" value="${this.escapeHtml(slotObj.time)}" placeholder="Time slot...">
-                <button type="button" class="btn-slot-fill" data-action="fill-row" data-date-id="${dateObj.dateId}" data-slot-id="${slotObj.slotId}" title="Quick fill all classes for this time slot">
+                <input type="text" class="time-slot-input" list="timeSlotsList" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}" value="${this.escapeHtml(slotObj.time)}" placeholder="Time slot...">
+                <button type="button" class="btn-slot-fill" data-action="fill-row" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}" title="Quick fill all classes for this time slot">
                   <i class="fa-solid fa-wand-magic-sparkles"></i>
                 </button>
-                <button type="button" class="btn-slot-delete" data-action="delete-slot" data-date-id="${dateObj.dateId}" data-slot-id="${slotObj.slotId}" title="Delete time slot">
+                <button type="button" class="btn-slot-delete" data-action="delete-slot" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}" title="Delete time slot">
                   <i class="fa-solid fa-xmark"></i>
                 </button>
               </div>
@@ -2529,12 +2699,13 @@
 
           // Every Slot: Render Subject Cells for all columns with category accent
           this.state.columns.forEach((col) => {
+            const safeColId = this.escapeHtml(col.id);
             const cellValue = (slotObj.cells && slotObj.cells[col.id]) || '';
-            const cat = this.getSubjectCategory(cellValue);
+            const cat = this.escapeHtml(this.getSubjectCategory(cellValue));
             const isMatch = this.searchQuery && cellValue.toLowerCase().includes(this.searchQuery);
             html += `
-              <td class="td-matrix-cell" data-cat="${cat}" data-col-id="${col.id}">
-                <input type="text" class="cell-subject-input ${isMatch ? 'cell-search-match' : ''}" list="subjectsList" data-date-id="${dateObj.dateId}" data-slot-id="${slotObj.slotId}" data-col-id="${col.id}" value="${this.escapeHtml(cellValue)}" placeholder="—">
+              <td class="td-matrix-cell" data-cat="${cat}" data-col-id="${safeColId}">
+                <input type="text" class="cell-subject-input ${isMatch ? 'cell-search-match' : ''}" list="subjectsList" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}" data-col-id="${safeColId}" value="${this.escapeHtml(cellValue)}" placeholder="—">
               </td>
             `;
           });
@@ -2544,15 +2715,15 @@
             html += `
               <td class="td-row-actions" rowspan="${N}">
                 <div class="row-actions-pod" role="group" aria-label="Date actions">
-                  <button type="button" class="row-pod-btn btn-add-slot-row" data-action="add-slot" data-date-id="${dateObj.dateId}" title="Add another exam slot to this date">
+                  <button type="button" class="row-pod-btn btn-add-slot-row" data-action="add-slot" data-date-id="${safeDateId}" title="Add another exam slot to this date">
                     <i class="fa-solid fa-plus"></i>
                     <span>Slot</span>
                   </button>
-                  <button type="button" class="row-pod-btn btn-fill-row" data-action="fill-row" data-date-id="${dateObj.dateId}" data-slot-id="${slotObj.slotId}" title="Quick fill all classes for this date with a subject">
+                  <button type="button" class="row-pod-btn btn-fill-row" data-action="fill-row" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}" title="Quick fill all classes for this date with a subject">
                     <i class="fa-solid fa-wand-magic-sparkles"></i>
                     <span>Fill</span>
                   </button>
-                  <button type="button" class="row-pod-btn btn-delete-date-row" data-action="delete-date" data-date-id="${dateObj.dateId}" title="Delete entire exam date">
+                  <button type="button" class="row-pod-btn btn-delete-date-row" data-action="delete-date" data-date-id="${safeDateId}" title="Delete entire exam date">
                     <i class="fa-regular fa-trash-can"></i>
                     <span>Del</span>
                   </button>

@@ -11,6 +11,10 @@ $root = dirname(__DIR__);
 require_once $root . '/config/database.php';
 require_once $root . '/includes/functions.php';
 require_once $root . '/admin/includes/whatsapp_functions.php';
+require_once __DIR__ . '/lib_cli_session.php';
+
+$cliSess = hccCreateCliAdminSession();
+register_shutdown_function(function () use (&$cliSess) { hccCleanupCliSession($cliSess); });
 
 $passed = 0;
 $failed = 0;
@@ -22,16 +26,18 @@ function ok(string $name, bool $cond, string $detail = ''): void {
 }
 
 function httpPost(string $url, array $body): array {
+    global $cliSess;
     $json = json_encode($body, JSON_UNESCAPED_UNICODE);
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => $json,
+        CURLOPT_COOKIE => $cliSess['cookie_header'] ?? '',
         CURLOPT_HTTPHEADER => [
             'Content-Type: application/json',
             'Accept: application/json',
-            'X-Admin-Test: 1',
+            'X-CSRF-Token: ' . ($cliSess['csrf_token'] ?? ''),
         ],
         CURLOPT_TIMEOUT => 20,
     ]);
@@ -43,7 +49,7 @@ function httpPost(string $url, array $body): array {
 
 $db = waGetDB();
 waEnsureRevokeSchema($db);
-$base = 'http://127.0.0.1/hcc/admin';
+$base = hccResolveAdminBase('http://127.0.0.1/hcc/admin', $cliSess);
 $tag = 'REVTEST_' . date('YmdHis');
 $waChat = '919100001111@c.us';
 $waMsg = 'true_' . $waChat . '_' . $tag;
@@ -81,7 +87,7 @@ $otherId = waInsertMessage($db, [
     'timestamp' => time() - 20,
 ]);
 $otherId = (int)$db->query("SELECT id FROM whatsapp_messages WHERE wa_msg_id = " . $db->quote($waMsg . '_IN'))->fetchColumn();
-$rej = httpPost($base . '/api_whatsapp_chat_actions.php?qa_test=1', [
+$rej = httpPost($base . '/api_whatsapp_chat_actions.php', [
     'chat_id' => $chatId, 'action' => 'delete_message', 'msg_id' => $otherId, 'for_everyone' => true,
 ]);
 ok('reject revoke on inbound message', $rej['code'] === 400, 'http=' . $rej['code']);
@@ -98,14 +104,14 @@ $oldId = waInsertMessage($db, [
     'timestamp' => time() - (60 * 60 * 72),
 ]);
 $oldId = (int)$db->query("SELECT id FROM whatsapp_messages WHERE wa_msg_id = " . $db->quote($oldWa))->fetchColumn();
-$oldR = httpPost($base . '/api_whatsapp_chat_actions.php?qa_test=1', [
+$oldR = httpPost($base . '/api_whatsapp_chat_actions.php', [
     'chat_id' => $chatId, 'action' => 'delete_message', 'msg_id' => $oldId, 'for_everyone' => true,
 ]);
 $oldStatus = (string)$db->query("SELECT status FROM whatsapp_messages WHERE id = {$oldId}")->fetchColumn();
 ok('outside window → revoke_failed', $oldR['code'] === 422 && $oldStatus === 'revoke_failed', 'http=' . $oldR['code'] . ' status=' . $oldStatus);
 
 // Happy path: queue revoke_pending
-$q = httpPost($base . '/api_whatsapp_chat_actions.php?qa_test=1', [
+$q = httpPost($base . '/api_whatsapp_chat_actions.php', [
     'chat_id' => $chatId, 'action' => 'delete_message', 'msg_id' => $msgDbId, 'for_everyone' => true,
 ]);
 $st = (string)$db->query("SELECT status FROM whatsapp_messages WHERE id = {$msgDbId}")->fetchColumn();
@@ -116,13 +122,13 @@ ok('queue row is msg_type=revoke', ($qRow['msg_type'] ?? '') === 'revoke' && ($q
 ok('revoke max_attempts=1', (int)($qRow['max_attempts'] ?? 0) === 1);
 
 // Idempotent second request
-$q2 = httpPost($base . '/api_whatsapp_chat_actions.php?qa_test=1', [
+$q2 = httpPost($base . '/api_whatsapp_chat_actions.php', [
     'chat_id' => $chatId, 'action' => 'delete_message', 'msg_id' => $msgDbId, 'for_everyone' => true,
 ]);
 ok('second request stays revoke_pending', ($q2['json']['status'] ?? '') === 'revoke_pending', json_encode($q2['json']));
 
 // Mock bridge success
-$okUp = httpPost($base . '/api_whatsapp_outbound_update.php?qa_test=1', [
+$okUp = httpPost($base . '/api_whatsapp_outbound_update.php', [
     'id' => $queueId,
     'status' => 'sent',
     'sent_at' => gmdate('Y-m-d\TH:i:s\Z'),
@@ -142,11 +148,11 @@ $failId = waInsertMessage($db, [
     'timestamp' => time() - 10,
 ]);
 $failId = (int)$db->query("SELECT id FROM whatsapp_messages WHERE wa_msg_id = " . $db->quote($failWa))->fetchColumn();
-$fq = httpPost($base . '/api_whatsapp_chat_actions.php?qa_test=1', [
+$fq = httpPost($base . '/api_whatsapp_chat_actions.php', [
     'chat_id' => $chatId, 'action' => 'delete_message', 'msg_id' => $failId, 'for_everyone' => true,
 ]);
 $failQid = (int)($fq['json']['queue_id'] ?? 0);
-$failUp = httpPost($base . '/api_whatsapp_outbound_update.php?qa_test=1', [
+$failUp = httpPost($base . '/api_whatsapp_outbound_update.php', [
     'id' => $failQid,
     'status' => 'failed',
     'attempts' => 1,
@@ -169,7 +175,7 @@ $meId = waInsertMessage($db, [
     'timestamp' => time(),
 ]);
 $meId = (int)$db->query("SELECT id FROM whatsapp_messages WHERE wa_msg_id = " . $db->quote($meWa))->fetchColumn();
-$meR = httpPost($base . '/api_whatsapp_chat_actions.php?qa_test=1', [
+$meR = httpPost($base . '/api_whatsapp_chat_actions.php', [
     'chat_id' => $chatId, 'action' => 'delete_message', 'msg_id' => $meId, 'for_everyone' => false,
 ]);
 $gone = (int)$db->query("SELECT COUNT(*) FROM whatsapp_messages WHERE id = {$meId}")->fetchColumn();

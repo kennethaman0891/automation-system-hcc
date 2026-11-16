@@ -2,12 +2,13 @@
 /* Unit Test Report Card — single-student view for Unit Test results.
    Dedicated to unit tests only; the semester "Report Card"
    (view_report_card.php) is untouched. */
+$cspNonce = bin2hex(random_bytes(16));
 if (!headers_sent()) {
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: SAMEORIGIN');
     header('Referrer-Policy: strict-origin-when-cross-origin');
     header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
-    header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'");
+    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-{$cspNonce}'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'");
 }
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/auth_check.php';
@@ -25,7 +26,10 @@ if ($year === '' || $std === '' || $roll === '') {
 
 $settings = getAllSettings();
 $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High School';
-$schoolTagline = $settings['school_tagline'] ?? '';
+$schoolTagline = trim((string)($settings['school_tagline'] ?? ''));
+if ($schoolTagline === '') {
+    $schoolTagline = 'Excellence in Academic & Moral Education';
+}
 $schoolLogo = $settings['logo'] ?? 'assets/images/hcclogo.jpg';
 
 $matrixData = rcGetUnitTestClassData($year, $std, $division, $testType);
@@ -45,6 +49,8 @@ $today = date('d-m-Y');
 $backLink = 'unit_tests.php?year=' . urlencode($year) . '&std=' . urlencode($std) . '&division=' . urlencode($division) . '&test_type=' . urlencode($testType);
 $stuPct = $student['percentage'];
 $stuPassed = ($stuPct !== null && $stuPct >= 35);
+$publicSlipUrl = rcGetPublicSlipUrl($year, $std, $division, $testType, $roll);
+$qrDataUri = rcRenderQrSvgDataUri($publicSlipUrl, 2);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -100,6 +106,13 @@ $stuPassed = ($stuPct !== null && $stuPct >= 35);
         .print-foot { display: flex; justify-content: space-between; gap: 16px; padding: 26px 24px 20px; font-size: 0.82rem; color: #475569; }
         .print-foot .sig { text-align: center; flex: 1; }
         .print-foot .sig-line { width: 180px; border-bottom: 1.5px solid #94a3b8; height: 34px; margin: 0 auto 5px; }
+        .qr-verify-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 24px 12px; border-top: 1px dashed #cbd5e1; background: #f8fafc; page-break-inside: avoid; }
+        .qr-verify-info { display: flex; flex-direction: column; gap: 2px; font-size: 0.74rem; color: #475569; }
+        .qr-verify-info strong { color: #1a237e; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; display: inline-flex; align-items: center; gap: 6px; }
+        .qr-verify-info a { color: #1d4ed8; text-decoration: none; font-weight: 600; word-break: break-all; font-size: 0.7rem; }
+        .qr-verify-info a:hover { text-decoration: underline; }
+        .qr-verify-badge { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+        .qr-verify-badge img { width: 58px; height: 58px; border: 1px solid #cbd5e1; border-radius: 6px; padding: 2px; background: #fff; display: block; }
         .empty-note { text-align: center; padding: 40px; color: #94a3b8; }
         .error-box { max-width: 600px; margin: 40px auto; padding: 32px; background: #fff; border: 2px solid #fee2e2; border-radius: 12px; text-align: center; }
         @media print {
@@ -130,7 +143,7 @@ $stuPassed = ($stuPct !== null && $stuPct >= 35);
 
     <div class="print-sheet">
         <div class="print-hdr">
-            <img src="<?= e_attr(BASE_URL . safeLogoSrc($schoolLogo)) ?>" alt="Logo" onerror="this.style.display='none'">
+            <img src="<?= e_attr(BASE_URL . safeLogoSrc($schoolLogo)) ?>" alt="Logo" id="schoolLogoImg">
             <h1><?= sanitize($schoolName) ?></h1>
             <?php if ($schoolTagline): ?><h2><?= sanitize($schoolTagline) ?></h2><?php endif; ?>
         </div>
@@ -201,18 +214,34 @@ $stuPassed = ($stuPct !== null && $stuPct >= 35);
             <div class="sig"><div class="sig-line"></div>Coordinator Signature</div>
             <div class="sig"><div class="sig-line"></div>Principal Signature</div>
         </div>
+
+        <div class="qr-verify-bar">
+            <div class="qr-verify-info">
+                <strong><i class="fas fa-shield-check" style="color:#16a34a;"></i> Digital Record Verification</strong>
+                <span>Scan QR code or open link to verify authenticity on the official school portal.</span>
+                <a href="<?= e_attr($publicSlipUrl) ?>" target="_blank" rel="noopener"><?= sanitize($publicSlipUrl) ?></a>
+            </div>
+            <a class="qr-verify-badge" href="<?= e_attr($publicSlipUrl) ?>" target="_blank" rel="noopener" title="Verify Unit Test Report Card Online">
+                <img src="<?= e_attr($qrDataUri) ?>" alt="QR Verification Code">
+            </a>
+        </div>
     </div>
 
     <script src="<?= BASE_URL ?>assets/vendor/html2canvas@1.4.1/html2canvas.min.js"></script>
     <script src="<?= BASE_URL ?>assets/vendor/jspdf@2.5.1/jspdf.umd.min.js"></script>
     <script src="<?= BASE_URL ?>assets/js/print-utils.js?v=<?= is_file(__DIR__ . '/../assets/js/print-utils.js') ? filemtime(__DIR__ . '/../assets/js/print-utils.js') : 0 ?>"></script>
-    <script>
+    <script nonce="<?= $cspNonce ?>">
     (function () {
         'use strict';
 
+        var logoImg = document.getElementById('schoolLogoImg');
+        if (logoImg) {
+            logoImg.addEventListener('error', function () { logoImg.style.display = 'none'; });
+        }
+
         var printSheet = document.querySelector('.print-sheet');
-        var rollStr = <?= json_encode(str_pad((string)$roll, 2, '0', STR_PAD_LEFT)) ?>;
-        var studentName = <?= json_encode($student['student_name']) ?>;
+        var rollStr = <?= json_encode(str_pad((string)$roll, 2, '0', STR_PAD_LEFT), JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+        var studentName = <?= json_encode($student['student_name'], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
         var cleanName = studentName.replace(/[^a-zA-Z0-9_\-]/g, '_');
         var pdfFileName = 'Unit_Test_Report_Roll_' + rollStr + '_' + cleanName + '.pdf';
 
@@ -226,7 +255,16 @@ $stuPassed = ($stuPct !== null && $stuPct >= 35);
                 var imgData = canvas.toDataURL('image/jpeg', 0.95);
                 var jsPDF = window.jspdf.jsPDF;
                 var pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-                pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+                var imgProps = pdf.getImageProperties(imgData);
+                var pageW = 210, pageH = 297;
+                var pdfW = pageW;
+                var pdfH = (imgProps.height * pageW) / imgProps.width;
+                if (pdfH > pageH) {
+                    pdfH = pageH;
+                    pdfW = (imgProps.width * pageH) / imgProps.height;
+                }
+                var offsetX = (pageW - pdfW) / 2;
+                pdf.addImage(imgData, 'JPEG', offsetX, 0, pdfW, pdfH, undefined, 'FAST');
                 return {
                     pdf: pdf,
                     blob: pdf.output('blob'),

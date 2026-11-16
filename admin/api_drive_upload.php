@@ -12,11 +12,13 @@ require_once __DIR__ . '/../includes/google_drive.php';
 require_once __DIR__ . '/auth_check.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
     echo json_encode(['success' => false, 'error' => 'Method not allowed.']);
     exit;
 }
 
 if (!verifyCSRFToken()) {
+    http_response_code(403);
     echo json_encode(['success' => false, 'error' => 'CSRF verification failed.']);
     exit;
 }
@@ -28,6 +30,7 @@ $stmt->execute([$adminId]);
 $currentUser = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$currentUser) {
+    http_response_code(401);
     echo json_encode(['success' => false, 'error' => 'User not found.']);
     exit;
 }
@@ -38,19 +41,39 @@ if (!$rootFolderId) {
     exit;
 }
 
-$filename      = trim($_POST['filename'] ?? '');
-$contentBase64 = trim($_POST['content_base64'] ?? '');
-$category      = trim($_POST['category'] ?? 'analytics');
-$mimeType      = trim($_POST['mime_type'] ?? 'application/pdf');
+$filename      = basename(str_replace(["\r", "\n", "\0"], '', trim((string)($_POST['filename'] ?? ''))));
+$contentBase64 = trim((string)($_POST['content_base64'] ?? ''));
+$category      = str_replace(["\r", "\n", "\0"], '', trim((string)($_POST['category'] ?? 'analytics')));
+$mimeType      = strtolower(str_replace(["\r", "\n", "\0"], '', trim((string)($_POST['mime_type'] ?? 'application/pdf'))));
 
 if ($filename === '' || $contentBase64 === '') {
+    http_response_code(400);
     echo json_encode(['success' => false, 'error' => 'File name and content are required.']);
     exit;
 }
 
-$fileContent = base64_decode($contentBase64);
+if (!HCCGoogleDrive::isAllowedUploadMimeType($mimeType)) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Unsupported MIME type.']);
+    exit;
+}
+
+$maxBytes = 25 * 1024 * 1024; // 25MB
+if (strlen($contentBase64) > (int)ceil($maxBytes * 4 / 3) + 1024) {
+    http_response_code(413);
+    echo json_encode(['success' => false, 'error' => 'File exceeds maximum upload size (25MB).']);
+    exit;
+}
+
+$fileContent = base64_decode($contentBase64, true);
 if ($fileContent === false || strlen($fileContent) === 0) {
+    http_response_code(400);
     echo json_encode(['success' => false, 'error' => 'Invalid file payload.']);
+    exit;
+}
+if (strlen($fileContent) > $maxBytes) {
+    http_response_code(413);
+    echo json_encode(['success' => false, 'error' => 'File exceeds maximum upload size (25MB).']);
     exit;
 }
 
@@ -62,7 +85,12 @@ if (!empty($currentUser['google_drive_subfolders'])) {
     $subfolders = $_SESSION['google_drive_subfolders'];
 }
 
-$targetFolderId = $subfolders[$category]['id'] ?? $rootFolderId;
+$targetFolderId = (string)($subfolders[$category]['id'] ?? $rootFolderId);
+if (!HCCGoogleDrive::isValidDriveId($targetFolderId)) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Invalid target Google Drive folder ID.']);
+    exit;
+}
 
 // Initialize Google Drive client & ensure fresh access token
 $client = new HCCGoogleDrive();

@@ -45,8 +45,13 @@ try {
     $staffUsers = $staffStmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Throwable $e) {}
 
-// Initial filters from GET
-$fStatus = trim($_GET['status'] ?? 'ALL');
+// Initial filters from GET (strict allowlist for status)
+$rawStatus = strtoupper(trim($_GET['status'] ?? 'ALL'));
+$allowedFilterStatuses = [
+    'ALL', 'NEW', 'CONTACTED', 'INFORMATION_SHARED', 'INTERESTED',
+    'VISIT_PLANNED', 'DOCUMENTS_PENDING', 'APPLICATION_SUBMITTED', 'ENROLLED', 'CLOSED'
+];
+$fStatus = in_array($rawStatus, $allowedFilterStatuses, true) ? $rawStatus : 'ALL';
 $fYear   = trim($_GET['year'] ?? '');
 $fClass  = trim($_GET['class'] ?? '');
 $fStaff  = !empty($_GET['staff_id']) ? (int)$_GET['staff_id'] : 0;
@@ -1246,7 +1251,7 @@ $search  = trim($_GET['search'] ?? '');
     (function() {
         const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
         let currentEnquiryId = null;
-        let activeStatusFilter = '<?= $fStatus ?>';
+        let activeStatusFilter = <?= json_encode($fStatus, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
         let currentPage = 1;
         let debounceTimer = null;
 
@@ -1791,7 +1796,14 @@ $search  = trim($_GET['search'] ?? '');
             btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Generating...`;
 
             try {
-                const res = await fetch(`api_admission_enquiry.php?action=generate_ai_draft&id=${currentEnquiryId}`);
+                const res = await fetch('api_admission_enquiry.php?action=generate_ai_draft', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-Token': CSRF_TOKEN
+                    },
+                    body: JSON.stringify({ id: currentEnquiryId })
+                });
                 const data = await res.json();
                 if (data.success && data.draft_text) {
                     document.getElementById('aiDraftEditor').value = data.draft_text;

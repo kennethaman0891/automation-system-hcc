@@ -18,26 +18,91 @@ if (php_sapi_name() !== 'cli') {
 
 $pdo = getDB();
 
-// 1. Fetch requested timetable by ID, or latest published timetable
-$timetableId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+// 1. Support POSTed unsaved preview data (CSRF-verified) OR requested timetable by ID / latest published
+$isPreviewMode = false;
+$clientPreviewFallback = (isset($_GET['id']) && in_array((string)$_GET['id'], ['preview', 'draft'], true)) || !empty($_GET['preview']);
+$timetableId = (isset($_GET['id']) && ctype_digit((string)$_GET['id'])) ? (int)$_GET['id'] : 0;
 $timetable = null;
+$columns = [];
+$rows = [];
+$cellMap = [];
 
-if ($timetableId > 0) {
-    $stmt = $pdo->prepare("SELECT * FROM timetables WHERE id = ?");
-    $stmt->execute([$timetableId]);
-    $timetable = $stmt->fetch();
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['preview_json'])) {
+    if (!verifyCSRFToken()) {
+        http_response_code(403);
+        die('Security check failed for print preview.');
+    }
+    $decodedPreview = json_decode((string)$_POST['preview_json'], true);
+    if (is_array($decodedPreview)) {
+        $isPreviewMode = true;
+        $meta = is_array($decodedPreview['metadata'] ?? null) ? $decodedPreview['metadata'] : [];
+        $timetable = [
+            'id'              => !empty($meta['id']) ? (int)$meta['id'] : 0,
+            'title'           => trim((string)($meta['title'] ?? '')),
+            'school_name'     => trim((string)($meta['school_name'] ?? '')),
+            'standards_label' => trim((string)($meta['standards_label'] ?? '')),
+            'academic_year'   => trim((string)($meta['academic_year'] ?? '')),
+            'exam_type'       => trim((string)($meta['exam_type'] ?? '')),
+            'notes'           => (string)($meta['instructions'] ?? $meta['notes'] ?? ''),
+        ];
+        $timetableId = (int)$timetable['id'];
+
+        foreach (($decodedPreview['columns'] ?? []) as $cIdx => $col) {
+            $colKey = (string)($col['id'] ?? $col['key'] ?? ('col_' . ($cIdx + 1)));
+            $colName = (string)($col['label'] ?? $col['name'] ?? $col['column_name'] ?? ('STD ' . ($cIdx + 1)));
+            $columns[] = [
+                'id' => $colKey,
+                'column_key' => $colKey,
+                'column_name' => $colName,
+            ];
+        }
+
+        $rowSeq = 1;
+        foreach (($decodedPreview['rows'] ?? []) as $dRow) {
+            $dDate = trim((string)($dRow['date'] ?? date('Y-m-d')));
+            $dDay = trim((string)($dRow['day'] ?? ''));
+            if ($dDay === '' && strtotime($dDate) !== false) {
+                $dDay = date('l', strtotime($dDate));
+            }
+            foreach (($dRow['slots'] ?? []) as $slot) {
+                $rId = 'preview_r_' . ($rowSeq++);
+                $rows[] = [
+                    'id' => $rId,
+                    'exam_date' => $dDate,
+                    'day_name' => $dDay,
+                    'time_slot' => trim((string)($slot['time'] ?? '')),
+                ];
+                $slotCells = is_array($slot['cells'] ?? null) ? $slot['cells'] : [];
+                foreach ($columns as $col) {
+                    $cId = $col['id'];
+                    $cellMap[$rId][$cId] = [
+                        'subject_name' => (string)($slotCells[$cId] ?? '--------'),
+                        'room_or_note' => '',
+                    ];
+                }
+            }
+        }
+    }
 }
 
-if (!$timetable) {
-    // Fallback: Latest published timetable
-    $stmt = $pdo->query("SELECT * FROM timetables WHERE status = 'published' ORDER BY id DESC LIMIT 1");
-    $timetable = $stmt->fetch();
-}
+if (!$isPreviewMode && !$clientPreviewFallback) {
+    if ($timetableId > 0) {
+        $stmt = $pdo->prepare("SELECT * FROM timetables WHERE id = ?");
+        $stmt->execute([$timetableId]);
+        $timetable = $stmt->fetch();
+    }
 
-if (!$timetable) {
-    // Fallback: Any latest timetable
-    $stmt = $pdo->query("SELECT * FROM timetables ORDER BY id DESC LIMIT 1");
-    $timetable = $stmt->fetch();
+    if (!$timetable) {
+        // Fallback: Latest published timetable
+        $stmt = $pdo->query("SELECT * FROM timetables WHERE status = 'published' ORDER BY id DESC LIMIT 1");
+        $timetable = $stmt->fetch();
+    }
+
+    if (!$timetable) {
+        // Fallback: Any latest timetable
+        $stmt = $pdo->query("SELECT * FROM timetables ORDER BY id DESC LIMIT 1");
+        $timetable = $stmt->fetch();
+    }
 }
 
 // 2. Fetch school name from settings table with fallback
@@ -56,22 +121,21 @@ if ($schoolName === '') {
     $schoolName = 'HINDUSTANI COVENANT CHURCH HIGH SCHOOL & JR. COLLEGE, SOLAPUR.';
 }
 
-// Defaults for header elements
-$title = $timetable['title'] ?? 'FIRST SEMESTER EXAMINATION TIME-TABLE (WRITTEN EXAM)';
-$standardsLabel = $timetable['standards_label'] ?? 'STD V-X October 2026';
-$academicYear = $timetable['academic_year'] ?? '2026-2027';
-$examType = $timetable['exam_type'] ?? 'Semester Exam';
-$notes = $timetable['notes'] ?? '';
+$defaultAcademicYear = '2025-26';
+try {
+    if (function_exists('rcGetActiveAcademicYear')) {
+        $defaultAcademicYear = rcGetActiveAcademicYear();
+    }
+} catch (Throwable $e) {}
 
-// 3. Fetch columns for this timetable
-$columns = [];
-if ($timetable) {
+// 3. Fetch columns for DB-backed timetable
+if (!$isPreviewMode && $timetable) {
     $stmt = $pdo->prepare("SELECT * FROM timetable_columns WHERE timetable_id = ? ORDER BY sort_order ASC, id ASC");
     $stmt->execute([$timetable['id']]);
     $columns = $stmt->fetchAll();
 }
 
-// Fallback default columns if none in DB
+// Fallback default columns if none loaded
 if (empty($columns)) {
     $columns = [
         ['id' => 1, 'column_key' => 'std_v', 'column_name' => 'STD V'],
@@ -80,17 +144,29 @@ if (empty($columns)) {
     ];
 }
 
-// 4. Fetch rows for this timetable
-$rows = [];
-if ($timetable) {
+// Dynamic defaults for header elements (never hardcoded Oct 2026)
+$title = trim((string)($timetable['title'] ?? '')) ?: 'EXAMINATION TIME-TABLE (WRITTEN EXAM)';
+$academicYear = trim((string)($timetable['academic_year'] ?? '')) ?: $defaultAcademicYear;
+$examType = trim((string)($timetable['exam_type'] ?? '')) ?: 'Semester Exam';
+$standardsLabel = trim((string)($timetable['standards_label'] ?? ''));
+if ($standardsLabel === '') {
+    $colNames = array_values(array_filter(array_map(static fn($c) => trim((string)($c['column_name'] ?? '')), $columns)));
+    $scopePrefix = count($colNames) > 1
+        ? ($colNames[0] . ' – ' . $colNames[count($colNames) - 1])
+        : ($colNames[0] ?? $examType);
+    $standardsLabel = $scopePrefix . ' • AY ' . $academicYear;
+}
+$notes = $timetable['notes'] ?? '';
+
+// 4. Fetch rows for DB-backed timetable
+if (!$isPreviewMode && $timetable) {
     $stmt = $pdo->prepare("SELECT * FROM timetable_rows WHERE timetable_id = ? ORDER BY sort_order ASC, exam_date ASC, id ASC");
     $stmt->execute([$timetable['id']]);
     $rows = $stmt->fetchAll();
 }
 
 // 5. Fetch cells mapped by row_id and column_id
-$cellMap = [];
-if ($timetable && !empty($rows)) {
+if (!$isPreviewMode && $timetable && !empty($rows)) {
     $stmt = $pdo->prepare("SELECT * FROM timetable_cells WHERE timetable_id = ?");
     $stmt->execute([$timetable['id']]);
     $allCells = $stmt->fetchAll();
@@ -675,10 +751,15 @@ $densityClass = ($columnCount >= 8) ? 'cols-many' : (($columnCount >= 5) ? 'cols
     <div class="ptb-bar">
         <div class="ptb-left">
             <span class="ptb-badge"><i class="fa-solid fa-calendar-days"></i> Timetable Print Engine</span>
-            <span style="font-weight: 600; font-size: 13px; color: #475569;">
+            <?php if ($isPreviewMode): ?>
+            <span style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px;">
+                <i class="fa-solid fa-triangle-exclamation"></i> Unsaved Preview Mode
+            </span>
+            <?php endif; ?>
+            <span id="ptbSubtitle" style="font-weight: 600; font-size: 13px; color: #475569;">
                 <?= htmlspecialchars($standardsLabel) ?>
             </span>
-            <span style="font-size: 11px; color: #64748b; background: #f1f5f9; padding: 2px 8px; border-radius: 999px;">
+            <span id="ptbLayoutBadge" style="font-size: 11px; color: #64748b; background: #f1f5f9; padding: 2px 8px; border-radius: 999px;">
                 <?= count($columns) ?> Standards &bull; <?= $isLandscape ? 'Landscape' : 'Portrait' ?>
             </span>
         </div>
@@ -696,15 +777,21 @@ $densityClass = ($columnCount >= 8) ? 'cols-many' : (($columnCount >= 5) ? 'cols
             <a href="timetable.php" class="ptb-btn ptb-btn-secondary">
                 <i class="fa-solid fa-arrow-left"></i> Back to Timetables
             </a>
-            <a href="timetable_export_csv.php?id=<?= (int)($timetable['id'] ?? 0) ?>" class="ptb-btn ptb-btn-success">
+            <?php if (!empty($timetable['id'])): ?>
+            <a href="timetable_export_csv.php?id=<?= (int)$timetable['id'] ?>" class="ptb-btn ptb-btn-success">
                 <i class="fa-solid fa-file-csv"></i> Export CSV
             </a>
+            <?php endif; ?>
             <button onclick="window.print()" class="ptb-btn ptb-btn-primary">
                 <i class="fa-solid fa-print"></i> Print Document
             </button>
         </div>
     </div>
 </header>
+
+<div id="previewNoticeBanner" class="no-print" style="display:<?= $isPreviewMode ? 'block' : 'none' ?>;max-width:1020px;margin:14px auto 0;background:#fffbeb;border:1px solid #f59e0b;color:#92400e;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600;">
+    <i class="fa-solid fa-circle-info"></i> Showing unsaved draft preview. Remember to click <strong>Save Schedule</strong> in Timetable Studio to publish and persist these changes.
+</div>
 
 <!-- Main Printable Sheet Container with Horizontal Centering -->
 <div class="print-viewport-container">
@@ -860,6 +947,119 @@ function toggleLayout(landscape) {
     }
 }
 </script>
+
+<?php if ($clientPreviewFallback && !$isPreviewMode): ?>
+<script>
+(function () {
+    try {
+        var raw = sessionStorage.getItem('hcc_timetable_preview_data');
+        if (!raw) return;
+        var st = JSON.parse(raw);
+        if (!st || !Array.isArray(st.columns) || !Array.isArray(st.rows)) return;
+
+        var meta = st.metadata || {};
+        var doc = document.getElementById('printableDoc');
+        if (!doc) return;
+
+        var titleEl = doc.querySelector('.exam-title');
+        var scopeEl = doc.querySelector('.standards-scope');
+        var metaLineEl = doc.querySelector('.meta-line');
+        var topSubEl = document.getElementById('ptbSubtitle');
+        var topBadgeEl = document.getElementById('ptbLayoutBadge');
+        var bannerEl = document.getElementById('previewNoticeBanner');
+        if (bannerEl) bannerEl.style.display = 'block';
+
+        var yr = String(meta.academic_year || <?= json_encode($academicYear) ?>);
+        var exType = String(meta.exam_type || 'Semester Exam');
+        var title = String(meta.title || 'EXAMINATION TIME-TABLE');
+        var colLabels = st.columns.map(function (c) { return String(c.label || ''); }).filter(Boolean);
+        var scopeText = colLabels.length > 1
+            ? (colLabels[0] + ' \u2013 ' + colLabels[colLabels.length - 1] + ' \u2022 AY ' + yr)
+            : ((colLabels[0] || exType) + ' \u2022 AY ' + yr);
+
+        if (titleEl) titleEl.textContent = title.toUpperCase();
+        if (scopeEl) scopeEl.textContent = scopeText.toUpperCase();
+        if (metaLineEl) metaLineEl.textContent = 'Academic Year: ' + yr + ' \u2022 ' + exType.toUpperCase();
+        if (topSubEl) topSubEl.textContent = scopeText;
+        var isLand = st.columns.length >= 5;
+        if (topBadgeEl) topBadgeEl.textContent = st.columns.length + ' Standards \u2022 ' + (isLand ? 'Landscape' : 'Portrait');
+        toggleLayout(isLand);
+
+        var theadRow = doc.querySelector('.timetable-table thead tr');
+        if (theadRow) {
+            while (theadRow.children.length > 3) theadRow.removeChild(theadRow.lastElementChild);
+            st.columns.forEach(function (col) {
+                var th = document.createElement('th');
+                th.className = 'col-class';
+                th.scope = 'col';
+                th.textContent = String(col.label || '').toUpperCase();
+                theadRow.appendChild(th);
+            });
+        }
+
+        var tbody = doc.querySelector('.timetable-table tbody');
+        if (tbody) {
+            tbody.innerHTML = '';
+            st.rows.forEach(function (dRow) {
+                var slots = Array.isArray(dRow.slots) ? dRow.slots : [];
+                if (slots.length === 0) return;
+                slots.forEach(function (slot, idx) {
+                    var tr = document.createElement('tr');
+                    if (idx === 0) {
+                        var tdDay = document.createElement('td');
+                        tdDay.rowSpan = slots.length;
+                        tdDay.className = 'col-day';
+                        tdDay.textContent = String(dRow.day || '').toUpperCase();
+                        tr.appendChild(tdDay);
+
+                        var tdDate = document.createElement('td');
+                        tdDate.rowSpan = slots.length;
+                        tdDate.className = 'col-date';
+                        var parts = String(dRow.date || '').split('-');
+                        tdDate.textContent = parts.length === 3 ? (parts[2] + '.' + parts[1] + '.' + parts[0]) : String(dRow.date || '');
+                        tr.appendChild(tdDate);
+                    }
+                    var tdTime = document.createElement('td');
+                    tdTime.className = 'col-time';
+                    tdTime.textContent = String(slot.time || '');
+                    tr.appendChild(tdTime);
+
+                    st.columns.forEach(function (col) {
+                        var td = document.createElement('td');
+                        var rawSub = (slot.cells && slot.cells[col.id]) ? String(slot.cells[col.id]).trim() : '';
+                        var isEmpty = !rawSub || rawSub === '--------';
+                        td.className = 'cell-subject' + (isEmpty ? ' cell-empty' : '');
+                        if (isEmpty) {
+                            td.textContent = '--------';
+                        } else {
+                            var strong = document.createElement('strong');
+                            strong.textContent = rawSub.toUpperCase();
+                            td.appendChild(strong);
+                        }
+                        tr.appendChild(td);
+                    });
+                    tbody.appendChild(tr);
+                });
+            });
+        }
+
+        var instrList = doc.querySelector('.instructions-list');
+        var rawInstr = String(meta.instructions || '').trim();
+        if (instrList && rawInstr) {
+            instrList.innerHTML = '';
+            rawInstr.split(/\r\n|\r|\n/).forEach(function (ln) {
+                var clean = ln.trim().replace(/^(\d+[\.\)]|\-|\*)\s*/, '');
+                if (clean) {
+                    var li = document.createElement('li');
+                    li.textContent = clean;
+                    instrList.appendChild(li);
+                }
+            });
+        }
+    } catch (e) {}
+})();
+</script>
+<?php endif; ?>
 
 <?php if ($autoPrint): ?>
 <script>

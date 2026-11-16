@@ -24,6 +24,7 @@ $adminInitials = strtoupper(implode('', array_map(
 /* ── Upload Limits ── */
 const UT_MAX_ROWS = 3000;
 const UT_MAX_COLS = 50;
+const UT_MAX_FILE_BYTES = 50 * 1024 * 1024;
 
 /* ── 1. Text Normalization & Roman Numeral Helpers ── */
 function utCleanText($v): string {
@@ -31,6 +32,176 @@ function utCleanText($v): string {
     $s = trim((string)$v);
     $s = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $s) ?? '';
     return trim($s);
+}
+
+function utNormNameKey(string $name): string {
+    $s = mb_strtoupper(utCleanText($name), 'UTF-8');
+    $s = preg_replace('/[^A-Z0-9\s]/', ' ', $s) ?? '';
+    $s = preg_replace('/\s+/', ' ', $s) ?? '';
+    return trim($s);
+}
+
+function utParseSign($val): ?int {
+    if ($val === null) return null;
+    $s = strtolower(trim((string)$val));
+    if ($s === '') return null;
+    if (in_array($s, ['1', 'yes', 'y', 'true', 'signed'], true)) return 1;
+    if (in_array($s, ['0', 'no', 'n', 'false', 'unsigned'], true)) return 0;
+    return null;
+}
+
+/**
+ * Auto-Healer & Metadata Shield for Unit Tests:
+ * Matches against existing unit_test_results + report_card + students_master to detect
+ * swapped/shifted roll numbers and preserve parent_phone + parents_sign across overwrites.
+ */
+function utAnalyzeCohortHealing(PDO $db, array $students, string $year, string $std, string $div, string $testType): array {
+    $byRoll = [];
+
+    if ($year !== '' && $std !== '' && $div !== '') {
+        // 1. Existing unit test records (prioritize same test_type, then other tests in same class/year)
+        $utStmt = $db->prepare(
+            "SELECT roll_no, student_name, test_type,
+                    MAX(COALESCE(parents_sign, 0)) AS parents_sign,
+                    MAX(NULLIF(TRIM(COALESCE(parent_phone, '')), '')) AS parent_phone
+             FROM unit_test_results
+             WHERE academic_year = ? AND std = ? AND division = ?
+             GROUP BY roll_no, student_name, test_type
+             ORDER BY (test_type = ?) DESC"
+        );
+        $utStmt->execute([$year, $std, $div, $testType]);
+        foreach ($utStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $roll = (string)$r['roll_no'];
+            if ($roll === '') continue;
+            if (!isset($byRoll[$roll])) {
+                $byRoll[$roll] = [
+                    'roll_no'      => $roll,
+                    'student_name' => (string)$r['student_name'],
+                    'parent_phone' => trim((string)($r['parent_phone'] ?? '')),
+                    'parents_sign' => ($r['test_type'] === $testType) ? (int)($r['parents_sign'] ?? 0) : 0,
+                ];
+            } elseif ($byRoll[$roll]['parent_phone'] === '' && !empty($r['parent_phone'])) {
+                $byRoll[$roll]['parent_phone'] = trim((string)$r['parent_phone']);
+            }
+        }
+
+        // 2. Fallback / complement from report_card cohort roster
+        $rcStmt = $db->prepare(
+            "SELECT roll_no, student_name, parent_phone
+             FROM report_card
+             WHERE academic_year = ? AND std = ? AND division = ?
+             ORDER BY id ASC"
+        );
+        $rcStmt->execute([$year, $std, $div]);
+        foreach ($rcStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $roll = (string)$r['roll_no'];
+            if ($roll === '') continue;
+            if (!isset($byRoll[$roll])) {
+                $byRoll[$roll] = [
+                    'roll_no'      => $roll,
+                    'student_name' => (string)$r['student_name'],
+                    'parent_phone' => trim((string)($r['parent_phone'] ?? '')),
+                    'parents_sign' => 0,
+                ];
+            } elseif ($byRoll[$roll]['parent_phone'] === '' && !empty($r['parent_phone'])) {
+                $byRoll[$roll]['parent_phone'] = trim((string)$r['parent_phone']);
+            }
+        }
+    }
+
+    // 3. Complement missing phones from students_master
+    if (!empty($byRoll)) {
+        try {
+            $smStmt = $db->prepare("SELECT roll_no, parent_phone FROM students_master WHERE std = ? AND division = ?");
+            $smStmt->execute([$std, $div]);
+            foreach ($smStmt->fetchAll(PDO::FETCH_ASSOC) as $sm) {
+                $rKey = trim((string)($sm['roll_no'] ?? ''));
+                if ($rKey !== '' && isset($byRoll[$rKey]) && $byRoll[$rKey]['parent_phone'] === '' && !empty($sm['parent_phone'])) {
+                    $byRoll[$rKey]['parent_phone'] = trim((string)$sm['parent_phone']);
+                }
+            }
+        } catch (\Throwable $e) {
+            // Optional table lookup
+        }
+    }
+
+    $normNames = [];
+    foreach ($byRoll as $rKey => $info) {
+        $normNames[$rKey] = utNormNameKey($info['student_name']);
+    }
+
+    $usedRolls = [];
+    $plans = [];
+    $healCount = 0;
+    $shieldCount = 0;
+
+    foreach ($students as $idx => $stu) {
+        $xlRoll = (string)($stu['roll_no'] ?? '');
+        $xlNorm = utNormNameKey((string)($stu['student_name'] ?? ''));
+        $direct = $byRoll[$xlRoll] ?? null;
+        $directSim = 0.0;
+        if ($direct && $xlNorm !== '' && ($normNames[$xlRoll] ?? '') !== '') {
+            similar_text($xlNorm, $normNames[$xlRoll], $directSim);
+        }
+
+        $suggestedRoll = null;
+        $healReason = '';
+        $healPct = 0.0;
+        $metaSource = $direct;
+
+        if ($xlNorm !== '' && (!$direct || $directSim < 75.0)) {
+            $bestRoll = null;
+            $bestPct = 0.0;
+            foreach ($normNames as $candRoll => $candNorm) {
+                if ($candNorm === '') continue;
+                similar_text($xlNorm, $candNorm, $candPct);
+                if ($candPct > $bestPct) {
+                    $bestPct = $candPct;
+                    $bestRoll = $candRoll;
+                }
+            }
+            if ($bestRoll !== null && $bestRoll !== $xlRoll && $bestPct >= 75.0 && !isset($usedRolls[$bestRoll])) {
+                $suggestedRoll = $bestRoll;
+                $healPct = round($bestPct, 1);
+                $healReason = $direct
+                    ? "Roll #{$xlRoll} belongs to \"{$direct['student_name']}\"; \"{$stu['student_name']}\" matches Roll #{$bestRoll} ({$healPct}%)"
+                    : "Roll #{$xlRoll} matches existing Roll #{$bestRoll} ({$healPct}%)";
+                $metaSource = $byRoll[$bestRoll];
+                $usedRolls[$bestRoll] = true;
+                $healCount++;
+            }
+        }
+
+        $xlPhone = trim((string)($stu['parent_phone'] ?? ''));
+        $xlSign  = array_key_exists('parents_sign', $stu) && $stu['parents_sign'] !== null ? (int)$stu['parents_sign'] : null;
+
+        $dbPhone = ($metaSource && $metaSource['parent_phone'] !== '') ? $metaSource['parent_phone'] : '';
+        $dbSign  = $metaSource ? (int)$metaSource['parents_sign'] : 0;
+
+        $finalPhone = ($xlPhone !== '') ? $xlPhone : $dbPhone;
+        $finalSign  = ($xlSign !== null) ? $xlSign : $dbSign;
+
+        $shielded = [];
+        if ($xlPhone === '' && $dbPhone !== '') $shielded[] = 'Phone';
+        if ($xlSign === null && $dbSign === 1) $shielded[] = 'Sign';
+        if (!empty($shielded)) $shieldCount++;
+
+        $plans[$idx] = [
+            'original_roll'   => $xlRoll,
+            'suggested_roll'  => $suggestedRoll,
+            'heal_reason'     => $healReason,
+            'heal_pct'        => $healPct,
+            'final_phone'     => $finalPhone,
+            'final_sign'      => $finalSign,
+            'shielded_fields' => $shielded,
+        ];
+    }
+
+    return [
+        'rows'         => $plans,
+        'heal_count'   => $healCount,
+        'shield_count' => $shieldCount,
+    ];
 }
 
 function utRomanToDecimal(string $roman): string {
@@ -45,7 +216,7 @@ function utRomanToDecimal(string $roman): string {
 
 function utDetectMetaFromText(string $text, string $sheetName = ''): array {
     $meta = [
-        'academic_year' => '2025-26',
+        'academic_year' => rcGetActiveAcademicYear(),
         'std'           => '',
         'division'      => 'A',
         'test_type'     => 'Unit Test 2',
@@ -128,6 +299,7 @@ function parseUnitTestWorksheet($sheet, string $sheetName): ?array {
     $remarkCol = null;
     $attnCol = null;
     $signCol = null;
+    $phoneCol = null;
     $subjectCols = []; // colIndex => subjectName
 
     foreach ($headerRow as $cIdx => $val) {
@@ -148,6 +320,8 @@ function parseUnitTestWorksheet($sheet, string $sheetName): ?array {
             $attnCol = $cIdx;
         } elseif (in_array($clean, ['parentssign', 'parentsign', 'sign'])) {
             $signCol = $cIdx;
+        } elseif (in_array($clean, ['parentphone', 'phone', 'mobile', 'mobilenumber', 'whatsapp', 'contact', 'contactno'])) {
+            $phoneCol = $cIdx;
         }
     }
 
@@ -157,7 +331,8 @@ function parseUnitTestWorksheet($sheet, string $sheetName): ?array {
     $endCol = $totalCol ? $totalCol : $highestCol;
     for ($cIdx = $nameCol + 1; $cIdx < $endCol; $cIdx++) {
         $hName = trim($headerRow[$cIdx] ?? '');
-        if ($hName !== '' && !in_array(strtolower($hName), ['total', '%', 'grade', 'remark', 'attn', 'parents sign'])) {
+        $hClean = preg_replace('/[^a-z0-9]/', '', strtolower($hName));
+        if ($hName !== '' && !in_array($hClean, ['total', 'tot', 'pct', 'percentage', 'grade', 'grd', 'remark', 'remarks', 'attn', 'attendance', 'parentssign', 'parentsign', 'sign', 'parentphone', 'phone', 'mobile', 'mobilenumber', 'whatsapp', 'contact', 'contactno'], true)) {
             $subjectCols[$cIdx] = $hName;
         }
     }
@@ -190,23 +365,27 @@ function parseUnitTestWorksheet($sheet, string $sheetName): ?array {
 
     for ($rIdx = $startRow; $rIdx <= $highestRow; $rIdx++) {
         $row = $rows[$rIdx] ?? [];
-        $firstFew = strtoupper(implode(' ', array_slice($row, 0, 5)));
 
-        // Gender section detection
-        if (stripos($firstFew, 'GIRLS') !== false) {
-            $currentGender = 'Girl';
-            continue;
-        }
-        if (stripos($firstFew, 'BOYS') !== false) {
-            $currentGender = 'Boy';
-            continue;
-        }
-
+        // Standalone gender section divider check (only on standalone BOYS/GIRLS label rows, never matching student surnames)
         $rollVal = trim($row[$rollCol] ?? '');
+        $hasNumericRoll = ($rollVal !== '' && preg_match('/^[0-9]+[a-z]?$/i', $rollVal));
+        if (!$hasNumericRoll) {
+            $isDivider = false;
+            foreach (array_slice($row, 0, 5) as $cellText) {
+                $ct = trim((string)$cellText);
+                if ($ct !== '' && preg_match('/^(GIRLS|BOYS)\b(?:\s*[:\-\.\(\)\/].*|\s+SECTION)?$/i', $ct, $gm)) {
+                    $currentGender = (strtoupper($gm[1]) === 'GIRLS') ? 'Girl' : 'Boy';
+                    $isDivider = true;
+                    break;
+                }
+            }
+            if ($isDivider) continue;
+        }
+
         $nameVal = trim($row[$nameCol] ?? '');
 
         // Valid roll number check
-        if ($rollVal === '' || !preg_match('/^[0-9]+[a-z]?$/i', $rollVal)) {
+        if (!$hasNumericRoll) {
             continue;
         }
         if ($nameVal === '') continue;
@@ -214,29 +393,42 @@ function parseUnitTestWorksheet($sheet, string $sheetName): ?array {
         // Clean student name
         $nameVal = preg_replace('/\s+/', ' ', $nameVal);
 
-        // Subject marks
+        // Subject marks: separate explicit AB/absent from blank unentered cells, and clamp numeric marks <= maxM
         $marks = [];
         $totObt = 0.0;
         $totMax = 0.0;
         $allAb = true;
+        $anyEntered = false;
+        $blankSubjects = [];
+        $clampedSubjects = [];
 
         foreach ($subjectCols as $cIdx => $sName) {
-            $rawMark = trim($row[$cIdx] ?? '');
+            $rawMark = trim((string)($row[$cIdx] ?? ''));
             $maxM = $subjectMaxMap[$sName] ?? 20.0;
             $totMax += $maxM;
+            $upperMark = strtoupper($rawMark);
 
-            $isAb = ($rawMark === '-' || strtoupper($rawMark) === 'AB' || $rawMark === '');
-            if ($isAb && $rawMark === '') {
-                // If completely blank, treat as absent or 0
+            $isExplicitAb = ($rawMark === '-' || $rawMark === '–' || $upperMark === 'AB' || $upperMark === 'ABSENT');
+            $isBlank = ($rawMark === '');
+
+            if ($isExplicitAb) {
                 $obtVal = null;
                 $isAb = true;
-            } elseif ($isAb) {
+                $anyEntered = true;
+            } elseif ($isBlank || !is_numeric($rawMark)) {
                 $obtVal = null;
-                $isAb = true;
+                $isAb = false;
+                $allAb = false;
+                $blankSubjects[] = $sName;
             } else {
                 $isAb = false;
                 $allAb = false;
-                $obtVal = round((float)$rawMark, 1);
+                $anyEntered = true;
+                $rawNum = (float)$rawMark;
+                $obtVal = round(clampMark($rawNum, $maxM), 1);
+                if ($rawNum > $maxM || $rawNum < 0) {
+                    $clampedSubjects[] = $sName;
+                }
                 $totObt += $obtVal;
             }
 
@@ -244,30 +436,47 @@ function parseUnitTestWorksheet($sheet, string $sheetName): ?array {
                 'max_marks'      => $maxM,
                 'marks_obtained' => $obtVal,
                 'is_absent'      => $isAb ? 1 : 0,
+                'is_blank'       => ($obtVal === null && !$isAb) ? 1 : 0,
             ];
         }
 
-        // Attendance & Custom Remark
+        // Attendance, Custom Remark, Optional Parent Phone & Parents Sign
         $attnVal = $attnCol ? trim($row[$attnCol] ?? '') : '';
         $customRemark = $remarkCol ? trim($row[$remarkCol] ?? '') : '';
+        $phoneVal = $phoneCol ? utCleanText($row[$phoneCol] ?? '') : '';
+        $signVal = $signCol ? utParseSign($row[$signCol] ?? null) : null;
 
         // Calculate Percentage, Grade & Remark
-        $pct = (!$allAb && $totMax > 0) ? round(($totObt / $totMax) * 100, 2) : null;
-        $autoGr = rcCalculateUnitTestGradeAndRemark($pct);
-        $grade = $autoGr['grade'];
-        $remark = ($customRemark !== '') ? $customRemark : $autoGr['remark'];
+        if (!$anyEntered) {
+            $pct = null;
+            $grade = '-';
+            $remark = $customRemark;
+        } elseif ($allAb) {
+            $pct = null;
+            $grade = '-';
+            $remark = ($customRemark !== '') ? $customRemark : 'Absent';
+        } else {
+            $pct = ($totMax > 0) ? round(($totObt / $totMax) * 100, 2) : null;
+            $autoGr = rcCalculateUnitTestGradeAndRemark($pct);
+            $grade = $autoGr['grade'];
+            $remark = ($customRemark !== '') ? $customRemark : $autoGr['remark'];
+        }
 
         $students[] = [
-            'roll_no'        => $rollVal,
-            'student_name'   => $nameVal,
-            'gender'         => $currentGender,
-            'marks'          => $marks,
-            'attendance'     => $attnVal,
-            'total_obtained' => $totObt,
-            'total_max'      => $totMax,
-            'percentage'     => $pct,
-            'grade'          => $grade,
-            'remark'         => $remark,
+            'roll_no'          => $rollVal,
+            'student_name'     => $nameVal,
+            'gender'           => $currentGender,
+            'marks'            => $marks,
+            'attendance'       => $attnVal,
+            'parent_phone'     => $phoneVal,
+            'parents_sign'     => $signVal,
+            'blank_subjects'   => $blankSubjects,
+            'clamped_subjects' => $clampedSubjects,
+            'total_obtained'   => $totObt,
+            'total_max'        => $totMax,
+            'percentage'       => $pct,
+            'grade'            => $grade,
+            'remark'           => $remark,
         ];
     }
 
@@ -342,8 +551,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $origName = $file['name'] ?? 'unit_test.xlsx';
                 $ext = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
 
-                if (!in_array($ext, ['xlsx', 'xls'])) {
+                if (!in_array($ext, ['xlsx', 'xls'], true)) {
                     $error = 'Invalid file format. Please upload an Excel (.xlsx or .xls) file.';
+                } elseif ((int)($file['size'] ?? 0) > UT_MAX_FILE_BYTES) {
+                    $error = 'File exceeds the 50 MB size limit.';
                 } else {
                     $uploadDir = rtrim(sys_get_temp_dir(), '/\\') . DIRECTORY_SEPARATOR . 'hcc_ut_imports';
                     if (!is_dir($uploadDir)) @mkdir($uploadDir, 0755, true);
@@ -363,6 +574,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $_SESSION['ut_file_ext'] = $ext;
                             $_SESSION['ut_filename'] = $origName;
                             $_SESSION['ut_multi_sheets'] = $multiSheets;
+                            $_SESSION['ut_confirm_token'] = bin2hex(random_bytes(32));
 
                             if (count($multiSheets) > 1) {
                                 // Multi-sheet master workbook detected!
@@ -389,18 +601,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         /* ── Action: Confirm Import (Single or Batch) ── */
         elseif ($action === 'confirm_import') {
-            $tmpPath = $_SESSION['ut_file_path'] ?? '';
-            $ext = $_SESSION['ut_file_ext'] ?? 'xlsx';
-            $multiSheets = $_SESSION['ut_multi_sheets'] ?? [];
-            $isBatch = !empty($_POST['is_batch']);
-            $overwrite = !empty($_POST['overwrite']);
+            $sessionToken  = $_SESSION['ut_confirm_token'] ?? '';
+            $postedToken   = $_POST['confirm_token'] ?? '';
+            $tmpPath       = $_SESSION['ut_file_path'] ?? '';
+            $ext           = $_SESSION['ut_file_ext'] ?? 'xlsx';
+            $multiSheets   = $_SESSION['ut_multi_sheets'] ?? [];
+            $isBatch       = !empty($_POST['is_batch']);
+            $overwrite     = !empty($_POST['overwrite']);
+            $applyRollHeal = !empty($_POST['apply_roll_heal']);
 
-            if (!$tmpPath || !file_exists($tmpPath)) {
+            if ($sessionToken === '' || $postedToken === '' || !hash_equals((string)$sessionToken, (string)$postedToken)) {
+                $error = 'Invalid or expired import confirmation token. Please re-upload your Excel file.';
+            } elseif (!$tmpPath || !file_exists($tmpPath)) {
                 $error = 'Uploaded file session expired. Please re-upload your Excel file.';
             } else {
+                $activeYear = rcGetActiveAcademicYear();
                 $reader = $ext === 'xlsx' ? new \PhpOffice\PhpSpreadsheet\Reader\Xlsx() : new \PhpOffice\PhpSpreadsheet\Reader\Xls();
                 $totalImportedStudents = 0;
+                $totalHealedRolls = 0;
+                $totalShieldedRows = 0;
                 $classesImported = [];
+                $lockedWarnings = [];
                 $firstClassLink = '';
 
                 // Determine which sheets to import
@@ -416,10 +637,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                         if (!$parsed || empty($parsed['students'])) continue;
 
-                        $cYear = !empty($parsed['meta']['academic_year']) ? $parsed['meta']['academic_year'] : '2025-26';
+                        $cYear = !empty($parsed['meta']['academic_year']) ? $parsed['meta']['academic_year'] : $activeYear;
                         $cStd  = !empty($parsed['meta']['std']) ? $parsed['meta']['std'] : '1';
                         $cDiv  = !empty($parsed['meta']['division']) ? $parsed['meta']['division'] : 'A';
                         $cTest = !empty($parsed['meta']['test_type']) ? $parsed['meta']['test_type'] : 'Unit Test 2';
+
+                        if (rcIsVaultLocked($cYear)) {
+                            $lockedWarnings[] = "STD $cStd $cDiv ({$cYear}) skipped — Academic Vault is locked.";
+                            continue;
+                        }
+
+                        // Snapshot Auto-Healer & Metadata Shield BEFORE any DELETE/overwrite
+                        $healing = utAnalyzeCohortHealing($db, $parsed['students'], $cYear, $cStd, $cDiv, $cTest);
+                        $claimedRolls = [];
 
                         // Save subject configuration
                         $subjConf = [];
@@ -428,33 +658,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
                         rcSaveUnitTestConfig($cYear, $cStd, $cTest, $subjConf);
 
-                        // If overwrite enabled, clear existing cohort for this class
+                        // If overwrite enabled, clear existing cohort for this class (metadata already shielded in $healing)
                         if ($overwrite) {
                             $del = $db->prepare("DELETE FROM unit_test_results WHERE academic_year=? AND std=? AND division=? AND test_type=?");
                             $del->execute([$cYear, $cStd, $cDiv, $cTest]);
                         }
 
-                        // Prepare bulk insert
+                        // Prepare bulk insert (preserving parents_sign & parent_phone)
                         $insStmt = $db->prepare("
                             INSERT INTO unit_test_results 
-                            (academic_year, std, division, test_type, roll_no, student_name, gender, subject_name, max_marks, marks_obtained, is_absent, grade, remark, attendance)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            (academic_year, std, division, test_type, roll_no, student_name, gender, subject_name, max_marks, marks_obtained, is_absent, grade, remark, attendance, parents_sign, parent_phone)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             ON DUPLICATE KEY UPDATE 
+                                student_name = VALUES(student_name),
+                                gender = VALUES(gender),
+                                max_marks = VALUES(max_marks),
                                 marks_obtained = VALUES(marks_obtained),
                                 is_absent = VALUES(is_absent),
                                 grade = VALUES(grade),
                                 remark = VALUES(remark),
-                                attendance = VALUES(attendance)
+                                attendance = VALUES(attendance),
+                                parents_sign = VALUES(parents_sign),
+                                parent_phone = VALUES(parent_phone)
                         ");
 
                         $classStudentCount = 0;
-                        foreach ($parsed['students'] as $stu) {
+                        foreach ($parsed['students'] as $idx => $stu) {
+                            $plan = $healing['rows'][$idx] ?? null;
                             $roll = $stu['roll_no'];
+                            if ($applyRollHeal && $plan && !empty($plan['suggested_roll']) && !isset($claimedRolls[$plan['suggested_roll']])) {
+                                $roll = $plan['suggested_roll'];
+                                $totalHealedRolls++;
+                            }
+                            $claimedRolls[$roll] = true;
+
                             $name = $stu['student_name'];
                             $gender = $stu['gender'];
                             $attn = $stu['attendance'];
                             $grd = $stu['grade'];
                             $rmk = $stu['remark'];
+                            $finalSign  = $plan ? (int)$plan['final_sign'] : (int)($stu['parents_sign'] ?? 0);
+                            $finalPhone = $plan ? (string)$plan['final_phone'] : (string)($stu['parent_phone'] ?? '');
+                            if ($plan && !empty($plan['shielded_fields'])) {
+                                $totalShieldedRows++;
+                            }
 
                             foreach ($stu['marks'] as $sName => $sData) {
                                 $maxM = (float)$sData['max_marks'];
@@ -464,7 +711,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $insStmt->execute([
                                     $cYear, $cStd, $cDiv, $cTest,
                                     $roll, $name, $gender, $sName,
-                                    $maxM, $obtM, $isAb, $grd, $rmk, $attn
+                                    $maxM, $obtM, $isAb, $grd, $rmk, $attn,
+                                    $finalSign, ($finalPhone !== '' ? $finalPhone : null)
                                 ]);
                             }
                             $classStudentCount++;
@@ -480,20 +728,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 @unlink($tmpPath);
-                unset($_SESSION['ut_file_path'], $_SESSION['ut_file_ext'], $_SESSION['ut_multi_sheets'], $_SESSION['ut_preview'], $_SESSION['ut_is_multi']);
+                unset($_SESSION['ut_file_path'], $_SESSION['ut_file_ext'], $_SESSION['ut_multi_sheets'], $_SESSION['ut_preview'], $_SESSION['ut_is_multi'], $_SESSION['ut_confirm_token']);
 
-                // Fire persistent notification with timestamp
-                $notifTitle = "Unit Test Excel Imported";
-                $notifMsg = "Imported {$totalImportedStudents} students across " . count($classesImported) . " classes into Unit Test results by {$adminUser}.";
-                rcAddNotification($notifTitle, $notifMsg, 'unit_test', $firstClassLink);
+                if ($totalImportedStudents === 0 && !empty($lockedWarnings)) {
+                    $error = implode(' ', $lockedWarnings);
+                } else {
+                    // Fire persistent notification with timestamp
+                    $notifTitle = "Unit Test Excel Imported";
+                    $notifMsg = "Imported {$totalImportedStudents} students across " . count($classesImported) . " classes into Unit Test results by {$adminUser} (Healed: {$totalHealedRolls}, Shielded: {$totalShieldedRows}).";
+                    rcAddNotification($notifTitle, $notifMsg, 'unit_test', $firstClassLink);
 
-                $success = "Successfully imported {$totalImportedStudents} student records across " . count($classesImported) . " classes!";
-                $importResult = [
-                    'imported'        => $totalImportedStudents,
-                    'classes_count'   => count($classesImported),
-                    'classes_list'    => $classesImported,
-                    'first_link'      => $firstClassLink,
-                ];
+                    $success = "Successfully imported {$totalImportedStudents} student records across " . count($classesImported) . " classes!";
+                    if ($totalHealedRolls > 0 || $totalShieldedRows > 0) {
+                        $success .= " (Auto-Healer fixed {$totalHealedRolls} roll(s); Metadata Shield preserved {$totalShieldedRows} phone/signature record(s).)";
+                    }
+                    if (!empty($lockedWarnings)) {
+                        $success .= ' ' . implode(' ', $lockedWarnings);
+                    }
+                    $importResult = [
+                        'imported'        => $totalImportedStudents,
+                        'healed'          => $totalHealedRolls,
+                        'shielded'        => $totalShieldedRows,
+                        'classes_count'   => count($classesImported),
+                        'classes_list'    => $classesImported,
+                        'first_link'      => $firstClassLink,
+                    ];
+                }
             }
         }
     }
@@ -685,6 +945,7 @@ $notifData = rcGetRecentNotifications(8);
                             <?= csrfField() ?>
                             <input type="hidden" name="action" value="confirm_import">
                             <input type="hidden" name="is_batch" value="1">
+                            <input type="hidden" name="confirm_token" value="<?= sanitize($_SESSION['ut_confirm_token'] ?? '') ?>">
 
                             <div class="imp-sheets">
                                 <?php foreach ($multiSheets as $sName => $sInfo): ?>
@@ -708,7 +969,14 @@ $notifData = rcGetRecentNotifications(8);
                                 <input type="checkbox" name="overwrite" id="batchOverwrite" value="1" checked>
                                 <span class="imp-switch-text">
                                     <strong>Overwrite existing records</strong><br>
-                                    Replaces Unit Test rows already stored for these classes.
+                                    Replaces Unit Test rows already stored for these classes (Metadata Shield still preserves parent phone &amp; signatures).
+                                </span>
+                            </label>
+                            <label class="imp-switch" for="batchAutoHeal">
+                                <input type="checkbox" name="apply_roll_heal" id="batchAutoHeal" value="1" checked>
+                                <span class="imp-switch-text">
+                                    <strong>Auto-Heal swapped or shifted roll numbers</strong><br>
+                                    Matches Excel names against active class cohorts to fix shifted roll numbers automatically.
                                 </span>
                             </label>
 
@@ -732,6 +1000,20 @@ $notifData = rcGetRecentNotifications(8);
                     $pvShown = min($pvStudents, 25);
                     $pvClass = 'STD ' . ($preview['meta']['std'] ?? '') . ' ' . ($preview['meta']['division'] ?? '');
                     $pvTest = ($preview['meta']['test_type'] ?? '') . ' (' . ($preview['meta']['academic_year'] ?? '') . ')';
+                    $utHealing = utAnalyzeCohortHealing(
+                        $db,
+                        $preview['students'],
+                        (string)($preview['meta']['academic_year'] ?? rcGetActiveAcademicYear()),
+                        (string)($preview['meta']['std'] ?? ''),
+                        (string)($preview['meta']['division'] ?? 'A'),
+                        (string)($preview['meta']['test_type'] ?? 'Unit Test 2')
+                    );
+                    $utBlankRows = 0;
+                    $utClampedRows = 0;
+                    foreach ($preview['students'] as $pu) {
+                        if (!empty($pu['blank_subjects'])) $utBlankRows++;
+                        if (!empty($pu['clamped_subjects'])) $utClampedRows++;
+                    }
                 ?>
                 <div class="panel">
                     <div class="panel-header">
@@ -777,6 +1059,24 @@ $notifData = rcGetRecentNotifications(8);
                             <?php endforeach; ?>
                         </div>
 
+                        <?php if ($utHealing['heal_count'] > 0 || $utHealing['shield_count'] > 0 || $utBlankRows > 0 || $utClampedRows > 0): ?>
+                        <div style="margin: 12px 0 16px; padding: 12px 16px; border-radius: 10px; background: #fffbeb; border: 1px solid #fde68a; color: #78350f; font-size: 0.85rem; display: flex; flex-wrap: wrap; gap: 12px; align-items: center;">
+                            <span style="font-weight: 800;"><i class="fas fa-shield-halved" style="margin-right:6px;"></i> Auto-Healer &amp; Shield:</span>
+                            <?php if ($utHealing['heal_count'] > 0): ?>
+                                <span><strong><?= (int)$utHealing['heal_count'] ?></strong> roll number swap/shift suggestion(s).</span>
+                            <?php endif; ?>
+                            <?php if ($utHealing['shield_count'] > 0): ?>
+                                <span><strong><?= (int)$utHealing['shield_count'] ?></strong> record(s) have Phone / Parent Sign preserved.</span>
+                            <?php endif; ?>
+                            <?php if ($utBlankRows > 0): ?>
+                                <span><strong><?= (int)$utBlankRows ?></strong> student(s) have unentered blank cells (separate from AB).</span>
+                            <?php endif; ?>
+                            <?php if ($utClampedRows > 0): ?>
+                                <span><strong><?= (int)$utClampedRows ?></strong> student(s) had marks clamped &le; max.</span>
+                            <?php endif; ?>
+                        </div>
+                        <?php endif; ?>
+
                         <div class="imp-table-wrap">
                             <div class="imp-table-scroll">
                                 <table class="imp-table">
@@ -792,22 +1092,52 @@ $notifData = rcGetRecentNotifications(8);
                                             <th scope="col" class="c-c">Grade</th>
                                             <th scope="col">Remark</th>
                                             <th scope="col" class="c-c">Attn</th>
+                                            <th scope="col">Healer / Shield</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <?php foreach (array_slice($preview['students'], 0, 25) as $stu): ?>
+                                        <?php foreach (array_slice($preview['students'], 0, 25) as $idx => $stu):
+                                            $hPlan = $utHealing['rows'][$idx] ?? null;
+                                        ?>
                                         <tr>
-                                            <td class="c-roll"><?= sanitize($stu['roll_no']) ?></td>
+                                            <td class="c-roll">
+                                                <?= sanitize($stu['roll_no']) ?>
+                                                <?php if ($hPlan && !empty($hPlan['suggested_roll'])): ?>
+                                                    <div style="font-size:0.7rem;color:#b45309;font-weight:700;">&rarr; #<?= sanitize($hPlan['suggested_roll']) ?></div>
+                                                <?php endif; ?>
+                                            </td>
                                             <td class="c-name"><?= sanitize($stu['student_name']) ?></td>
                                             <?php foreach ($preview['subjects'] as $sName => $sMax): ?>
                                                 <?php $m = $stu['marks'][$sName] ?? null; ?>
-                                                <td class="c-c"><?= ($m && !empty($m['is_absent'])) ? '<span class="is-absent">–</span>' : sanitize((string)($m['marks_obtained'] ?? '0')) ?></td>
+                                                <td class="c-c">
+                                                    <?php if ($m && !empty($m['is_absent'])): ?>
+                                                        <span class="is-absent" title="Absent">AB</span>
+                                                    <?php elseif ($m && !empty($m['is_blank'])): ?>
+                                                        <span class="is-missing" title="Blank / unentered">—</span>
+                                                    <?php else: ?>
+                                                        <?= sanitize((string)($m['marks_obtained'] ?? '')) ?>
+                                                    <?php endif; ?>
+                                                </td>
                                             <?php endforeach; ?>
                                             <td class="c-total"><?= sanitize((string)$stu['total_obtained']) ?></td>
                                             <td class="c-c"><?= $stu['percentage'] !== null ? sanitize((string)$stu['percentage']) . '%' : '–' ?></td>
                                             <td class="c-c"><strong><?= sanitize($stu['grade']) ?></strong></td>
                                             <td><?= sanitize($stu['remark']) !== '' ? sanitize($stu['remark']) : '<span class="is-missing">—</span>' ?></td>
                                             <td class="c-c"><?= sanitize($stu['attendance']) !== '' ? sanitize($stu['attendance']) : '–' ?></td>
+                                            <td style="font-size:0.75rem;">
+                                                <?php if ($hPlan && !empty($hPlan['suggested_roll'])): ?>
+                                                    <span class="imp-chip" style="background:#fef3c7;border-color:#f59e0b;color:#92400e;" title="<?= e_attr($hPlan['heal_reason']) ?>">Swap &rarr; #<?= sanitize($hPlan['suggested_roll']) ?></span>
+                                                <?php endif; ?>
+                                                <?php if ($hPlan && !empty($hPlan['shielded_fields'])): ?>
+                                                    <span class="imp-chip" style="background:#ecfdf5;border-color:#6ee7b7;color:#065f46;">Keep <?= sanitize(implode('/', $hPlan['shielded_fields'])) ?></span>
+                                                <?php endif; ?>
+                                                <?php if (!empty($stu['clamped_subjects'])): ?>
+                                                    <span class="imp-chip" style="background:#fee2e2;border-color:#fca5a5;color:#991b1b;">Clamped</span>
+                                                <?php endif; ?>
+                                                <?php if ((!$hPlan || (empty($hPlan['suggested_roll']) && empty($hPlan['shielded_fields']))) && empty($stu['clamped_subjects'])): ?>
+                                                    <span style="color:#94a3b8;">OK</span>
+                                                <?php endif; ?>
+                                            </td>
                                         </tr>
                                         <?php endforeach; ?>
                                     </tbody>
@@ -824,13 +1154,21 @@ $notifData = rcGetRecentNotifications(8);
                         <form method="POST" id="confirmForm">
                             <?= csrfField() ?>
                             <input type="hidden" name="action" value="confirm_import">
+                            <input type="hidden" name="confirm_token" value="<?= sanitize($_SESSION['ut_confirm_token'] ?? '') ?>">
                             <input type="hidden" name="selected_sheet" value="<?= sanitize($preview['sheet_name']) ?>">
 
                             <label class="imp-switch" for="singleOverwrite">
                                 <input type="checkbox" name="overwrite" id="singleOverwrite" value="1" checked>
                                 <span class="imp-switch-text">
                                     <strong>Overwrite existing records</strong><br>
-                                    Replaces Unit Test rows already stored for this class.
+                                    Replaces Unit Test rows already stored for this class (Metadata Shield still preserves parent phone &amp; signatures).
+                                </span>
+                            </label>
+                            <label class="imp-switch" for="singleAutoHeal">
+                                <input type="checkbox" name="apply_roll_heal" id="singleAutoHeal" value="1" checked>
+                                <span class="imp-switch-text">
+                                    <strong>Apply Auto-Healer roll number alignments</strong><br>
+                                    Aligns swapped/shifted roll numbers with existing cohort records before saving.
                                 </span>
                             </label>
 

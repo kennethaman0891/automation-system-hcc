@@ -32,10 +32,20 @@ $notifData  = rcGetRecentNotifications(8);
 $classOptions = rcGetUnitTestClassOptions();
 
 // Filter parameters with fallbacks
-$year     = trim($_GET['year'] ?? '2025-26');
-$std      = trim($_GET['std'] ?? '1');
-$division = trim($_GET['division'] ?? 'A');
-$testType = trim($_GET['test_type'] ?? 'Unit Test 2');
+$activeYear  = rcGetActiveAcademicYear();
+$year        = trim($_GET['year'] ?? $activeYear);
+if ($year === '') $year = $activeYear;
+$std         = trim($_GET['std'] ?? '1');
+$division    = trim($_GET['division'] ?? 'A');
+$testType    = trim($_GET['test_type'] ?? 'Unit Test 2');
+$yearOptions = rcGetAcademicYearOptions();
+if (!in_array($year, $yearOptions, true)) array_unshift($yearOptions, $year);
+
+$preferSem = in_array($testType, ['Unit Test 3', 'Unit Test 4'], true) ? 'Sem 2' : 'Sem 1';
+$semStmt = $db->prepare("SELECT semester FROM report_card WHERE academic_year = ? AND std = ? AND division = ? ORDER BY (semester = ?) DESC, id ASC LIMIT 1");
+$semStmt->execute([$year, $std, $division, $preferSem]);
+$cohortSem = trim((string)$semStmt->fetchColumn()) ?: $preferSem;
+$cohortClassKey = rcBuildClassKey($year, $std, $division, $cohortSem);
 
 $romanMap = ['1'=>'I','2'=>'II','3'=>'III','4'=>'IV','5'=>'V','6'=>'VI','7'=>'VII','8'=>'VIII','9'=>'IX','10'=>'X'];
 $romanStd = $romanMap[(string)$std] ?? $std;
@@ -1274,8 +1284,9 @@ $pageTitle = ($edit ? 'Edit Student Entry' : 'Add New Student Entry') . ' — ' 
                     <label class="tp-field">
                         <span><i class="fa-solid fa-calendar-days"></i> Year</span>
                         <select name="year" class="form-control" onchange="this.form.submit()">
-                            <option value="2025-26" <?= $year === '2025-26' ? 'selected' : '' ?>>2025-26</option>
-                            <option value="2024-25" <?= $year === '2024-25' ? 'selected' : '' ?>>2024-25</option>
+                            <?php foreach ($yearOptions as $yOpt): ?>
+                                <option value="<?= sanitize($yOpt) ?>" <?= $year === $yOpt ? 'selected' : '' ?>><?= sanitize($yOpt) ?></option>
+                            <?php endforeach; ?>
                         </select>
                     </label>
 
@@ -1432,7 +1443,7 @@ $pageTitle = ($edit ? 'Edit Student Entry' : 'Add New Student Entry') . ' — ' 
                             <i class="fa-solid fa-receipt"></i>
                             <span>Parent Slips</span>
                         </a>
-                        <a href="whatsapp_share.php?doc_type=unit_test&test_type=<?= urlencode($testType) ?>&class=<?= urlencode(rcBuildClassKey($year, $std, $division, 'Sem 1')) ?>&selected_rolls=<?= urlencode($targetRoll) ?>" class="sns-btn sns-btn--whatsapp" title="Share Student Slip via WhatsApp">
+                        <a href="whatsapp_share.php?doc_type=unit_test&test_type=<?= urlencode($testType) ?>&class=<?= urlencode($cohortClassKey) ?>&selected_rolls=<?= urlencode($targetRoll) ?>" class="sns-btn sns-btn--whatsapp" title="Share Student Slip via WhatsApp">
                             <i class="fa-brands fa-whatsapp"></i>
                             <span>WhatsApp</span>
                         </a>

@@ -220,6 +220,7 @@ class WaAiAdmissionAssistant extends HTMLElement {
   }
 
   render() {
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
     const chat = this.store?.activeChat;
     const d = this.currentDraft;
 
@@ -565,21 +566,21 @@ class WaAiAdmissionAssistant extends HTMLElement {
           <!-- Intent & Extracted Entities Row -->
           <div class="wa-meta-row">
             <span class="wa-chip wa-chip-intent">
-              🎯 ${d.intent || 'Admission enquiry'} (${Math.round((d.confidence || 0.95) * 100)}%)
+              🎯 ${esc(d.intent || 'Admission enquiry')} (${Math.round((Number(d.confidence) || 0.95) * 100)}%)
             </span>
             ${d.extracted_student_details?.grade_applying_for ? `
               <span class="wa-chip">
-                🎓 Grade: <strong>${d.extracted_student_details.grade_applying_for}</strong>
+                🎓 Grade: <strong>${esc(d.extracted_student_details.grade_applying_for)}</strong>
               </span>
             ` : ''}
             ${d.extracted_parent_details?.name ? `
               <span class="wa-chip">
-                👤 Parent: <strong>${d.extracted_parent_details.name}</strong>
+                👤 Parent: <strong>${esc(d.extracted_parent_details.name)}</strong>
               </span>
             ` : ''}
             ${d.extracted_student_details?.name ? `
               <span class="wa-chip">
-                👶 Student: <strong>${d.extracted_student_details.name}</strong>
+                👶 Student: <strong>${esc(d.extracted_student_details.name)}</strong>
               </span>
             ` : ''}
             <span class="wa-chip">
@@ -591,7 +592,7 @@ class WaAiAdmissionAssistant extends HTMLElement {
           ${d.relevant_knowledge_sources && d.relevant_knowledge_sources.length ? `
             <div class="wa-sources-row">
               <span>Approved Knowledge Cited:</span>
-              ${d.relevant_knowledge_sources.map(s => `<span class="wa-source-pill">📜 ${s}</span>`).join('')}
+              ${d.relevant_knowledge_sources.map(s => `<span class="wa-source-pill">📜 ${esc(s)}</span>`).join('')}
             </div>
           ` : ''}
 
@@ -599,7 +600,7 @@ class WaAiAdmissionAssistant extends HTMLElement {
           ${d.escalation_required ? `
             <div class="wa-alert-banner wa-alert-danger">
               <span>🚨</span>
-              <span><strong>Escalation Required:</strong> ${d.escalation_reason || 'Staff verification required'}</span>
+              <span><strong>Escalation Required:</strong> ${esc(d.escalation_reason || 'Staff verification required')}</span>
             </div>
           ` : ''}
 
@@ -607,13 +608,13 @@ class WaAiAdmissionAssistant extends HTMLElement {
           ${d.missing_information && d.missing_information.length ? `
             <div class="wa-alert-banner wa-alert-warning">
               <span>ℹ️</span>
-              <span><strong>Missing info:</strong> ${d.missing_information.join('; ')}</span>
+              <span><strong>Missing info:</strong> ${d.missing_information.map(esc).join('; ')}</span>
             </div>
           ` : ''}
 
           <!-- Draft Response Box -->
           <div class="wa-draft-card">
-            <textarea class="wa-draft-textarea" id="draft-textarea" placeholder="AI Response Draft...">${d.response_draft || ''}</textarea>
+            <textarea class="wa-draft-textarea" id="draft-textarea" placeholder="AI Response Draft..."></textarea>
             <div class="wa-draft-footer">
               <div class="wa-draft-actions-left">
                 <button class="wa-btn-sm" id="btn-copy-composer" title="Load draft into message composer">
@@ -642,6 +643,11 @@ class WaAiAdmissionAssistant extends HTMLElement {
         `}
       </div>
     `;
+
+    const taEl = this.shadowRoot.querySelector('#draft-textarea');
+    if (taEl && d) {
+      taEl.value = d.response_draft || '';
+    }
 
     this.bindEvents();
     this.updateHeaderStatus();

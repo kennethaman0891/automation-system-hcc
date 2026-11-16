@@ -827,6 +827,354 @@ case 'create_enquiry':
     airJson(['success' => true, 'enquiry_id' => $eid, 'draft' => airFormatDraft(airDraftRow($db, $id))]);
     break;
 
+case 'result_copilot_draft':
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') airJson(['success' => false, 'error' => 'POST required'], 405);
+    airRequireCsrf($input);
+
+    $chatId = (int)($input['chat_id'] ?? 0);
+    $rollNo = trim((string)($input['roll_no'] ?? ''));
+    $classKey = trim((string)($input['class_key'] ?? ''));
+    $phoneIn = preg_replace('/\D+/', '', (string)($input['phone'] ?? ''));
+    $parentMessage = trim((string)($input['parent_message'] ?? ''));
+
+    $chat = null;
+    if ($chatId > 0) {
+        $st = $db->prepare('SELECT id, wa_chat_id, name, linked_student_roll, linked_class_key FROM whatsapp_chats WHERE id = ? LIMIT 1');
+        $st->execute([$chatId]);
+        $chat = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+        if ($chat) {
+            if ($rollNo === '' && !empty($chat['linked_student_roll'])) {
+                $rollNo = trim((string)$chat['linked_student_roll']);
+            }
+            if ($classKey === '' && !empty($chat['linked_class_key'])) {
+                $classKey = trim((string)$chat['linked_class_key']);
+            }
+            if (($rollNo === '' || $phoneIn === '') && !empty($chat['wa_chat_id'])) {
+                $cst = $db->prepare('SELECT phone_e164, linked_student_roll, linked_class_key FROM whatsapp_contacts WHERE wa_id = ? LIMIT 1');
+                $cst->execute([$chat['wa_chat_id']]);
+                if ($crow = $cst->fetch(PDO::FETCH_ASSOC)) {
+                    if ($rollNo === '' && !empty($crow['linked_student_roll'])) $rollNo = trim((string)$crow['linked_student_roll']);
+                    if ($classKey === '' && !empty($crow['linked_class_key'])) $classKey = trim((string)$crow['linked_class_key']);
+                    if ($phoneIn === '' && !empty($crow['phone_e164'])) $phoneIn = preg_replace('/\D+/', '', (string)$crow['phone_e164']);
+                }
+            }
+            if ($phoneIn === '') {
+                $phMeta = airPhoneFromWaChatId($chat['wa_chat_id'] ?? '');
+                if (!empty($phMeta['phone'])) $phoneIn = $phMeta['phone'];
+            }
+            if ($parentMessage === '') {
+                $mst = $db->prepare('SELECT body FROM whatsapp_messages WHERE chat_id = ? AND from_me = 0 ORDER BY id DESC LIMIT 1');
+                $mst->execute([$chatId]);
+                $parentMessage = trim((string)($mst->fetchColumn() ?: ''));
+            }
+        }
+    }
+
+    $last10 = strlen($phoneIn) >= 10 ? substr($phoneIn, -10) : '';
+    if ($rollNo === '' && $last10 === '') {
+        airJson([
+            'success' => false,
+            'code' => 'no_student_linked',
+            'error' => 'No student record linked to this chat or phone number. Link a student first.',
+        ], 404);
+    }
+
+    // 1. Lookup latest Report Card rows
+    $rcHeader = null;
+    if ($rollNo !== '') {
+        if ($classKey !== '') {
+            $st = $db->prepare("
+                SELECT academic_year, std, division, semester, roll_no, student_name, attendance, remark, parent_phone
+                FROM report_card
+                WHERE roll_no = ? AND (CONCAT(std, '-', division) = ? OR std = ?)
+                ORDER BY academic_year DESC, semester DESC
+                LIMIT 1
+            ");
+            $st->execute([$rollNo, $classKey, $classKey]);
+            $rcHeader = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+        }
+        if (!$rcHeader) {
+            $st = $db->prepare("
+                SELECT academic_year, std, division, semester, roll_no, student_name, attendance, remark, parent_phone
+                FROM report_card
+                WHERE roll_no = ?
+                ORDER BY academic_year DESC, semester DESC
+                LIMIT 1
+            ");
+            $st->execute([$rollNo]);
+            $rcHeader = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+        }
+    }
+    if (!$rcHeader && $last10 !== '') {
+        $st = $db->prepare("
+            SELECT academic_year, std, division, semester, roll_no, student_name, attendance, remark, parent_phone
+            FROM report_card
+            WHERE parent_phone LIKE ?
+            ORDER BY academic_year DESC, semester DESC
+            LIMIT 1
+        ");
+        $st->execute(['%' . $last10]);
+        $rcHeader = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+    }
+
+    $subjects = [];
+    $overallObtained = 0.0;
+    $overallMax = 0.0;
+    $examLabel = null;
+    $studentMeta = null;
+
+    if ($rcHeader) {
+        $stSubs = $db->prepare("
+            SELECT subject_name, fa_max, fa_obtained, sa_max, sa_obtained
+            FROM report_card
+            WHERE academic_year = ? AND std = ? AND division = ? AND semester = ? AND roll_no = ?
+            ORDER BY id ASC
+        ");
+        $stSubs->execute([
+            $rcHeader['academic_year'],
+            $rcHeader['std'],
+            $rcHeader['division'],
+            $rcHeader['semester'],
+            $rcHeader['roll_no'],
+        ]);
+        foreach ($stSubs->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $max = (float)$r['fa_max'] + (float)$r['sa_max'];
+            $obt = (float)$r['fa_obtained'] + (float)$r['sa_obtained'];
+            if ($max <= 0) continue;
+            $overallObtained += $obt;
+            $overallMax += $max;
+            $grade = calculateGrade(($obt / $max) * 100);
+            $subjects[] = [
+                'subject_name' => (string)$r['subject_name'],
+                'obtained' => $obt,
+                'max' => $max,
+                'grade' => $grade,
+                'is_absent' => false,
+            ];
+        }
+        $examLabel = 'Semester ' . $rcHeader['semester'] . ' (' . $rcHeader['academic_year'] . ')';
+        $studentMeta = [
+            'student_name' => (string)$rcHeader['student_name'],
+            'roll_no' => (string)$rcHeader['roll_no'],
+            'class_label' => 'STD ' . $rcHeader['std'] . ' ' . $rcHeader['division'],
+            'academic_year' => (string)$rcHeader['academic_year'],
+            'attendance' => $rcHeader['attendance'] ?? null,
+            'remark' => $rcHeader['remark'] ?? null,
+            'source' => 'report_card',
+        ];
+    }
+
+    // 2. Fallback or supplement from unit_test_results
+    $utHeader = null;
+    $targetRoll = $rcHeader['roll_no'] ?? $rollNo;
+    if ($targetRoll !== '') {
+        if ($rcHeader) {
+            $ust = $db->prepare("
+                SELECT academic_year, std, division, test_type, roll_no, student_name, attendance, remark
+                FROM unit_test_results
+                WHERE roll_no = ? AND std = ? AND division = ?
+                ORDER BY academic_year DESC, FIELD(test_type, 'UT2', 'UT1', 'Unit Test 2', 'Unit Test 1') ASC, id DESC
+                LIMIT 1
+            ");
+            $ust->execute([$targetRoll, $rcHeader['std'], $rcHeader['division']]);
+            $utHeader = $ust->fetch(PDO::FETCH_ASSOC) ?: null;
+        } elseif ($classKey !== '') {
+            $ust = $db->prepare("
+                SELECT academic_year, std, division, test_type, roll_no, student_name, attendance, remark
+                FROM unit_test_results
+                WHERE roll_no = ? AND (CONCAT(std, '-', division) = ? OR std = ?)
+                ORDER BY academic_year DESC, id DESC
+                LIMIT 1
+            ");
+            $ust->execute([$targetRoll, $classKey, $classKey]);
+            $utHeader = $ust->fetch(PDO::FETCH_ASSOC) ?: null;
+        } else {
+            $ust = $db->prepare("
+                SELECT academic_year, std, division, test_type, roll_no, student_name, attendance, remark
+                FROM unit_test_results
+                WHERE roll_no = ?
+                ORDER BY academic_year DESC, id DESC
+                LIMIT 1
+            ");
+            $ust->execute([$targetRoll]);
+            $utHeader = $ust->fetch(PDO::FETCH_ASSOC) ?: null;
+        }
+    }
+
+    if (!$subjects && $utHeader) {
+        $ustSubs = $db->prepare("
+            SELECT subject_name, max_marks, marks_obtained, is_absent, grade
+            FROM unit_test_results
+            WHERE academic_year = ? AND std = ? AND division = ? AND test_type = ? AND roll_no = ?
+            ORDER BY id ASC
+        ");
+        $ustSubs->execute([
+            $utHeader['academic_year'],
+            $utHeader['std'],
+            $utHeader['division'],
+            $utHeader['test_type'],
+            $utHeader['roll_no'],
+        ]);
+        foreach ($ustSubs->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $max = (float)$r['max_marks'];
+            $obt = (float)$r['marks_obtained'];
+            $abs = !empty($r['is_absent']);
+            if ($max > 0 && !$abs) {
+                $overallObtained += $obt;
+                $overallMax += $max;
+            }
+            $subjects[] = [
+                'subject_name' => (string)$r['subject_name'],
+                'obtained' => $obt,
+                'max' => $max,
+                'grade' => $r['grade'] ?: ($max > 0 ? calculateGrade(($obt / $max) * 100) : null),
+                'is_absent' => $abs,
+            ];
+        }
+        $examLabel = (string)$utHeader['test_type'] . ' (' . $utHeader['academic_year'] . ')';
+        $studentMeta = [
+            'student_name' => (string)$utHeader['student_name'],
+            'roll_no' => (string)$utHeader['roll_no'],
+            'class_label' => 'STD ' . $utHeader['std'] . ' ' . $utHeader['division'],
+            'academic_year' => (string)$utHeader['academic_year'],
+            'attendance' => $utHeader['attendance'] ?? null,
+            'remark' => $utHeader['remark'] ?? null,
+            'source' => 'unit_test_results',
+        ];
+    }
+
+    if (!$studentMeta) {
+        airJson([
+            'success' => false,
+            'code' => 'no_student_linked',
+            'error' => 'No report card or unit test marks found for this student.',
+        ], 404);
+    }
+
+    $pct = $overallMax > 0 ? round(($overallObtained / $overallMax) * 100, 2) : null;
+    $overallGrade = $pct !== null ? calculateGrade($pct) : null;
+    $timingsPath = __DIR__ . '/../knowledge/approved/school_timings.json';
+    $timingsData = is_file($timingsPath) ? json_decode((string)file_get_contents($timingsPath), true) : null;
+
+    $serviceUrl = rtrim((string)(getenv('RUST_AI_SERVICE_URL') ?: 'http://127.0.0.1:8085'), '/');
+    $copilotReq = [
+        'chat_id' => $chatId > 0 ? $chatId : null,
+        'student_name' => $studentMeta['student_name'],
+        'roll_no' => $studentMeta['roll_no'],
+        'class_label' => $studentMeta['class_label'],
+        'academic_year' => $studentMeta['academic_year'],
+        'exam_label' => $examLabel,
+        'parent_name' => $chat['name'] ?? null,
+        'parent_message' => $parentMessage !== '' ? airBoundParentText($parentMessage, 1500) : null,
+        'subjects' => $subjects,
+        'overall_obtained' => $overallMax > 0 ? $overallObtained : null,
+        'overall_max' => $overallMax > 0 ? $overallMax : null,
+        'percentage' => $pct,
+        'overall_grade' => $overallGrade,
+        'attendance' => $studentMeta['attendance'],
+        'remark' => $studentMeta['remark'],
+        'school_timings' => is_array($timingsData) ? $timingsData : null,
+    ];
+
+    $draftText = '';
+    $weakSubjects = [];
+    $strongSubjects = [];
+    $usedOllama = false;
+    $sourceEngine = 'php_deterministic';
+
+    // Call Rust Admission AI Service :8085 with X-AI-Service-Secret header
+    $ch = curl_init($serviceUrl . '/api/result-copilot');
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($copilotReq),
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => airAiServiceHeaders(['Content-Type: application/json', 'Accept: application/json']),
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_CONNECTTIMEOUT => 2,
+    ]);
+    $resp = curl_exec($ch);
+    $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($httpCode === 200 && $resp) {
+        $j = json_decode($resp, true);
+        if (is_array($j) && !empty($j['draft_reply'])) {
+            $draftText = (string)$j['draft_reply'];
+            $weakSubjects = $j['weak_subjects'] ?? [];
+            $strongSubjects = $j['strong_subjects'] ?? [];
+            $usedOllama = !empty($j['used_ollama']);
+            $sourceEngine = $usedOllama ? 'rust_ollama' : 'rust_deterministic';
+        }
+    }
+
+    if ($draftText === '') {
+        foreach ($subjects as $s) {
+            if (!empty($s['is_absent'])) {
+                $weakSubjects[] = $s['subject_name'] . ' (Absent)';
+            } elseif ($s['max'] > 0) {
+                $sp = ($s['obtained'] / $s['max']) * 100;
+                if ($sp >= 75) {
+                    $strongSubjects[] = $s['subject_name'] . ' (' . $s['obtained'] . '/' . $s['max'] . ')';
+                } elseif ($sp < 45) {
+                    $weakSubjects[] = $s['subject_name'] . ' (' . $s['obtained'] . '/' . $s['max'] . ')';
+                }
+            }
+        }
+        $officeHours = $timingsData['admission_office_and_visitor_timings']['office_enquiry_hours']
+            ?? 'Monday to Saturday, 09:00 AM to 03:30 PM';
+        $subLines = array_map(function ($s) {
+            return !empty($s['is_absent'])
+                ? "• {$s['subject_name']}: Absent / {$s['max']}"
+                : "• {$s['subject_name']}: {$s['obtained']}/{$s['max']}" . (!empty($s['grade']) ? " ({$s['grade']})" : '');
+        }, $subjects);
+
+        $disc = airDiscoverLocalAi();
+        if (!empty($disc['ollama'])) {
+            $safeMsg = $parentMessage !== '' ? airBoundParentText($parentMessage, 1200) : 'Parent enquired about student exam performance.';
+            $olPrompt = "Draft a warm, empathetic, factual WhatsApp reply for an HCC High School parent about {$studentMeta['student_name']} ({$studentMeta['class_label']}, Roll {$studentMeta['roll_no']}, {$examLabel}).\n"
+                . "Cite ONLY these exact marks (never invent numbers): " . implode('; ', $subLines)
+                . ($pct !== null ? " | Total: {$overallObtained}/{$overallMax} ({$pct}%, Grade {$overallGrade})." : '')
+                . "\nSchool Visitor Hours: {$officeHours}\n<PARENT_MESSAGE>\n{$safeMsg}\n</PARENT_MESSAGE>\nReturn JSON: {\"draft_reply\":\"...\"}";
+            $gen = airCallOllamaGenerate($olPrompt, $disc['default_model'], 35);
+            if (!empty($gen['ok']) && !empty($gen['raw'])) {
+                $parsed = json_decode((string)$gen['raw'], true);
+                if (is_array($parsed) && !empty($parsed['draft_reply'])) {
+                    $draftText = trim((string)$parsed['draft_reply']);
+                    $usedOllama = true;
+                    $sourceEngine = 'php_ollama';
+                }
+            }
+        }
+
+        if ($draftText === '') {
+            $parentSal = !empty($chat['name']) ? 'Respected ' . $chat['name'] : 'Respected Parent';
+            $draftText = "{$parentSal},\n\nHere is the {$examLabel} progress update for {$studentMeta['student_name']} ({$studentMeta['class_label']}):\n"
+                . ($pct !== null ? "Overall Score: {$overallObtained}/{$overallMax} ({$pct}%, Grade {$overallGrade})\n" : '')
+                . (!empty($studentMeta['attendance']) ? "Attendance: {$studentMeta['attendance']}\n" : '')
+                . "Subjects:\n" . implode("\n", $subLines) . "\n\n"
+                . ($strongSubjects ? "Strengths: " . implode(', ', $strongSubjects) . ".\n" : '')
+                . ($weakSubjects ? "Areas needing regular revision: " . implode(', ', $weakSubjects) . ".\n" : "Performance is steady across subjects.\n")
+                . "\nFor teacher consultation, please visit during school office hours ({$officeHours}).\n\nWarm regards,\nHCC High School, Solapur";
+        }
+    }
+
+    airJson([
+        'success' => true,
+        'draft_text' => $draftText,
+        'student' => $studentMeta,
+        'exam_label' => $examLabel,
+        'percentage' => $pct,
+        'overall_grade' => $overallGrade,
+        'subjects' => $subjects,
+        'weak_subjects' => $weakSubjects,
+        'strong_subjects' => $strongSubjects,
+        'used_ollama' => $usedOllama,
+        'source' => $sourceEngine,
+        'send_on_press' => true,
+        'sent_immediately' => false,
+    ]);
+    break;
+
 case 'delete_draft':
     if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') airJson(['success' => false, 'error' => 'POST required'], 405);
     airRequireCsrf($input);

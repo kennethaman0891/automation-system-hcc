@@ -17,6 +17,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/includes/whatsapp_functions.php';
+require_once __DIR__ . '/includes/admission_ai_review.php';
 require_once __DIR__ . '/auth_check.php';
 
 // Authenticate session
@@ -31,7 +32,16 @@ if ($currentUserName === '') {
     $currentUserName = 'Administrator';
 }
 
-$action = trim($_GET['action'] ?? ($_POST['action'] ?? ''));
+$afRawBody = file_get_contents('php://input');
+$afJsonBody = [];
+if (is_string($afRawBody) && $afRawBody !== '') {
+    $decoded = json_decode($afRawBody, true);
+    if (is_array($decoded)) {
+        $afJsonBody = $decoded;
+    }
+}
+
+$action = trim((string)($_GET['action'] ?? $_POST['action'] ?? $afJsonBody['action'] ?? ''));
 
 function sendJson(array $data, int $code = 200): void {
     http_response_code($code);
@@ -40,9 +50,95 @@ function sendJson(array $data, int $code = 200): void {
 }
 
 function verifyApiCSRF(): void {
-    if (!verifyCSRFToken()) {
-        sendJson(['success' => false, 'error' => 'Security token invalid or expired. Please refresh the page.'], 403);
+    global $afJsonBody;
+    if (verifyCSRFToken()) {
+        return;
     }
+    $expected = (string)($_SESSION['csrf_token'] ?? '');
+    $jsonToken = (string)($afJsonBody['csrf_token'] ?? '');
+    if ($expected !== '' && $jsonToken !== '' && hash_equals($expected, $jsonToken)) {
+        return;
+    }
+    sendJson(['success' => false, 'error' => 'Security token invalid or expired. Please refresh the page.'], 403);
+}
+
+function afFindEngineBinary(): string {
+    $isWin = (PHP_OS_FAMILY === 'Windows');
+    $exeSuffix = $isWin ? '.exe' : '';
+    $binaryCandidates = [
+        __DIR__ . '/../automation/bin/hcc-automation-engine' . $exeSuffix,
+        __DIR__ . '/../automation/rust_engine/target/release/hcc-automation-engine' . $exeSuffix,
+    ];
+    if ($isWin) {
+        $binaryCandidates[] = __DIR__ . '/../automation/bin/hcc-automation-engine';
+        $binaryCandidates[] = __DIR__ . '/../automation/rust_engine/target/release/hcc-automation-engine';
+    }
+    foreach ($binaryCandidates as $cand) {
+        if (file_exists($cand) && ($isWin || is_executable($cand))) {
+            return $cand;
+        }
+    }
+    return '';
+}
+
+function afBuildChildEnv(): array {
+    $env = [];
+    $inherited = getenv();
+    if (is_array($inherited)) {
+        foreach ($inherited as $k => $v) {
+            if (is_string($k) && is_scalar($v)) {
+                $env[$k] = (string)$v;
+            }
+        }
+    }
+    $env['DB_HOST'] = defined('DB_HOST') ? (string)DB_HOST : ($env['DB_HOST'] ?? '127.0.0.1');
+    $env['DB_PORT'] = defined('DB_PORT') ? (string)DB_PORT : ($env['DB_PORT'] ?? '3306');
+    $env['DB_USER'] = defined('DB_USER') ? (string)DB_USER : ($env['DB_USER'] ?? 'hcc_app');
+    $env['DB_PASS'] = defined('DB_PASS') ? (string)DB_PASS : ($env['DB_PASS'] ?? '');
+    $env['DB_NAME'] = defined('DB_NAME') ? (string)DB_NAME : ($env['DB_NAME'] ?? 'hcc_admin');
+    if (defined('DB_SOCKET') && (string)DB_SOCKET !== '') {
+        $env['DB_SOCKET'] = (string)DB_SOCKET;
+    }
+    $aiSecret = airAiServiceSecret();
+    if ($aiSecret !== '') {
+        $env['AI_SERVICE_SECRET'] = $aiSecret;
+    }
+    return $env;
+}
+
+/**
+ * Invoke hcc-automation-engine via proc_open with DB credentials in child environment (never CLI args).
+ *
+ * @return array{exit_code:int,stdout:string,stderr:string}
+ */
+function afRunAutomationEngine(string $binaryPath, string $flag = '--once'): array {
+    $descriptors = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ];
+    $childEnv = afBuildChildEnv();
+    $proc = @proc_open([$binaryPath, $flag], $descriptors, $pipes, dirname($binaryPath), $childEnv);
+    if (!is_resource($proc)) {
+        return ['exit_code' => -1, 'stdout' => '', 'stderr' => 'Unable to spawn hcc-automation-engine'];
+    }
+    if (isset($pipes[0]) && is_resource($pipes[0])) {
+        fclose($pipes[0]);
+    }
+    $stdout = isset($pipes[1]) && is_resource($pipes[1]) ? (string)stream_get_contents($pipes[1]) : '';
+    if (isset($pipes[1]) && is_resource($pipes[1])) {
+        fclose($pipes[1]);
+    }
+    $stderr = isset($pipes[2]) && is_resource($pipes[2]) ? (string)stream_get_contents($pipes[2]) : '';
+    if (isset($pipes[2]) && is_resource($pipes[2])) {
+        fclose($pipes[2]);
+    }
+    $exitCode = proc_close($proc);
+    return [
+        'exit_code' => $exitCode,
+        'stdout' => trim($stdout),
+        'stderr' => trim($stderr),
+    ];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -662,23 +758,19 @@ if ($action === 'cancel') {
 if ($action === 'engine_status') {
     try {
         $isWin = (PHP_OS_FAMILY === 'Windows');
-        $exeSuffix = $isWin ? '.exe' : '';
-        $binaryCandidates = [
-            __DIR__ . '/../automation/bin/hcc-automation-engine' . $exeSuffix,
-            __DIR__ . '/../automation/rust_engine/target/release/hcc-automation-engine' . $exeSuffix,
-        ];
-        if ($isWin) {
-            $binaryCandidates[] = __DIR__ . '/../automation/bin/hcc-automation-engine';
-            $binaryCandidates[] = __DIR__ . '/../automation/rust_engine/target/release/hcc-automation-engine';
-        }
-        $binaryPath = '';
-        foreach ($binaryCandidates as $cand) {
-            if (file_exists($cand) && ($isWin || is_executable($cand))) {
-                $binaryPath = $cand;
-                break;
+        $binaryPath = afFindEngineBinary();
+        $hasBinary = ($binaryPath !== '');
+
+        $liveStatus = null;
+        if ($hasBinary) {
+            $statusExec = afRunAutomationEngine($binaryPath, '--status');
+            if ($statusExec['exit_code'] === 0 && $statusExec['stdout'] !== '') {
+                $decodedStatus = json_decode($statusExec['stdout'], true);
+                if (is_array($decodedStatus)) {
+                    $liveStatus = $decodedStatus;
+                }
             }
         }
-        $hasBinary = ($binaryPath !== '');
 
         // Fetch queue stats from MySQL
         $pendingJobs = (int)$db->query("SELECT COUNT(*) FROM automation_jobs WHERE status = 'pending'")->fetchColumn();
@@ -688,7 +780,7 @@ if ($action === 'engine_status') {
 
         // Recent job executions
         $recentExecutions = $db->query("
-            SELECT * FROM automation_job_history 
+            SELECT * FROM automation_job_history
             ORDER BY id DESC LIMIT 10
         ")->fetchAll(PDO::FETCH_ASSOC);
 
@@ -722,6 +814,7 @@ if ($action === 'engine_status') {
                 'binary_path' => $binaryPath,
                 'daemon_running' => $daemonRunning,
                 'daemon_pid' => $daemonPid,
+                'live_status' => $liveStatus,
                 'queue' => [
                     'pending' => $pendingJobs,
                     'processing' => $processingJobs,
@@ -729,7 +822,7 @@ if ($action === 'engine_status') {
                     'failed' => $failedJobs,
                 ],
                 'recent_executions' => $recentExecutions,
-            ]
+            ],
         ]);
     } catch (\Throwable $e) {
         sendJson(['success' => false, 'error' => $e->getMessage()], 500);
@@ -737,33 +830,19 @@ if ($action === 'engine_status') {
 }
 
 if ($action === 'run_engine') {
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+        sendJson(['success' => false, 'error' => 'Method Not Allowed: POST required'], 405);
+    }
     verifyApiCSRF();
     try {
-        $isWin = (PHP_OS_FAMILY === 'Windows');
-        $exeSuffix = $isWin ? '.exe' : '';
-        $binaryCandidates = [
-            __DIR__ . '/../automation/bin/hcc-automation-engine' . $exeSuffix,
-            __DIR__ . '/../automation/rust_engine/target/release/hcc-automation-engine' . $exeSuffix,
-        ];
-        if ($isWin) {
-            $binaryCandidates[] = __DIR__ . '/../automation/bin/hcc-automation-engine';
-            $binaryCandidates[] = __DIR__ . '/../automation/rust_engine/target/release/hcc-automation-engine';
-        }
-        $binaryPath = '';
-        foreach ($binaryCandidates as $cand) {
-            if (file_exists($cand) && ($isWin || is_executable($cand))) {
-                $binaryPath = $cand;
-                break;
-            }
-        }
-
+        $binaryPath = afFindEngineBinary();
         $engineOutput = '';
         $returnCode = 0;
 
         if ($binaryPath !== '' && file_exists($binaryPath)) {
-            $cmd = escapeshellcmd($binaryPath) . ' --once 2>&1';
-            exec($cmd, $lines, $returnCode);
-            $engineOutput = implode("\n", $lines);
+            $res = afRunAutomationEngine($binaryPath, '--once');
+            $returnCode = (int)$res['exit_code'];
+            $engineOutput = trim($res['stdout'] . ($res['stderr'] !== '' ? "\n" . $res['stderr'] : ''));
         } else {
             // PHP fallback runner for pure-environment compatibility
             $engineOutput = runPhpFallbackEngine($db);
@@ -773,7 +852,304 @@ if ($action === 'run_engine') {
             'success' => $returnCode === 0,
             'output' => $engineOutput,
             'exit_code' => $returnCode,
-            'message' => 'Automation engine executed successfully.'
+            'message' => $returnCode === 0 ? 'Automation engine executed successfully.' : 'Automation engine reported a failure.',
+        ]);
+    } catch (\Throwable $e) {
+        sendJson(['success' => false, 'error' => $e->getMessage()], 500);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. AUTOMATION #9: INBOUND PARENT SIGNAL ACTION CARDS
+// ─────────────────────────────────────────────────────────────────────────────
+if ($action === 'signal_cards' || $action === 'list_signal_cards' || $action === 'apply_signal_card' || $action === 'dismiss_signal_card') {
+    try {
+        $tableCheck = $db->query("SHOW TABLES LIKE 'inbound_signal_cards'")->fetchColumn();
+        if (!$tableCheck) {
+            sendJson(['success' => true, 'cards' => [], 'pending_count' => 0, 'migration_required' => true]);
+        }
+
+        $op = trim((string)($_GET['op'] ?? $_POST['op'] ?? $afJsonBody['op'] ?? 'list'));
+        if ($action === 'list_signal_cards') $op = 'list';
+        if ($action === 'apply_signal_card') $op = 'apply';
+        if ($action === 'dismiss_signal_card') $op = 'dismiss';
+
+        if ($op === 'list') {
+            $statusFilter = trim((string)($_GET['status'] ?? 'pending'));
+            if (!in_array($statusFilter, ['pending', 'applied', 'dismissed', 'all'], true)) {
+                $statusFilter = 'pending';
+            }
+            $limit = max(1, min(100, (int)($_GET['limit'] ?? 30)));
+            $where = $statusFilter === 'all' ? '' : 'WHERE sc.status = ?';
+            $sql = "
+                SELECT sc.*,
+                       c.name AS chat_name,
+                       c.wa_chat_id,
+                       c.linked_student_roll,
+                       c.linked_class_key,
+                       m.body AS message_body,
+                       m.received_at AS message_received_at
+                FROM inbound_signal_cards sc
+                LEFT JOIN whatsapp_chats c ON c.id = sc.chat_id
+                LEFT JOIN whatsapp_messages m ON m.id = sc.message_id
+                {$where}
+                ORDER BY FIELD(sc.status, 'pending', 'applied', 'dismissed'), sc.created_at DESC
+                LIMIT {$limit}
+            ";
+            $st = $db->prepare($sql);
+            $st->execute($statusFilter === 'all' ? [] : [$statusFilter]);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as &$r) {
+                $r['id'] = (int)$r['id'];
+                $r['chat_id'] = (int)$r['chat_id'];
+                $r['message_id'] = $r['message_id'] !== null ? (int)$r['message_id'] : null;
+                $r['confidence'] = (float)($r['confidence'] ?? 0);
+                $r['extracted'] = json_decode((string)($r['extracted_json'] ?: '{}'), true) ?: [];
+            }
+            unset($r);
+
+            $pendingCount = (int)$db->query("SELECT COUNT(*) FROM inbound_signal_cards WHERE status = 'pending'")->fetchColumn();
+
+            sendJson([
+                'success' => true,
+                'cards' => $rows,
+                'pending_count' => $pendingCount,
+            ]);
+        }
+
+        if ($op === 'scan') {
+            if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+                sendJson(['success' => false, 'error' => 'Method Not Allowed: POST required'], 405);
+            }
+            verifyApiCSRF();
+            $created = afScanInboundSignalsPhpFallback($db);
+            $pendingCount = (int)$db->query("SELECT COUNT(*) FROM inbound_signal_cards WHERE status = 'pending'")->fetchColumn();
+            sendJson([
+                'success' => true,
+                'created' => $created,
+                'pending_count' => $pendingCount,
+            ]);
+        }
+
+        if ($op === 'apply') {
+            if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+                sendJson(['success' => false, 'error' => 'Method Not Allowed: POST required'], 405);
+            }
+            verifyApiCSRF();
+            $cardId = (int)($_POST['id'] ?? $afJsonBody['id'] ?? 0);
+            if ($cardId <= 0) {
+                sendJson(['success' => false, 'error' => 'Valid signal card id is required'], 400);
+            }
+
+            $st = $db->prepare("
+                SELECT sc.*, c.wa_chat_id, c.name AS chat_name
+                FROM inbound_signal_cards sc
+                LEFT JOIN whatsapp_chats c ON c.id = sc.chat_id
+                WHERE sc.id = ?
+                LIMIT 1
+            ");
+            $st->execute([$cardId]);
+            $card = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$card) {
+                sendJson(['success' => false, 'error' => 'Signal card not found'], 404);
+            }
+
+            $extracted = json_decode((string)($card['extracted_json'] ?: '{}'), true) ?: [];
+            $signalType = (string)$card['signal_type'];
+            $stuLabel = trim((string)($card['matched_student_name'] ?: ($card['chat_name'] ?: 'Student')));
+            $actionNote = '';
+
+            if ($signalType === 'phone_change') {
+                $rawPhone = trim((string)($_POST['new_phone'] ?? $afJsonBody['new_phone'] ?? ($extracted['phone_mentioned'] ?? '')));
+                $digits = preg_replace('/\D+/', '', $rawPhone);
+                if (strlen($digits) >= 10) {
+                    $ten = substr($digits, -10);
+                    $e164 = '+91' . $ten;
+                    $updatedTargets = [];
+
+                    if (!empty($card['matched_roll_no'])) {
+                        $cls = trim((string)($card['matched_class'] ?? ''));
+                        if ($cls !== '') {
+                            $rcUp = $db->prepare("UPDATE report_card SET parent_phone = ? WHERE roll_no = ? AND (CONCAT(std, '-', division) = ? OR std = ?)");
+                            $rcUp->execute([$ten, $card['matched_roll_no'], $cls, $cls]);
+                        } else {
+                            $rcUp = $db->prepare("UPDATE report_card SET parent_phone = ? WHERE roll_no = ?");
+                            $rcUp->execute([$ten, $card['matched_roll_no']]);
+                        }
+                        if ($rcUp->rowCount() > 0) {
+                            $updatedTargets[] = 'report_card';
+                        }
+                    }
+
+                    if (!empty($card['wa_chat_id'])) {
+                        $wcUp = $db->prepare("UPDATE whatsapp_contacts SET phone_e164 = ? WHERE wa_id = ?");
+                        $wcUp->execute([$e164, $card['wa_chat_id']]);
+                        if ($wcUp->rowCount() > 0) {
+                            $updatedTargets[] = 'whatsapp_contacts';
+                        }
+                    }
+
+                    $aeUp = $db->prepare("UPDATE admission_enquiries SET phone_number = ?, phone_e164 = ?, updated_at = NOW() WHERE chat_id = ?");
+                    $aeUp->execute([$ten, $e164, (int)$card['chat_id']]);
+                    if ($aeUp->rowCount() > 0) {
+                        $updatedTargets[] = 'admission_enquiries';
+                    }
+
+                    $actionNote = "Updated parent phone to {$ten}" . ($updatedTargets ? ' (' . implode(', ', $updatedTargets) . ')' : '') . '.';
+                } else {
+                    $actionNote = 'Phone update logged for manual verification (no valid 10-digit number found).';
+                }
+
+                $db->prepare("INSERT INTO system_notifications (title, message, type, link) VALUES (?, ?, 'signal_card', ?)")
+                   ->execute([
+                       "Phone Update Applied: {$stuLabel}",
+                       $actionNote,
+                       'whatsapp_share.php?view=replica&chat_id=' . (int)$card['chat_id'],
+                   ]);
+            } elseif ($signalType === 'leave') {
+                $snippet = trim((string)($extracted['snippet'] ?? 'Parent notified student absence on WhatsApp.'));
+                $actionNote = "Leave notice recorded for {$stuLabel} ({$card['matched_class']}).";
+                $db->prepare("INSERT INTO system_notifications (title, message, type, link) VALUES (?, ?, 'leave_notice', ?)")
+                   ->execute([
+                       "Leave Note: {$stuLabel}",
+                       mb_substr($snippet, 0, 240),
+                       'whatsapp_share.php?view=replica&chat_id=' . (int)$card['chat_id'],
+                   ]);
+            } elseif ($signalType === 'ptm_confirm') {
+                $actionNote = "PTM / Campus visit confirmation noted for {$stuLabel}.";
+                $db->prepare("
+                    UPDATE admission_enquiries
+                    SET followup_category = 'Campus visit pending',
+                        status = IF(status IN ('NEW','CONTACTED','INFORMATION_SHARED','INTERESTED'), 'VISIT_PLANNED', status),
+                        updated_at = NOW()
+                    WHERE chat_id = ? AND is_completed = 0 AND is_cancelled = 0
+                ")->execute([(int)$card['chat_id']]);
+                $db->prepare("INSERT INTO system_notifications (title, message, type, link) VALUES (?, ?, 'ptm_confirm', ?)")
+                   ->execute([
+                       "PTM / Visit Confirmed: {$stuLabel}",
+                       $actionNote,
+                       'admission_followups.php',
+                   ]);
+            } else {
+                $labelMap = [
+                    'fee_claim' => 'Fee payment claim',
+                    'doc_upload' => 'Document submission',
+                    'result_query' => 'Result / progress enquiry',
+                    'other' => 'Parent message signal',
+                ];
+                $lbl = $labelMap[$signalType] ?? 'Parent signal';
+                $actionNote = "{$lbl} acknowledged and logged for {$stuLabel}.";
+                $db->prepare("INSERT INTO system_notifications (title, message, type, link) VALUES (?, ?, 'signal_card', ?)")
+                   ->execute([
+                       "{$lbl}: {$stuLabel}",
+                       mb_substr((string)($extracted['snippet'] ?? $actionNote), 0, 240),
+                       'whatsapp_share.php?view=replica&chat_id=' . (int)$card['chat_id'],
+                   ]);
+            }
+
+            $db->prepare("UPDATE inbound_signal_cards SET status = 'applied', resolved_at = NOW() WHERE id = ?")
+               ->execute([$cardId]);
+
+            // Record history if active enquiry exists for chat
+            $enqStmt = $db->prepare("SELECT id FROM admission_enquiries WHERE chat_id = ? ORDER BY id DESC LIMIT 1");
+            $enqStmt->execute([(int)$card['chat_id']]);
+            if ($eid = (int)$enqStmt->fetchColumn()) {
+                $db->prepare("
+                    INSERT INTO admission_followup_history
+                    (enquiry_id, action, title, details, performed_by, manual_sent_confirmed, delivery_verified)
+                    VALUES (?, 'signal_applied', ?, ?, ?, 0, 0)
+                ")->execute([
+                    $eid,
+                    "Applied Inbound Signal ({$signalType})",
+                    $actionNote,
+                    $currentUserName,
+                ]);
+            }
+
+            sendJson([
+                'success' => true,
+                'id' => $cardId,
+                'status' => 'applied',
+                'action_note' => $actionNote,
+                'suggested_reply' => $card['suggested_reply'],
+                'send_on_press' => true,
+            ]);
+        }
+
+        if ($op === 'dismiss') {
+            if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+                sendJson(['success' => false, 'error' => 'Method Not Allowed: POST required'], 405);
+            }
+            verifyApiCSRF();
+            $cardId = (int)($_POST['id'] ?? $afJsonBody['id'] ?? 0);
+            if ($cardId <= 0) {
+                sendJson(['success' => false, 'error' => 'Valid signal card id is required'], 400);
+            }
+            $db->prepare("UPDATE inbound_signal_cards SET status = 'dismissed', resolved_at = NOW() WHERE id = ?")
+               ->execute([$cardId]);
+            sendJson(['success' => true, 'id' => $cardId, 'status' => 'dismissed']);
+        }
+
+        sendJson(['success' => false, 'error' => 'Invalid signal_cards op'], 400);
+    } catch (\Throwable $e) {
+        sendJson(['success' => false, 'error' => $e->getMessage()], 500);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. AUTOMATION #13: 8:30 AM PRINCIPAL DAILY BRIEFING
+// ─────────────────────────────────────────────────────────────────────────────
+if ($action === 'principal_briefing') {
+    try {
+        $tableCheck = $db->query("SHOW TABLES LIKE 'daily_briefings'")->fetchColumn();
+        if (!$tableCheck) {
+            sendJson(['success' => true, 'briefing' => null, 'migration_required' => true]);
+        }
+
+        $op = trim((string)($_GET['op'] ?? $_POST['op'] ?? $afJsonBody['op'] ?? 'get'));
+        $today = date('Y-m-d');
+
+        if ($op === 'generate') {
+            if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+                sendJson(['success' => false, 'error' => 'Method Not Allowed: POST required'], 405);
+            }
+            verifyApiCSRF();
+
+            $binaryPath = afFindEngineBinary();
+            $engineRan = false;
+            if ($binaryPath !== '') {
+                $res = afRunAutomationEngine($binaryPath, '--once');
+                $engineRan = ($res['exit_code'] === 0);
+            }
+
+            $briefing = afCompileAndSavePhpBriefing($db, $today, true);
+            sendJson([
+                'success' => true,
+                'engine_ran' => $engineRan,
+                'briefing' => $briefing,
+            ]);
+        }
+
+        // op === 'get'
+        $st = $db->prepare("SELECT * FROM daily_briefings WHERE brief_date = ? LIMIT 1");
+        $st->execute([$today]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+
+        if (!$row) {
+            $briefing = afCompileAndSavePhpBriefing($db, $today, false);
+        } else {
+            $briefing = [
+                'id' => (int)$row['id'],
+                'brief_date' => $row['brief_date'],
+                'summary_markdown' => $row['summary_markdown'],
+                'metrics' => json_decode((string)($row['metrics_json'] ?: '{}'), true) ?: [],
+                'created_at' => $row['created_at'],
+            ];
+        }
+
+        sendJson([
+            'success' => true,
+            'briefing' => $briefing,
         ]);
     } catch (\Throwable $e) {
         sendJson(['success' => false, 'error' => $e->getMessage()], 500);
@@ -788,7 +1164,7 @@ function generateDefaultSuggestedMessage(string $parentName, string $studentName
 
     switch ($category) {
         case 'First response pending':
-            return "Namaste {$parent} ji, thank you for contacting Hindustani Covenant Church High School regarding admission for {$student} ({$std}). Our admissions team is delighted to assist you. We offer holistic curriculum, modern digital classrooms, sports facilities, and school transport across Solapur. Would you like us to share our school prospectus and fee breakdown?";
+            return "Namaste {$parent} ji, thank you for contacting Hindustani Covenant Church High School regarding admission for {$student} ({$std}). Our admissions team is delighted to assist you. We offer the Maharashtra State Board (SSC) curriculum, modern digital classrooms, sports facilities, and school transport across Solapur. Would you like us to share our school prospectus and fee breakdown?";
         case 'Admission details shared':
             return "Namaste {$parent} ji, hope you had a chance to review the admission details and syllabus for {$student} in {$std}. We would be happy to schedule a campus walk-through and an interaction with our teaching faculty. Please let us know a convenient time this week.";
         case 'Parent requested more information':
@@ -808,21 +1184,281 @@ function generateDefaultSuggestedMessage(string $parentName, string $studentName
     }
 }
 
+// Pure PHP/MySQL fallback for Signal Cards (#9) + auto-advance (#12)
+function afScanInboundSignalsPhpFallback(PDO $db): int {
+    if (!$db->query("SHOW TABLES LIKE 'inbound_signal_cards'")->fetchColumn()) {
+        return 0;
+    }
+    $rows = $db->query("
+        SELECT m.id, m.chat_id, m.body, m.msg_type, m.sender_name, m.received_at,
+               c.wa_chat_id, c.name AS chat_name, c.linked_student_roll, c.linked_class_key
+        FROM whatsapp_messages m
+        JOIN whatsapp_chats c ON c.id = m.chat_id
+        WHERE m.from_me = 0
+          AND m.msg_type != 'system'
+          AND COALESCE(NULLIF(TRIM(m.body), ''), '') != ''
+          AND m.received_at >= NOW() - INTERVAL 7 DAY
+          AND NOT EXISTS (SELECT 1 FROM inbound_signal_cards sc WHERE sc.message_id = m.id)
+        ORDER BY m.id DESC
+        LIMIT 30
+    ")->fetchAll(PDO::FETCH_ASSOC);
+
+    $serviceUrl = rtrim((string)(getenv('RUST_AI_SERVICE_URL') ?: 'http://127.0.0.1:8085'), '/');
+    $created = 0;
+
+    foreach ($rows as $row) {
+        $body = trim((string)$row['body']);
+        $lower = strtolower($body);
+        $msgType = (string)$row['msg_type'];
+
+        // Student lookup in report_card
+        $stu = null;
+        if (!empty($row['linked_student_roll'])) {
+            $cls = trim((string)($row['linked_class_key'] ?? ''));
+            if ($cls !== '') {
+                $sst = $db->prepare("SELECT student_name, roll_no, CONCAT(std, '-', division) AS cls FROM report_card WHERE roll_no = ? AND (CONCAT(std, '-', division) = ? OR std = ?) ORDER BY academic_year DESC, semester DESC LIMIT 1");
+                $sst->execute([$row['linked_student_roll'], $cls, $cls]);
+                $stu = $sst->fetch(PDO::FETCH_ASSOC) ?: null;
+            }
+            if (!$stu) {
+                $sst = $db->prepare("SELECT student_name, roll_no, CONCAT(std, '-', division) AS cls FROM report_card WHERE roll_no = ? ORDER BY academic_year DESC, semester DESC LIMIT 1");
+                $sst->execute([$row['linked_student_roll']]);
+                $stu = $sst->fetch(PDO::FETCH_ASSOC) ?: null;
+            }
+        }
+        $waChatId = (string)$row['wa_chat_id'];
+        $last10 = '';
+        if (!str_contains($waChatId, '@g.us') && !str_contains($waChatId, '@lid')) {
+            $digits = preg_replace('/\D+/', '', explode('@', $waChatId)[0]);
+            if (strlen($digits) >= 10) {
+                $last10 = substr($digits, -10);
+            }
+        }
+        if (!$stu && $last10 !== '') {
+            $sst = $db->prepare("SELECT student_name, roll_no, CONCAT(std, '-', division) AS cls FROM report_card WHERE parent_phone LIKE ? ORDER BY academic_year DESC, semester DESC LIMIT 1");
+            $sst->execute(['%' . $last10]);
+            $stu = $sst->fetch(PDO::FETCH_ASSOC) ?: null;
+        }
+
+        // Try Rust :8085 triage-inbound first with X-AI-Service-Secret
+        $signalType = null;
+        $confidence = 0.80;
+        $suggestedReply = '';
+        $extracted = ['snippet' => mb_substr($body, 0, 240)];
+
+        $ch = curl_init($serviceUrl . '/api/triage-inbound');
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => json_encode([
+                'chat_id' => (int)$row['chat_id'],
+                'message_id' => (int)$row['id'],
+                'sender_name' => $row['sender_name'] ?: $row['chat_name'],
+                'student_name' => $stu['student_name'] ?? null,
+                'student_class' => $stu['cls'] ?? null,
+                'msg_type' => $msgType,
+                'message_text' => $body,
+            ]),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => airAiServiceHeaders(['Content-Type: application/json', 'Accept: application/json']),
+            CURLOPT_TIMEOUT => 4,
+            CURLOPT_CONNECTTIMEOUT => 1,
+        ]);
+        $resp = curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($code === 200 && $resp) {
+            $j = json_decode($resp, true);
+            if (is_array($j) && !empty($j['signal_type'])) {
+                $signalType = (string)$j['signal_type'];
+                $confidence = (float)($j['confidence'] ?? 0.85);
+                $suggestedReply = (string)($j['suggested_reply'] ?? '');
+                if (is_array($j['extracted_json'] ?? null)) {
+                    $extracted = array_merge($extracted, $j['extracted_json']);
+                }
+            }
+        }
+
+        if ($signalType === null) {
+            preg_match('/\b([6-9]\d{9})\b/', $body, $pm);
+            if (!empty($pm[1])) {
+                $extracted['phone_mentioned'] = $pm[1];
+            }
+            if (preg_match('/\b(absent|leave|sick|fever|unwell|hospital|not coming)\b/i', $lower)) {
+                $signalType = 'leave';
+                $confidence = 0.91;
+                $suggestedReply = "Respected Parent,\n\nThank you for informing the school regarding " . ($stu['student_name'] ?? 'your child') . "'s absence. We have noted the leave notice for the class teacher.\n\nWarm regards,\nHCC High School Office";
+            } elseif (!empty($pm[1]) && preg_match('/\b(number|mobile|phone|change|update|new)\b/i', $lower)) {
+                $signalType = 'phone_change';
+                $confidence = 0.90;
+                $suggestedReply = "Respected Parent,\n\nThank you for sharing the updated contact number ({$pm[1]}). Our office will verify and update the record.\n\nWarm regards,\nHCC High School Office";
+            } elseif (preg_match('/\b(paid|payment|upi|utr|receipt|transaction|transferred|challan)\b/i', $lower)) {
+                $signalType = 'fee_claim';
+                $confidence = 0.89;
+                $suggestedReply = "Respected Parent,\n\nThank you for sharing the fee payment update. Our accounts desk will verify the transaction shortly.\n\nWarm regards,\nHCC High School Accounts Desk";
+            } elseif (preg_match('/\b(ptm|meeting|will attend|coming tomorrow|confirm)\b/i', $lower)) {
+                $signalType = 'ptm_confirm';
+                $confidence = 0.85;
+                $suggestedReply = "Respected Parent,\n\nThank you for confirming your visit/PTM slot. Kindly carry a photo ID for campus entry.\n\nWarm regards,\nHCC High School Office";
+            } elseif (preg_match('/\b(result|marks|report card|percentage|unit test|exam)\b/i', $lower)) {
+                $signalType = 'result_query';
+                $confidence = 0.87;
+                $suggestedReply = "Respected Parent,\n\nWe are reviewing " . ($stu['student_name'] ?? 'the student') . "'s exam marks and will share the update shortly.\n\nWarm regards,\nHCC High School Office";
+            } elseif (in_array($msgType, ['image', 'document'], true) || preg_match('/\b(aadhar|aadhaar|birth certificate|leaving certificate|document)\b/i', $lower)) {
+                $signalType = 'doc_upload';
+                $confidence = 0.84;
+                $suggestedReply = "Respected Parent,\n\nThank you for sharing the document. Our admission desk will verify it against the checklist.\n\nWarm regards,\nHCC High School Office";
+            } else {
+                $signalType = 'other';
+                $confidence = 0.60;
+                $suggestedReply = "Respected Parent,\n\nThank you for your message. Our staff will respond during school office hours (09:00 AM to 03:30 PM).\n\nWarm regards,\nHCC High School Office";
+            }
+        }
+
+        $status = $signalType === 'other' ? 'dismissed' : 'pending';
+        $resolvedAt = $status === 'dismissed' ? date('Y-m-d H:i:s') : null;
+        $ins = $db->prepare("
+            INSERT IGNORE INTO inbound_signal_cards
+            (chat_id, message_id, signal_type, matched_student_name, matched_roll_no, matched_class, extracted_json, confidence, suggested_reply, status, resolved_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ");
+        $ins->execute([
+            (int)$row['chat_id'],
+            (int)$row['id'],
+            $signalType,
+            $stu['student_name'] ?? null,
+            $stu['roll_no'] ?? null,
+            $stu['cls'] ?? null,
+            json_encode($extracted, JSON_UNESCAPED_UNICODE),
+            $confidence,
+            $suggestedReply,
+            $status,
+            $resolvedAt,
+        ]);
+        if ($ins->rowCount() > 0 && $status === 'pending') {
+            $created++;
+        }
+    }
+
+    return $created;
+}
+
+// Pure PHP/MySQL Principal Briefing generator (#13)
+function afCompileAndSavePhpBriefing(PDO $db, string $briefDate, bool $tryAi = false): array {
+    $unrepliedChats = (int)$db->query("
+        SELECT COUNT(*)
+        FROM whatsapp_chats c
+        JOIN whatsapp_messages m ON m.id = c.last_message_id
+        WHERE c.chat_type = 'individual'
+          AND m.from_me = 0
+          AND c.last_activity_at >= NOW() - INTERVAL 7 DAY
+    ")->fetchColumn();
+
+    $todayFollowups = (int)$db->query("SELECT COUNT(*) FROM admission_enquiries WHERE next_followup_date = CURDATE() AND is_completed = 0 AND is_cancelled = 0")->fetchColumn();
+    $overdueFollowups = (int)$db->query("SELECT COUNT(*) FROM admission_enquiries WHERE next_followup_date < CURDATE() AND is_completed = 0 AND is_cancelled = 0")->fetchColumn();
+    $urgentEnquiries = (int)$db->query("SELECT COUNT(*) FROM admission_enquiries WHERE priority IN ('high', 'urgent') AND is_completed = 0 AND is_cancelled = 0")->fetchColumn();
+
+    $pendingSignals = 0;
+    $leaveSignals = 0;
+    $feeSignals = 0;
+    if ($db->query("SHOW TABLES LIKE 'inbound_signal_cards'")->fetchColumn()) {
+        $pendingSignals = (int)$db->query("SELECT COUNT(*) FROM inbound_signal_cards WHERE status = 'pending'")->fetchColumn();
+        $leaveSignals = (int)$db->query("SELECT COUNT(*) FROM inbound_signal_cards WHERE status = 'pending' AND signal_type = 'leave'")->fetchColumn();
+        $feeSignals = (int)$db->query("SELECT COUNT(*) FROM inbound_signal_cards WHERE status = 'pending' AND signal_type = 'fee_claim'")->fetchColumn();
+    }
+
+    $domHealth = (string)($db->query("SELECT COALESCE(dom_health_status, 'unknown') FROM whatsapp_sessions ORDER BY id DESC LIMIT 1")->fetchColumn() ?: 'unknown');
+
+    $metrics = [
+        'brief_date' => $briefDate,
+        'unreplied_chats' => $unrepliedChats,
+        'today_followups' => $todayFollowups,
+        'overdue_followups' => $overdueFollowups,
+        'urgent_enquiries' => $urgentEnquiries,
+        'pending_signals' => $pendingSignals,
+        'leave_signals' => $leaveSignals,
+        'fee_signals' => $feeSignals,
+        'dom_health_status' => $domHealth,
+    ];
+
+    $markdown = "### HCC High School — 8:30 AM Principal Daily Briefing ({$briefDate})\n"
+        . "- **Un-replied Parent Chats (7d):** {$unrepliedChats}\n"
+        . "- **Due Today Follow-ups:** {$todayFollowups} | **Overdue:** {$overdueFollowups} | **High/Urgent Active:** {$urgentEnquiries}\n"
+        . "- **Pending Inbound Signal Cards:** {$pendingSignals} (Leave notices: {$leaveSignals}, Fee claims: {$feeSignals})\n"
+        . "- **WhatsApp Bridge DOM Health:** {$domHealth}\n\n"
+        . "_All parent replies require manual staff verification and Send-on-Press in WhatsApp Hub._";
+
+    if ($tryAi) {
+        $disc = airDiscoverLocalAi();
+        if (!empty($disc['ollama'])) {
+            $prompt = "Summarize these exact daily school metrics into 3 crisp executive bullet points for the School Principal. Never change or invent any numbers:\n"
+                . json_encode($metrics)
+                . "\nReturn plain text only (no HTML).";
+            $gen = airCallOllamaGenerate($prompt, $disc['default_model'], 25);
+            if (!empty($gen['ok']) && !empty($gen['raw']) && strlen(trim((string)$gen['raw'])) > 30) {
+                $markdown .= "\n\n**AI Executive Focus:**\n" . trim((string)$gen['raw']);
+            }
+        }
+    }
+
+    $up = $db->prepare("
+        INSERT INTO daily_briefings (brief_date, summary_markdown, metrics_json)
+        VALUES (?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+            summary_markdown = VALUES(summary_markdown),
+            metrics_json = VALUES(metrics_json)
+    ");
+    $up->execute([$briefDate, $markdown, json_encode($metrics, JSON_UNESCAPED_UNICODE)]);
+
+    $st = $db->prepare("SELECT * FROM daily_briefings WHERE brief_date = ? LIMIT 1");
+    $st->execute([$briefDate]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+
+    return [
+        'id' => $row ? (int)$row['id'] : 0,
+        'brief_date' => $briefDate,
+        'summary_markdown' => $markdown,
+        'metrics' => $metrics,
+        'created_at' => $row['created_at'] ?? date('Y-m-d H:i:s'),
+    ];
+}
+
 // Fallback PHP engine processor when invoked without standalone binary
 function runPhpFallbackEngine(PDO $db): string {
-    $now = date('Y-m-d H:i:s');
-    // Recover stuck processing jobs
-    $db->exec("UPDATE automation_jobs SET status = 'pending', locked_at = NULL, locked_by = NULL WHERE status = 'processing'");
-    
-    // Scan and enqueue due reminders
+    // Recover only stale stuck processing jobs (>5 minutes)
+    $db->exec("
+        UPDATE automation_jobs
+        SET status = 'pending', locked_at = NULL, locked_by = NULL
+        WHERE status = 'processing'
+          AND (locked_at < NOW() - INTERVAL 5 MINUTE OR locked_at IS NULL)
+    ");
+
+    // Scan and enqueue due reminders without re-scanning already-scheduled overdue rows
     $stmt = $db->query("
-        SELECT id, parent_name, student_name, interested_class, followup_category, 
+        SELECT id, parent_name, student_name, interested_class, followup_category,
                next_followup_date, COALESCE(next_followup_time, '10:00:00') as next_followup_time,
                COALESCE(followup_reason, '') as followup_reason, priority
         FROM admission_enquiries
         WHERE is_completed = 0 AND is_cancelled = 0
-          AND reminder_status IN ('pending', 'overdue')
+          AND next_followup_date IS NOT NULL
           AND TIMESTAMP(next_followup_date, COALESCE(next_followup_time, '10:00:00')) <= NOW()
+          AND (
+              reminder_status = 'pending'
+              OR (
+                  reminder_status = 'overdue'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM automation_jobs aj
+                      WHERE aj.dedup_key = CONCAT(
+                          'reminder_',
+                          admission_enquiries.id,
+                          '_',
+                          DATE_FORMAT(admission_enquiries.next_followup_date, '%Y-%m-%d'),
+                          '_',
+                          TIME_FORMAT(COALESCE(admission_enquiries.next_followup_time, '10:00:00'), '%H:%i:%s')
+                      )
+                  )
+              )
+          )
     ");
     $enqueued = 0;
     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
@@ -834,7 +1470,12 @@ function runPhpFallbackEngine(PDO $db): string {
         if ($ins->rowCount() > 0) $enqueued++;
     }
 
-    return "PHP Engine processed: enqueued {$enqueued} due reminders.";
+    $signals = afScanInboundSignalsPhpFallback($db);
+    if ($db->query("SHOW TABLES LIKE 'daily_briefings'")->fetchColumn()) {
+        afCompileAndSavePhpBriefing($db, date('Y-m-d'), false);
+    }
+
+    return "PHP Fallback Engine processed: enqueued {$enqueued} due reminders, triaged {$signals} new inbound signals.";
 }
 
 // Unknown action fallback

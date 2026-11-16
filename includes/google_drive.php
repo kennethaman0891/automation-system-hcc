@@ -41,11 +41,41 @@ class HCCGoogleDrive {
 
     private function detectDefaultRedirectUri(): string {
         $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-        $host   = $_SERVER['HTTP_HOST'] ?? 'localhost';
+        $rawHost = trim((string)($_SERVER['HTTP_HOST'] ?? 'localhost'));
+        $safeHost = 'localhost';
+        if (preg_match('/^([a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[0-9a-fA-F:]+\])(:\d{1,5})?$/', $rawHost)) {
+            $portValid = true;
+            if (preg_match('/:(\d+)$/', $rawHost, $pm)) {
+                $portNum = (int)$pm[1];
+                $portValid = ($portNum >= 1 && $portNum <= 65535);
+            }
+            if ($portValid && !str_contains($rawHost, '..')) {
+                $safeHost = $rawHost;
+            }
+        }
         // Base URL path
         $base = defined('BASE_URL') ? BASE_URL : '/hcc/';
         $base = rtrim($base, '/') . '/';
-        return "{$scheme}://{$host}{$base}admin/google_callback.php";
+        return "{$scheme}://{$safeHost}{$base}admin/google_callback.php";
+    }
+
+    public static function isValidDriveId(string $id): bool {
+        return (bool)preg_match('/^[A-Za-z0-9_-]{5,128}$/', $id);
+    }
+
+    public static function isAllowedUploadMimeType(string $mimeType): bool {
+        $clean = strtolower(trim(str_replace(["\r", "\n", "\0"], '', $mimeType)));
+        $allowed = [
+            'application/pdf',
+            'image/png',
+            'image/jpeg',
+            'text/csv',
+            'application/zip',
+        ];
+        if (in_array($clean, $allowed, true)) {
+            return true;
+        }
+        return (bool)preg_match('#^application/vnd\.openxmlformats-officedocument\.[a-z0-9.\-]+$#', $clean);
     }
 
     /**
@@ -130,8 +160,13 @@ class HCCGoogleDrive {
      * Find a folder by name inside an optional parent
      */
     public function findFolder(string $accessToken, string $folderName, ?string $parentId = null): ?array {
+        $folderName = str_replace(["\r", "\n", "\0"], '', $folderName);
         $q = "name = '" . addslashes($folderName) . "' and mimeType = 'application/vnd.google-apps.folder' and trashed = false";
-        if ($parentId) {
+        if ($parentId !== null && $parentId !== '') {
+            if (!self::isValidDriveId($parentId)) {
+                error_log('HCC [Google Drive] Invalid parentId in findFolder');
+                return null;
+            }
             $q .= " and '{$parentId}' in parents";
         }
 
@@ -186,7 +221,8 @@ class HCCGoogleDrive {
      *           ├── 📁 03_Class_Analytics_Reports
      *           └── 📁 04_Student_Report_Cards
      */
-    public function ensureUserWorkspace(string $accessToken, string $teacherName, string $academicYear = '2024-25'): array {
+    public function ensureUserWorkspace(string $accessToken, string $teacherName, ?string $academicYear = null): array {
+        $academicYear = ($academicYear !== null && trim($academicYear) !== '') ? trim($academicYear) : rcGetActiveAcademicYear();
         $teacherNameClean = trim($teacherName) ?: 'Teacher';
         
         // 1. Root school folder
@@ -238,6 +274,21 @@ class HCCGoogleDrive {
      * Uses Google Drive API v3 multipart upload.
      */
     public function uploadFile(string $accessToken, string $folderId, string $filename, string $fileContent, string $mimeType = 'application/pdf'): ?array {
+        if (!self::isValidDriveId($folderId)) {
+            error_log('HCC [Google Drive] uploadFile rejected invalid folderId');
+            return null;
+        }
+        $filename = basename(str_replace(["\r", "\n", "\0"], '', trim($filename)));
+        $mimeType = strtolower(trim(str_replace(["\r", "\n", "\0"], '', $mimeType)));
+        if ($filename === '' || !self::isAllowedUploadMimeType($mimeType)) {
+            error_log('HCC [Google Drive] uploadFile rejected invalid filename or MIME type');
+            return null;
+        }
+        if ($fileContent === '' || strlen($fileContent) > 25 * 1024 * 1024) {
+            error_log('HCC [Google Drive] uploadFile rejected empty or oversized file (>25MB)');
+            return null;
+        }
+
         $metadata = [
             'name'    => $filename,
             'parents' => [$folderId]
@@ -291,6 +342,10 @@ class HCCGoogleDrive {
      * Role: 'reader' (Viewer) or 'writer' (Editor)
      */
     public function shareFolderOrFile(string $accessToken, string $fileOrFolderId, string $colleagueEmail, string $role = 'reader', bool $sendNotification = true): ?array {
+        if (!self::isValidDriveId($fileOrFolderId)) {
+            error_log('HCC [Google Drive] shareFolderOrFile rejected invalid folder/file ID');
+            return null;
+        }
         $body = [
             'role'         => in_array($role, ['reader', 'writer', 'commenter'], true) ? $role : 'reader',
             'type'         => 'user',
@@ -367,9 +422,19 @@ class HCCGoogleDrive {
         ]);
 
         $res = curl_exec($ch);
+        $curlErr = curl_error($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
 
+        if ($res === false) {
+            error_log("HCC [Google Drive] httpJsonPost cURL error: {$curlErr}");
+            return null;
+        }
+        if ($httpCode >= 400) {
+            $snippet = substr(preg_replace('/[\r\n]+/', ' ', (string)$res), 0, 500);
+            error_log("HCC [Google Drive] httpJsonPost HTTP {$httpCode}: {$snippet}");
+            return null;
+        }
         if ($httpCode >= 200 && $httpCode < 300) {
             return json_decode($res, true);
         }

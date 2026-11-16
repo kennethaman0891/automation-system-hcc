@@ -14,6 +14,7 @@ $root = dirname(__DIR__);
 require_once $root . '/config/database.php';
 require_once $root . '/includes/functions.php';
 require_once $root . '/admin/includes/whatsapp_functions.php';
+require_once __DIR__ . '/lib_cli_session.php';
 
 $results = [];
 $passed = 0;
@@ -37,7 +38,7 @@ function record(string $id, string $name, string $status, string $detail = ''): 
 
 function httpJson(string $url, string $method, ?array $body, string $cookie, array $headers = []): array {
     $ch = curl_init($url);
-    $hdr = array_merge(['Accept: application/json', 'X-Admin-Test: 1'], $headers);
+    $hdr = array_merge(['Accept: application/json'], $headers);
     $opts = [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_CUSTOMREQUEST => $method,
@@ -73,6 +74,9 @@ $student = 'E2E Meera Kulkarni';
 $parent = 'E2E Parent Kulkarni';
 $cookie = tempnam(sys_get_temp_dir(), 'hcc_e2e_');
 $cookieB = tempnam(sys_get_temp_dir(), 'hcc_e2e_b_');
+$cliSessA = hccCreateCliAdminSession($cookie, '127.0.0.1');
+$cliSessB = hccCreateCliAdminSession($cookieB, '127.0.0.1');
+$base = hccResolveAdminBase($base, $cliSessA, $cookie);
 
 echo "Admission workflow end-to-end\n";
 echo "Database: " . $db->query('SELECT DATABASE()')->fetchColumn() . "\n\n";
@@ -112,7 +116,7 @@ try {
     $seededParent = false;
 }
 
-$ping = httpJson($base . '/api_admission_enquiry.php?action=csrf&qa_test=1', 'GET', null, $cookie);
+$ping = httpJson($base . '/api_admission_enquiry.php?action=csrf', 'GET', null, $cookie);
 if ($ping['code'] === 0) {
     record('0', 'Reach the local application', 'FAIL', $ping['error'] ?: 'Apache did not answer on http://127.0.0.1/hcc');
     finish($root, $cookie, $cookieB);
@@ -122,11 +126,11 @@ if ($ping['code'] !== 200 || $csrf === '') {
     record('0', 'Reach the local application', 'FAIL', 'CSRF bootstrap HTTP ' . $ping['code'] . ' ' . substr($ping['raw'], 0, 240));
     finish($root, $cookie, $cookieB);
 }
-record('0', 'Reach the local application', 'PASS', 'Authenticated localhost QA session');
+record('0', 'Reach the local application', 'PASS', 'Authenticated localhost CLI admin session');
 $authHeader = ['X-CSRF-Token: ' . $csrf];
 
 // 2 then 1: reject a bad number, then capture a valid enquiry.
-$bad = httpJson($base . '/api_admission_enquiry.php?action=create&qa_test=1', 'POST', [
+$bad = httpJson($base . '/api_admission_enquiry.php?action=create', 'POST', [
     'parent_name' => $parent,
     'phone_number' => '12345',
     'student_name' => $student,
@@ -139,7 +143,7 @@ $badRejected = $bad['code'] === 422 && !empty($bad['json']['errors']['phone_numb
 record('2', 'Validate parent phone number', $badRejected ? 'PASS' : 'FAIL', 'HTTP ' . $bad['code'] . ' ' . substr($bad['raw'], 0, 220));
 
 $original = 'Namaste, I am enquiring about admission for my daughter in STD IV for 2026-27. Please share the fee and the documents required. We may visit the campus.';
-$created = httpJson($base . '/api_admission_enquiry.php?action=create&qa_test=1', 'POST', [
+$created = httpJson($base . '/api_admission_enquiry.php?action=create', 'POST', [
     'parent_name' => $parent,
     'phone_number' => $phonePretty,
     'student_name' => $student,
@@ -173,12 +177,12 @@ if ($seededParent) {
 record('3', 'Create a parent profile and reuse the student record', $profileOk ? 'PASS' : 'FAIL', 'roll=' . ($enquiry['matched_student_roll'] ?? 'none'));
 
 // 18: a second simultaneous create for the same phone and student must not insert another row.
-$pingB = httpJson($base . '/api_admission_enquiry.php?action=csrf&qa_test=1', 'GET', null, $cookieB);
+$pingB = httpJson($base . '/api_admission_enquiry.php?action=csrf', 'GET', null, $cookieB);
 $csrfB = (string)($pingB['json']['csrf_token'] ?? '');
 $mh = curl_multi_init();
 $handles = [];
 foreach ([['cookie' => $cookie, 'token' => $csrf], ['cookie' => $cookieB, 'token' => $csrfB]] as $i => $sess) {
-    $ch = curl_init($base . '/api_admission_enquiry.php?action=create&qa_test=1');
+    $ch = curl_init($base . '/api_admission_enquiry.php?action=create');
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_POST => true,
@@ -192,7 +196,7 @@ foreach ([['cookie' => $cookie, 'token' => $csrf], ['cookie' => $cookieB, 'token
             'enquiry_source' => 'whatsapp',
             'confirm_duplicate' => false,
         ]),
-        CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json', 'X-Admin-Test: 1', 'X-CSRF-Token: ' . $sess['token']],
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json', 'X-CSRF-Token: ' . $sess['token']],
         CURLOPT_COOKIEJAR => $sess['cookie'],
         CURLOPT_COOKIEFILE => $sess['cookie'],
         CURLOPT_TIMEOUT => 30,
@@ -217,7 +221,7 @@ $noDup = $dupCount === 1 && !in_array(201, $codes, true);
 record('18', 'Concurrent enquiries do not create a duplicate', $noDup ? 'PASS' : 'FAIL', 'rows=' . $dupCount . ' http=' . implode(',', $codes));
 
 // 4-8: AI draft. Rust may be offline; the holding reply must not invent fees.
-$draft = httpJson($base . '/api_admission_enquiry.php?action=generate_ai_draft&id=' . $enquiryId . '&qa_test=1', 'GET', null, $cookie);
+$draft = httpJson($base . '/api_admission_enquiry.php?action=generate_ai_draft', 'POST', ['id' => $enquiryId], $cookie, $authHeader);
 $draftBody = (string)($draft['json']['draft_text'] ?? '');
 $intent = (string)($draft['json']['intent'] ?? '');
 $source = (string)($draft['json']['draft_source'] ?? '');
@@ -271,16 +275,16 @@ if (($rustHealth['json']['status'] ?? '') === 'healthy') {
 }
 
 // Second generate inside the dedup window must not start another draft.
-$draftAgain = httpJson($base . '/api_admission_enquiry.php?action=generate_ai_draft&id=' . $enquiryId . '&qa_test=1', 'GET', null, $cookie);
+$draftAgain = httpJson($base . '/api_admission_enquiry.php?action=generate_ai_draft', 'POST', ['id' => $enquiryId], $cookie, $authHeader);
 record('18b', 'A second draft request reuses the in-flight result', !empty($draftAgain['json']['duplicate_suppressed']) ? 'PASS' : 'FAIL', 'suppressed=' . (!empty($draftAgain['json']['duplicate_suppressed']) ? 'yes' : 'no'));
 
 // 9: edit and approve. Approved chat message must stay pending, not sent.
 $edited = $draftBody . "\n\nOur admission desk will confirm the exact figures from the approved fee sheet.";
-$save = httpJson($base . '/api_admission_enquiry.php?action=save_draft_edit&qa_test=1', 'POST', [
+$save = httpJson($base . '/api_admission_enquiry.php?action=save_draft_edit', 'POST', [
     'enquiry_id' => $enquiryId,
     'edited_body' => $edited,
 ], $cookie, $authHeader);
-$approve = httpJson($base . '/api_admission_enquiry.php?action=approve_response&qa_test=1', 'POST', [
+$approve = httpJson($base . '/api_admission_enquiry.php?action=approve_response', 'POST', [
     'enquiry_id' => $enquiryId,
     'approved_text' => $edited,
 ], $cookie, $authHeader);
@@ -290,7 +294,7 @@ $msgStatus = (string)$pending->fetchColumn();
 record('9', 'Edit and approve a response without marking it sent', ($save['json']['success'] ?? false) && ($approve['json']['success'] ?? false) && $msgStatus === 'pending' ? 'PASS' : 'FAIL', 'message status=' . $msgStatus);
 
 // 10 and 11
-$open = httpJson($base . '/api_admission_enquiry.php?action=open_whatsapp&qa_test=1', 'POST', [
+$open = httpJson($base . '/api_admission_enquiry.php?action=open_whatsapp', 'POST', [
     'id' => $enquiryId,
     'message' => $edited,
 ], $cookie, $authHeader);
@@ -301,7 +305,7 @@ $urlOk = $open['code'] === 200
     && ($open['json']['delivery_verified'] ?? true) === false;
 record('10', 'Open WhatsApp with prefilled text', $urlOk ? 'PASS' : 'FAIL', $waUrl !== '' ? substr($waUrl, 0, 120) : substr($open['raw'], 0, 180));
 
-$confirm = httpJson($base . '/api_admission_enquiry.php?action=confirm_manual_send&qa_test=1', 'POST', [
+$confirm = httpJson($base . '/api_admission_enquiry.php?action=confirm_manual_send', 'POST', [
     'id' => $enquiryId,
     'manual_sent_confirmed' => true,
     'note' => 'Staff pressed Send in WhatsApp.',
@@ -317,7 +321,7 @@ record('11', 'Manually confirm sending without claiming delivery', $confirmOk ? 
 
 // 12 and 13
 $today = date('Y-m-d');
-$follow = httpJson($base . '/api_admission_enquiry.php?action=add_followup&qa_test=1', 'POST', [
+$follow = httpJson($base . '/api_admission_enquiry.php?action=add_followup', 'POST', [
     'enquiry_id' => $enquiryId,
     'note' => 'First response pending. Call the parent about documents.',
     'follow_up_date' => $today . 'T00:00:01',
@@ -327,8 +331,8 @@ $sched->execute([$enquiryId]);
 $schedRow = $sched->fetch(PDO::FETCH_ASSOC) ?: [];
 record('12', 'Schedule a follow-up', ($follow['json']['success'] ?? false) && ($schedRow['next_followup_date'] ?? '') === $today ? 'PASS' : 'FAIL', json_encode($schedRow));
 
-$counts = httpJson($base . '/api_admission_followup.php?action=get_dashboard_counts&qa_test=1', 'GET', null, $cookie);
-$todayList = httpJson($base . '/api_admission_followup.php?action=list&section=today&search=' . rawurlencode('E2E') . '&qa_test=1', 'GET', null, $cookie);
+$counts = httpJson($base . '/api_admission_followup.php?action=get_dashboard_counts', 'GET', null, $cookie);
+$todayList = httpJson($base . '/api_admission_followup.php?action=list&section=today&search=' . rawurlencode('E2E'), 'GET', null, $cookie);
 $listed = false;
 foreach (($todayList['json']['data'] ?? $todayList['json']['enquiries'] ?? []) as $item) {
     if ((int)($item['id'] ?? 0) === $enquiryId) {
@@ -339,7 +343,7 @@ $todayCount = (int)($counts['json']['counts']['today'] ?? -1);
 record('13', 'Display the reminder on the correct date', $listed && $todayCount >= 1 ? 'PASS' : 'FAIL', 'today=' . $todayCount . ' listed=' . ($listed ? 'yes' : 'no') . ' HTTP ' . $todayList['code']);
 
 // 14 complete via the follow-up API (form body, not JSON)
-$done = httpForm($base . '/api_admission_followup.php?action=mark_completed&qa_test=1', [
+$done = httpForm($base . '/api_admission_followup.php?action=mark_completed', [
     'id' => (string)$enquiryId,
     'completion_notes' => 'Parent received the draft. Follow-up closed for this test.',
     'manual_sent_confirmed' => '1',
@@ -351,7 +355,7 @@ $doneData = $doneRow->fetch(PDO::FETCH_ASSOC) ?: [];
 record('14', 'Complete the follow-up', ($done['json']['success'] ?? false) && (int)($doneData['is_completed'] ?? 0) === 1 && (int)($doneData['delivery_verified'] ?? 1) === 0 ? 'PASS' : 'FAIL', substr($done['raw'], 0, 180));
 
 // 15 pipeline
-$status = httpJson($base . '/api_admission_enquiry.php?action=update_status&qa_test=1', 'POST', [
+$status = httpJson($base . '/api_admission_enquiry.php?action=update_status', 'POST', [
     'id' => $enquiryId,
     'status' => 'INTERESTED',
     'notes' => 'Parent asked for a campus visit.',
@@ -376,7 +380,7 @@ if (!is_file($engine) || !$hasJobs) {
     $dedup = 'e2e_recover_' . $enquiryId . '_' . time();
     $db->prepare("
         INSERT INTO automation_jobs (job_type, payload, dedup_key, status, priority, attempts, max_attempts, scheduled_at, locked_at, locked_by)
-        VALUES ('admission_reminder', ?, ?, 'processing', 10, 1, 3, NOW(), NOW(), 'crashed-worker')
+        VALUES ('admission_reminder', ?, ?, 'processing', 10, 1, 3, NOW(), DATE_SUB(NOW(), INTERVAL 10 MINUTE), 'crashed-worker')
     ")->execute([json_encode(['enquiry_id' => $enquiryId, 'action' => 'generate_reminder']), $dedup]);
     $jobId = (int)$db->lastInsertId();
     $env = require $root . '/config/env.php';
@@ -415,7 +419,7 @@ function httpForm(string $url, array $fields, string $cookie): array {
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => $fields,
-        CURLOPT_HTTPHEADER => ['Accept: application/json', 'X-Admin-Test: 1'],
+        CURLOPT_HTTPHEADER => ['Accept: application/json'],
         CURLOPT_COOKIEJAR => $cookie,
         CURLOPT_COOKIEFILE => $cookie,
         CURLOPT_TIMEOUT => 30,
@@ -428,7 +432,7 @@ function httpForm(string $url, array $fields, string $cookie): array {
 }
 
 function finish(string $root, string $cookie, string $cookieB, int $enquiryId = 0): void {
-    global $results, $passed, $failed, $skipped, $db, $student;
+    global $results, $passed, $failed, $skipped, $db, $student, $cliSessA, $cliSessB;
     if ($enquiryId > 0) {
         try {
             $db->prepare('DELETE FROM admission_enquiries WHERE id = ?')->execute([$enquiryId]);
@@ -449,6 +453,8 @@ function finish(string $root, string $cookie, string $cookieB, int $enquiryId = 
     }
     @unlink($cookie);
     @unlink($cookieB);
+    if (!empty($cliSessA)) hccCleanupCliSession($cliSessA);
+    if (!empty($cliSessB)) hccCleanupCliSession($cliSessB);
 
     $summary = ['passed' => $passed, 'failed' => $failed, 'skipped' => $skipped, 'results' => $results, 'ran_at' => date('c')];
     $dir = $root . '/tests';

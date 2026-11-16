@@ -311,7 +311,7 @@ class WaChatItem extends WaElement {
     let previewIcon = '';
     
     if (lastMsg) {
-      const type = lastMsg.msg_type || 'text';
+      const type = lastMsg.msg_type || lastMsg.type || 'text';
       if (type === 'image') previewIcon = '📷 Photo';
       else if (type === 'video') previewIcon = '🎥 Video';
       else if (type === 'audio') previewIcon = '🎵 Audio';
@@ -1773,6 +1773,13 @@ class WaChatList extends WaElement {
       allChats = allChats.filter(c => c.chat_type === 'group' || c.chat_type === 'broadcast');
     } else if (this.activeFilter === 'pinned') {
       allChats = allChats.filter(c => !!c.is_pinned);
+    } else if (this.activeFilter === 'starred') {
+      allChats = allChats.filter(c => !!(c.is_pinned || c.is_starred));
+    } else if (this.activeFilter === 'enquiries') {
+      allChats = allChats.filter(c => {
+        const meta = (c.metadata && typeof c.metadata === 'object') ? c.metadata : {};
+        return Number(c.is_admission_enquiry) === 1 || !!c.enquiry_id || !!meta.is_admission_enquiry || !!meta.enquiry_id;
+      });
     }
     
     // If NO search query, render standard chats list

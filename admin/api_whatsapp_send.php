@@ -21,6 +21,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 $db = waGetDB();
 $input = json_decode(file_get_contents('php://input'), true);
 if (!$input) $input = $_POST;
+waVerifyCSRF(is_array($input) ? $input : null);
 
 $adminId = (int)($auth['admin_id'] ?? 0);
 if ($adminId <= 0) {

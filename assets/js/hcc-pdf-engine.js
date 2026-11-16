@@ -559,8 +559,17 @@
                     var jsPDF = window.jspdf.jsPDF;
                     var pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
-                    // Standard A4: 210mm x 297mm
-                    pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+                    // Standard A4: 210mm x 297mm (preserve canvas aspect ratio)
+                    var imgProps = pdf.getImageProperties(imgData);
+                    var pageW = 210, pageH = 297;
+                    var pdfW = pageW;
+                    var pdfH = (imgProps.height * pageW) / imgProps.width;
+                    if (pdfH > pageH) {
+                        pdfH = pageH;
+                        pdfW = (imgProps.width * pageH) / imgProps.height;
+                    }
+                    var offsetX = (pageW - pdfW) / 2;
+                    pdf.addImage(imgData, 'JPEG', offsetX, 0, pdfW, pdfH, undefined, 'FAST');
 
                     var blob = pdf.output('blob');
                     var rollStr = String(st.roll || '0').padStart(2, '0');
@@ -648,7 +657,16 @@
                     if (currentIndex > 0) {
                         masterPdf.addPage();
                     }
-                    masterPdf.addImage(res.dataUrl, 'JPEG', 0, 0, 210, 297, undefined, 'FAST');
+                    var imgProps = masterPdf.getImageProperties(res.dataUrl);
+                    var pageW = 210, pageH = 297;
+                    var pdfW = pageW;
+                    var pdfH = (imgProps.height * pageW) / imgProps.width;
+                    if (pdfH > pageH) {
+                        pdfH = pageH;
+                        pdfW = (imgProps.width * pageH) / imgProps.height;
+                    }
+                    var offsetX = (pageW - pdfW) / 2;
+                    masterPdf.addImage(res.dataUrl, 'JPEG', offsetX, 0, pdfW, pdfH, undefined, 'FAST');
                     currentIndex++;
                     setTimeout(processNext, 50);
                 }).catch(function (err) {

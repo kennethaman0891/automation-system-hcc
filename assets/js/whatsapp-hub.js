@@ -103,9 +103,10 @@
         const sendAndNextBtn      = document.getElementById('sendAndNextBtn');
 
         // WhatsApp-Web layout shell
-        const waApp          = document.getElementById('waApp');
-        const waEmptyPane    = document.getElementById('waEmptyPane');
-        const chatBackBtn    = document.getElementById('chatBackBtn');
+        const waApp           = document.getElementById('waApp');
+        const waEmptyPane     = document.getElementById('waEmptyPane');
+        const waHubLiveThread = document.getElementById('waHubLiveThread');
+        const chatBackBtn     = document.getElementById('chatBackBtn');
         const paneSendBtn    = document.getElementById('paneSendBtn');
         const panePhoneInput = document.getElementById('panePhoneInput');
         const batchMenuBtn   = document.getElementById('batchMenuBtn');
@@ -503,6 +504,7 @@
                 mockBubbleText.textContent = msg;
             }
             syncBubbleEditState(st);
+            renderHubLiveThread(st);
 
             if (mockPdfFilename) renderAttachment();
 
@@ -1103,11 +1105,186 @@
             });
         }
 
+        // ── Live WhatsAppStore Incoming Integration ─────────────────────────────
+        const loadedHubChatIds = new Set();
+
+        function last10Digits(raw) {
+            const d = String(raw || '').replace(/\D+/g, '');
+            if (!d) return '';
+            return d.length > 10 ? d.slice(-10) : d;
+        }
+
+        function findStoreChatForStudent(st) {
+            const store = window.WhatsAppStore;
+            if (!st || !store || !store.chats || store.chats.size === 0) return null;
+            const phone10 = last10Digits(getStudentPhone(st.roll));
+            const rollStr = String(st.roll || '').trim();
+            let rollMatch = null;
+            for (const chat of store.chats.values()) {
+                if (!chat || chat.chat_type === 'group' || chat.chat_type === 'broadcast') continue;
+                if (phone10.length >= 8) {
+                    const candidates = [
+                        chat.wa_chat_id && !String(chat.wa_chat_id).includes('@lid') ? chat.wa_chat_id : '',
+                        chat.phone_e164,
+                        chat.contact && chat.contact.phone_e164,
+                        chat.metadata && chat.metadata.parent_phone,
+                        chat.metadata && chat.metadata.phone
+                    ];
+                    for (const cand of candidates) {
+                        const c10 = last10Digits(cand);
+                        if (c10 && c10 === phone10) return chat;
+                    }
+                }
+                if (!rollMatch && rollStr && String(chat.linked_student_roll || '') === rollStr && String(chat.linked_class_key || '') === classKey) {
+                    rollMatch = chat;
+                }
+            }
+            return rollMatch;
+        }
+
+        function formatShortTime(ts) {
+            const n = Number(ts);
+            if (!Number.isFinite(n) || n <= 0) return '';
+            try {
+                return new Date(n * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            } catch (e) {
+                return '';
+            }
+        }
+
+        function syncRosterIncomingBadges() {
+            document.querySelectorAll('.wa-chat-item').forEach(item => {
+                const idx = parseInt(item.dataset.idx, 10);
+                const st = rawStudents[idx];
+                if (!st) return;
+                const previewEl = item.querySelector('.wa-ci-preview');
+                const bottomEl = item.querySelector('.wa-ci-bottom');
+                if (!previewEl || !bottomEl) return;
+                if (previewEl.dataset.basePreview === undefined) {
+                    previewEl.dataset.basePreview = previewEl.textContent || '';
+                }
+
+                const chat = findStoreChatForStudent(st);
+                let badge = bottomEl.querySelector('.wa-ci-unread-badge');
+                const unread = chat ? (Number(chat.unread_count) || 0) : 0;
+                const lastMsg = chat ? chat.last_message : null;
+                const hasIncomingReply = !!(lastMsg && !lastMsg.from_me && String(lastMsg.body || '').trim());
+
+                if (hasIncomingReply || unread > 0) {
+                    const replyText = hasIncomingReply ? String(lastMsg.body).trim() : '';
+                    if (replyText) {
+                        previewEl.textContent = '↩ ' + replyText;
+                        previewEl.classList.add('has-reply');
+                    } else {
+                        previewEl.textContent = previewEl.dataset.basePreview;
+                        previewEl.classList.remove('has-reply');
+                    }
+                    if (unread > 0) {
+                        if (!badge) {
+                            badge = document.createElement('span');
+                            badge.className = 'wa-ci-unread-badge';
+                            bottomEl.appendChild(badge);
+                        }
+                        badge.textContent = unread > 99 ? '99+' : String(unread);
+                        badge.title = unread + ' unread parent message(s)';
+                    } else if (badge) {
+                        badge.remove();
+                    }
+                } else {
+                    previewEl.textContent = previewEl.dataset.basePreview;
+                    previewEl.classList.remove('has-reply');
+                    if (badge) badge.remove();
+                }
+            });
+        }
+
+        function renderHubLiveThread(st) {
+            if (!waHubLiveThread) return;
+            const store = window.WhatsAppStore;
+            const chat = findStoreChatForStudent(st);
+            if (!chat || !store) {
+                waHubLiveThread.style.display = 'none';
+                waHubLiveThread.innerHTML = '';
+                return;
+            }
+            const msgMap = store.messages ? (store.messages.get(chat.id) || store.messages.get(Number(chat.id))) : null;
+            if ((!msgMap || msgMap.size === 0) && !loadedHubChatIds.has(chat.id)) {
+                loadedHubChatIds.add(chat.id);
+                store.loadMessages(chat.id, true).catch(() => {});
+            }
+            const allMsgs = msgMap ? Array.from(msgMap.values()) : [];
+            const visible = allMsgs
+                .filter(m => m && !(m.msg_type === 'system' && !String(m.body || '').trim() && String(m.wa_msg_id || '').startsWith('chat_sync_')))
+                .sort((a, b) => (Number(a.timestamp) || 0) - (Number(b.timestamp) || 0))
+                .slice(-8);
+
+            if (visible.length === 0) {
+                waHubLiveThread.style.display = 'none';
+                waHubLiveThread.innerHTML = '';
+                return;
+            }
+
+            waHubLiveThread.innerHTML = '';
+            const head = document.createElement('div');
+            head.className = 'wa-hub-thread-head';
+            const titleSpan = document.createElement('span');
+            titleSpan.textContent = 'WhatsApp Conversation (' + visible.length + ' recent)';
+            const openBtn = document.createElement('button');
+            openBtn.type = 'button';
+            openBtn.className = 'wa-hub-thread-open-btn';
+            openBtn.textContent = 'Open in Web Replica';
+            openBtn.addEventListener('click', () => {
+                document.dispatchEvent(new CustomEvent('hcc:open-replica-chat', { detail: { chatId: chat.id } }));
+            });
+            head.appendChild(titleSpan);
+            head.appendChild(openBtn);
+            waHubLiveThread.appendChild(head);
+
+            visible.forEach(m => {
+                const bubble = document.createElement('div');
+                bubble.className = 'wa-hub-thread-bubble ' + (m.from_me ? 'out' : 'in');
+                const bodyEl = document.createElement('div');
+                bodyEl.textContent = m.body || (m.msg_type && m.msg_type !== 'text' ? '[' + m.msg_type + ']' : '');
+                const metaEl = document.createElement('div');
+                metaEl.className = 'wa-hub-thread-meta';
+                metaEl.textContent = (m.from_me ? 'You' : (chat.name || 'Parent')) + (m.timestamp ? ' · ' + formatShortTime(m.timestamp) : '');
+                bubble.appendChild(bodyEl);
+                bubble.appendChild(metaEl);
+                waHubLiveThread.appendChild(bubble);
+            });
+            waHubLiveThread.style.display = 'flex';
+        }
+
+        function bindStoreIncomingUpdates() {
+            const store = window.WhatsAppStore;
+            if (!store || store._hubIncomingBound) return;
+            store._hubIncomingBound = true;
+            const refreshHub = () => {
+                syncRosterIncomingBadges();
+                if (rawStudents[activeIdx]) renderHubLiveThread(rawStudents[activeIdx]);
+            };
+            store.addEventListener('store:ready', refreshHub);
+            store.addEventListener('chats:loaded', refreshHub);
+            store.addEventListener('chats:bulk-updated', refreshHub);
+            store.addEventListener('chats:updated', refreshHub);
+            store.addEventListener('messages:loaded', (e) => {
+                const st = rawStudents[activeIdx];
+                const chat = st ? findStoreChatForStudent(st) : null;
+                if (chat && e && e.detail && String(e.detail.chatId) === String(chat.id)) {
+                    renderHubLiveThread(st);
+                }
+            });
+            store.addEventListener('message:new', refreshHub);
+            store.addEventListener('message:received', refreshHub);
+            refreshHub();
+        }
+
         // Initial setup
         updateStats();
         if (rawStudents.length > 0) {
             updatePreview(0);
         }
+        bindStoreIncomingUpdates();
 
         // ════════════════════════════════════════════════════════════════════
         // HUB TEMPLATE LIBRARY WIRING

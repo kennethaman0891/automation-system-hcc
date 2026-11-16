@@ -1,11 +1,31 @@
 <?php
+$cspNonce = bin2hex(random_bytes(16));
+if (!headers_sent()) {
+    header('X-Content-Type-Options: nosniff');
+    header('X-Frame-Options: SAMEORIGIN');
+    header('Referrer-Policy: strict-origin-when-cross-origin');
+    header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
+    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-{$cspNonce}'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'");
+}
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/auth_check.php';
 
-$year     = trim($_GET['year'] ?? '2025-26');
+$activeYear = rcGetActiveAcademicYear();
+$year     = trim($_GET['year'] ?? $activeYear);
+if ($year === '') $year = $activeYear;
 $std      = trim($_GET['std'] ?? '1');
 $division = trim($_GET['division'] ?? 'A');
 $testType = trim($_GET['test_type'] ?? 'Unit Test 2');
+
+$cohortSem = 'Sem 1';
+try {
+    $semStmt = getDB()->prepare("SELECT DISTINCT semester FROM report_card WHERE academic_year = ? AND std = ? AND division = ? ORDER BY semester DESC LIMIT 1");
+    $semStmt->execute([$year, $std, $division]);
+    $foundSem = $semStmt->fetchColumn();
+    if ($foundSem && trim((string)$foundSem) !== '') {
+        $cohortSem = trim((string)$foundSem);
+    }
+} catch (\Throwable $e) {}
 
 // Parents Sign Mode: blank (default for physical signing), digital, or hide
 $signMode = trim($_GET['sign_mode'] ?? '');
@@ -175,7 +195,7 @@ $totalCols = 2 + count($subjects) + 5 + ($showSign ? 1 : 0);
             <button class="ptb-btn ptb-soft" type="button" id="toggleDigitalSignBtn" title="Toggle Digital Sign vs Blank Empty Blocks for Pen Signature">
                 <i class="fas fa-signature"></i> Digital Sign: <span id="digitalSignStatus"><?= $digitalSign ? 'ON' : 'OFF' ?></span>
             </button>
-            <a class="ptb-btn ptb-ghost" href="whatsapp_share.php?doc_type=unit_test&test_type=<?= urlencode($testType) ?>&class=<?= urlencode(rcBuildClassKey($year, $std, $division, 'Sem 1')) ?>" target="_blank" title="Share on WhatsApp"><i class="fa-brands fa-whatsapp" style="color:#25D366;"></i> Share</a>
+            <a class="ptb-btn ptb-ghost" href="whatsapp_share.php?doc_type=unit_test&test_type=<?= urlencode($testType) ?>&class=<?= urlencode(rcBuildClassKey($year, $std, $division, $cohortSem)) ?>" target="_blank" title="Share on WhatsApp"><i class="fa-brands fa-whatsapp" style="color:#25D366;"></i> Share</a>
             <button class="ptb-btn ptb-soft" type="button" data-ptb="viewall" aria-pressed="false" title="Fit the full table to the screen"><i class="fas fa-expand"></i> View All</button>
             <button class="ptb-btn ptb-dark" type="button" data-ptb="download" title="Save as PDF"><i class="fas fa-download"></i> Download</button>
             <button class="ptb-btn ptb-solid" type="button" data-ptb="print"><i class="fas fa-print"></i> Print</button>
@@ -244,8 +264,8 @@ $totalCols = 2 + count($subjects) + 5 + ($showSign ? 1 : 0);
                     $prevGender = $curGender;
             ?>
                 <tr>
-                    <td colspan="<?= $totalCols ?>" class="td-category td-category-gender">
-                        <?= strtoupper($curGender) ?>S :
+                    <td colspan="<?= (int)$totalCols ?>" class="td-category td-category-gender">
+                        <?= sanitize(strtoupper((string)$curGender)) ?>S :
                     </td>
                 </tr>
             <?php endif; ?>
@@ -267,7 +287,7 @@ $totalCols = 2 + count($subjects) + 5 + ($showSign ? 1 : 0);
                     <td><?= sanitize($val) ?></td>
                 <?php endforeach; ?>
 
-                <td class="td-tot"><?= $stu['total_obtained'] ?></td>
+                <td class="td-tot"><?= sanitize((string)$stu['total_obtained']) ?></td>
                 <td class="td-pct"><?= $stu['percentage'] !== null ? number_format($stu['percentage'], 2) : '-' ?></td>
                 <td class="td-grade"><?= sanitize($stu['grade']) ?></td>
                 <td style="text-align:left;padding-left:6px;"><?= sanitize($stu['remark']) ?></td>
@@ -293,7 +313,7 @@ $totalCols = 2 + count($subjects) + 5 + ($showSign ? 1 : 0);
     </div>
 
     <script src="../assets/js/print-toolbar.js"></script>
-    <script>
+    <script nonce="<?= $cspNonce ?>">
     // Toggle Digital Signature vs Blank Blocks for Physical Signing
     let isDigitalOn = <?= $digitalSign ? 'true' : 'false' ?>;
     document.getElementById('toggleDigitalSignBtn')?.addEventListener('click', function () {

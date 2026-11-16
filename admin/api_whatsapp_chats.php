@@ -15,6 +15,7 @@ $db = waGetDB();
 // Handle Chat Creation / Retrieval via POST
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+    waVerifyCSRF(is_array($input) ? $input : null);
     
     $chatType   = $input['chat_type'] ?? 'individual';
     $rawPhone   = trim((string)($input['phone'] ?? ($input['wa_chat_id'] ?? '')));
@@ -63,7 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         if ($avatarUrl === '') {
-            $avatarUrl = "https://api.dicebear.com/7.x/initials/svg?seed=" . urlencode($name);
+            $avatarUrl = null;
         }
 
         try {
@@ -237,23 +238,25 @@ $where = ['1=1'];
 $params = [];
 
 if ($archived) {
-    $where[] = 'is_archived = 1';
+    $where[] = 'c.is_archived = 1';
 } else {
-    $where[] = 'is_archived = 0';
+    $where[] = 'c.is_archived = 0';
 }
 
 if ($filter === 'unread') {
-    $where[] = 'unread_count > 0';
+    $where[] = 'c.unread_count > 0';
 } elseif ($filter === 'groups') {
-    $where[] = "chat_type IN ('group','broadcast')";
+    $where[] = "c.chat_type IN ('group','broadcast')";
 } elseif ($filter === 'pinned') {
-    $where[] = 'is_pinned = 1';
+    $where[] = 'c.is_pinned = 1';
 } elseif ($filter === 'enquiries') {
     $where[] = "(c.is_admission_enquiry = 1 OR JSON_UNQUOTE(JSON_EXTRACT(c.metadata, '$.is_enquiry')) = 'true' OR JSON_UNQUOTE(JSON_EXTRACT(c.metadata, '$.enquiry_id')) IS NOT NULL)";
+} elseif ($filter === 'starred') {
+    $where[] = "EXISTS (SELECT 1 FROM whatsapp_messages m_star WHERE m_star.chat_id = c.id AND m_star.is_starred = 1)";
 }
 
 if ($search !== '') {
-    $where[] = '(name LIKE ? OR wa_chat_id LIKE ?)';
+    $where[] = '(c.name LIKE ? OR c.wa_chat_id LIKE ?)';
     $params[] = "%$search%";
     $params[] = "%$search%";
 }
@@ -261,11 +264,12 @@ if ($search !== '') {
 $whereSql = implode(' AND ', $where);
 
 // Get chats with last message preview
-$countSql = "SELECT COUNT(*) FROM whatsapp_chats WHERE $whereSql";
+$countSql = "SELECT COUNT(*) FROM whatsapp_chats c WHERE $whereSql";
 $dataSql = "
     SELECT 
-        c.id, c.wa_chat_id, c.chat_type, c.name, c.avatar_url,
-        c.is_archived, c.is_pinned, c.is_muted, c.mute_until,
+        c.id, c.wa_chat_id, c.wa_lid, c.chat_type, c.name, c.avatar_url,
+        c.is_archived, c.is_pinned, c.is_muted, c.mute_until, c.is_admission_enquiry,
+        EXISTS (SELECT 1 FROM whatsapp_messages m_star WHERE m_star.chat_id = c.id AND m_star.is_starred = 1) AS has_starred,
         c.unread_count, c.last_activity_at, c.metadata, c.linked_student_roll, c.linked_class_key,
         m.wa_msg_id as last_msg_id, m.body as last_msg_body, m.msg_type as last_msg_type,
         m.from_me as last_msg_from_me, m.timestamp as last_msg_timestamp,

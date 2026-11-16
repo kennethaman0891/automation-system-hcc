@@ -15,14 +15,19 @@ require_once __DIR__ . '/auth_check.php';
 waRequireAuth();
 header('Content-Type: application/json; charset=utf-8');
 
+if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+    waJsonResponse(['success' => false, 'error' => 'Method not allowed'], 405);
+}
+
 $db = waGetDB();
 
-// Accept class_key from GET, POST, or JSON body
+// Accept class_key from POST or JSON body
 $input = json_decode(file_get_contents('php://input'), true);
 if (!is_array($input)) {
     $input = $_POST;
 }
-$classKey = trim($input['class_key'] ?? ($_GET['class_key'] ?? ''));
+waVerifyCSRF($input);
+$classKey = trim($input['class_key'] ?? '');
 
 // If no class key provided, determine default from available classes
 if ($classKey === '') {
@@ -69,30 +74,7 @@ if (empty($students)) {
     $students = $fallbackStmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
-// If database has 0 students across all classes, create standard demo students
-if (empty($students)) {
-    $demoNames = [
-        1 => 'Aarav Rajesh Sharma',
-        2 => 'Ananya Sunil Deshmukh',
-        3 => 'Rohan Prakash Patil',
-        4 => 'Sara Mohammed Khan',
-        5 => 'Vihaan Amit Kulkarni'
-    ];
-    $students = [];
-    foreach ($demoNames as $r => $name) {
-        $students[] = [
-            'roll_no' => $r,
-            'student_name' => $name,
-            'parent_phone' => '98765' . str_pad((string)$r, 5, '0', STR_PAD_LEFT),
-            'std' => $std,
-            'division' => $division,
-            'academic_year' => $year,
-            'semester' => $semester,
-            'percentage' => 88.5,
-            'grade' => 'A1'
-        ];
-    }
-}
+// Never invent fake demo student phones into live whatsapp_chats/contacts
 
 $syncedCount = 0;
 $createdChats = [];
@@ -138,24 +120,21 @@ if (!$existingGroup) {
     ]);
 }
 
-// 2. Sync Individual Student Parent Chats
+// 2. Sync Individual Student Parent Chats (strict phone validation; never fabricate phones)
 foreach ($students as $stu) {
     $roll = (string)($stu['roll_no'] ?? '');
     $name = trim((string)($stu['student_name'] ?? "Student {$roll}"));
     
-    // Normalize phone number
+    // Normalize and strictly validate phone number
     $rawPhone = trim((string)($stu['parent_phone'] ?? ''));
-    $cleanDigits = preg_replace('/\D/', '', $rawPhone);
-    if (strlen($cleanDigits) < 10) {
-        // Deterministic fallback phone: 98765 + 5-digit roll
-        $cleanDigits = '98765' . str_pad($roll, 5, '0', STR_PAD_LEFT);
+    $vPhone = waValidateWhatsAppPhone($rawPhone);
+    if (!$vPhone['ok']) {
+        continue;
     }
-    if (strlen($cleanDigits) === 10) {
-        $cleanDigits = '91' . $cleanDigits;
-    }
-    $phoneE164 = '+' . $cleanDigits;
+    $cleanDigits = $vPhone['digits'];
+    $phoneE164 = $vPhone['e164'];
     $waChatId = $cleanDigits . '@c.us';
-    $avatarUrl = "https://api.dicebear.com/7.x/initials/svg?seed=" . urlencode($name);
+    $avatarUrl = null;
 
     // Upsert into whatsapp_contacts
     $cStmt = $db->prepare("

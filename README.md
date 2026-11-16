@@ -46,7 +46,10 @@ until a person opens the `wa.me` link and presses Send.
 
 Windows install, service startup, configuration, and backup steps are in
 `docs/WINDOWS_DEPLOYMENT.md`, `docs/CONFIGURATION.md`, and
-`docs/BACKUP_AND_RECOVERY.md`. The audit, test report, and limits are in
+`docs/BACKUP_AND_RECOVERY.md`. For the complete end-to-end staff & IT handbook,
+see `docs/HCC_MASTER_INSTRUCTION_GUIDE.md`. For the 15-slide executive overview,
+open `docs/presentation/index.html` (accompanied by `docs/presentation/SPEAKER_SCRIPT.md`).
+The audit, test report, and limits are in
 `docs/ADMISSION_AUDIT.md`, `docs/TEST_REPORT.md`, and `docs/KNOWN_LIMITATIONS.md`.
 
 Run the workflow check with:
