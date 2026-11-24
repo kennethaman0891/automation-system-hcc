@@ -156,6 +156,19 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High Schoo
     </nav>
 
     <div class="sidebar-footer">
+        <?php
+        require_once __DIR__ . '/../../includes/user_account.php';
+        $hccAcct = hccCurrentAccount();
+        $hccAccountHref = (defined('BASE_URL') ? BASE_URL : '/hcc/') . 'admin/account.php';
+        ?>
+        <a href="account.php" class="sidebar-security<?= $adminPage === 'account' ? ' active' : '' ?>" title="My account" data-tooltip="My account"<?= $adminPage === 'account' ? ' aria-current="page"' : '' ?>>
+            <?php if (!empty($hccAcct['has_photo'])): ?>
+            <img class="sidebar-account-photo" src="<?= htmlspecialchars($hccAcct['photo_url'], ENT_QUOTES, 'UTF-8') ?>" alt="" width="30" height="30">
+            <?php else: ?>
+            <i class="fa-solid fa-fw fa-user" aria-hidden="true"></i>
+            <?php endif; ?>
+            <span>My account</span>
+        </a>
         <a href="change_password.php" class="sidebar-security<?= $adminPage === 'change_password' ? ' active' : '' ?>" title="Account Security &amp; Password" data-tooltip="Account Security &amp; Password"<?= $adminPage === 'change_password' ? ' aria-current="page"' : '' ?>>
             <i class="fa-solid fa-fw fa-user-shield" aria-hidden="true"></i>
             <span>Security</span>
@@ -258,3 +271,26 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High Schoo
         </div>
     </div>
 </div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var accountUrl = <?= json_encode($hccAccountHref, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+    var chips = document.querySelectorAll('.admin-user');
+    for (var i = 0; i < chips.length; i++) {
+        var el = chips[i];
+        if (el.dataset.accountBound === '1' || el.closest('a') || el.querySelector('a, button')) continue;
+        el.dataset.accountBound = '1';
+        el.classList.add('is-account-link');
+        el.setAttribute('role', 'link');
+        el.tabIndex = 0;
+        var name = (el.innerText || '').replace(/\s+/g, ' ').trim();
+        el.setAttribute('aria-label', name ? (name + '. Open My account') : 'Open My account');
+        el.addEventListener('click', function () { window.location.href = accountUrl; });
+        el.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                window.location.href = accountUrl;
+            }
+        });
+    }
+});
+</script>

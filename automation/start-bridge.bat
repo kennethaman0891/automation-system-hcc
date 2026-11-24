@@ -19,9 +19,10 @@ exit /b 0
 
 :batloop
 if not exist "%~dp0..\storage\whatsapp\ipc" mkdir "%~dp0..\storage\whatsapp\ipc"
+if not exist "%~dp0..\logs" mkdir "%~dp0..\logs"
 set "WHATSAPP_IPC_DIR=%~dp0..\storage\whatsapp\ipc"
 :loop
-node whatsapp-bridge.js >> "%TEMP%\whatsapp-bridge.log" 2>&1
+node whatsapp-bridge.js >> "%~dp0..\logs\whatsapp-bridge.log" 2>&1
 echo Bridge exited. Restarting in 10 seconds...
 timeout /t 10 /nobreak >nul
 goto loop

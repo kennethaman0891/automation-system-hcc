@@ -204,6 +204,16 @@ function hccAssistantNav(): array
                 'Unlink removes the folder connection from this system. It does not delete the folder in Google Drive.',
             ],
         ],
+        'account' => [
+            'icon' => 'fa-solid fa-user', 'label' => 'My account', 'href' => 'account.php',
+            'group' => 'Account',
+            'points' => [
+                'My account sits above Security in the sidebar. The photo and text size belong to the person who is signed in.',
+                'Increase or decrease text size. The size is saved on that login and applies across the admin pages.',
+                'Upload a JPG, PNG, or WebP profile photo, or remove it. The photo shows in the admin header.',
+                'Report cards, slips, and other print sheets stay at paper size.',
+            ],
+        ],
         'security' => [
             'icon' => 'fa-solid fa-user-shield', 'label' => 'Security', 'href' => 'change_password.php',
             'group' => 'Account',
@@ -590,11 +600,25 @@ function hccAssistantTopics(): array
             'links' => [['label' => 'Drive Workspace', 'href' => 'shared_workspace.php']],
             'followups' => ['How does WhatsApp sharing work?'],
         ],
+        'my_account' => [
+            'keywords' => ['font size', 'text size', 'bigger text', 'smaller text', 'increase font', 'decrease font', 'profile photo', 'profile picture', 'my account', 'upload photo'],
+            'title' => 'My account',
+            'text' => 'My account is above Security in the sidebar. Text size and the profile photo belong to the person who is signed in. Password changes stay on Security.',
+            'steps' => [
+                ['nav' => 'account', 'text' => 'Open My account. The page shows your name, username, role, and email.'],
+                ['nav' => 'account', 'text' => 'Use A− to decrease text size and A+ to increase it. Reset to standard returns to 100%. The size is saved on your login and applies across the admin pages. Report cards, slips, and other print sheets stay at paper size.'],
+                ['nav' => 'account', 'text' => 'Choose a JPG, PNG, or WebP photo under 2 MB and press Save photo. Remove photo clears it. The photo shows in the admin header and on My account.'],
+                ['nav' => 'security', 'text' => 'Password and recovery email stay on Security, the item under My account.'],
+            ],
+            'links' => [['label' => 'My account', 'href' => 'account.php'], ['label' => 'Security', 'href' => 'change_password.php']],
+            'followups' => ['How do I change my password?'],
+        ],
         'security' => [
             'keywords' => ['password', 'change password', 'security', 'login', 'log in', 'sign in', 'logout', 'log out', 'forgot', 'reset password', 'account'],
             'title' => 'Account and security',
-            'text' => 'Security is at the bottom of the sidebar, separate from the main menu.',
+            'text' => 'Security is at the bottom of the sidebar, under My account.',
             'steps' => [
+                ['nav' => 'account', 'text' => 'Open My account for your profile photo and text size. Those settings stay with your login.'],
                 ['nav' => 'security', 'text' => 'Open Security. The page is Account Security & Password. Use Account Password to replace your own admin password.'],
                 ['nav' => 'security', 'text' => 'If you cannot sign in, use Forgot password? on the login page. That recovery page is not inside the dashboard.'],
                 ['nav' => 'logout', 'text' => 'Log out is the last item in the sidebar. Confirm it in the dialog. Unsaved changes on the page you are leaving are lost. The assistant cannot log you out by itself.'],

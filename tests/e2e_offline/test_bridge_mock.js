@@ -3,7 +3,21 @@
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
+
+function resolvePhpBin() {
+  if (process.env.PHP_BIN && fs.existsSync(process.env.PHP_BIN)) {
+    return process.env.PHP_BIN;
+  }
+  const candidates = process.platform === 'win32'
+    ? ['C:\\xampp\\php\\php.exe']
+    : ['/Applications/XAMPP/xamppfiles/bin/php', '/opt/lampp/bin/php'];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return 'php';
+}
+const PHP_BIN = resolvePhpBin();
 
 process.env.WA_TEST_MODE = '1';
 process.env.WA_MOCK_URL = process.env.WA_MOCK_URL || 'http://127.0.0.1:9876/';
@@ -15,7 +29,7 @@ process.env.USER_DATA_DIR = path.join(__dirname, '../../automation/.whatsapp-ses
 process.env.ENABLE_PRIVACY_FILTER = 'false';
 process.env.POLL_INTERVAL = '60000';
 
-const secret = execSync('/Applications/XAMPP/xamppfiles/bin/php ' + path.join(__dirname, 'lib/get_bridge_secret.php'), { encoding: 'utf8' }).trim();
+const secret = execFileSync(PHP_BIN, [path.join(__dirname, 'lib/get_bridge_secret.php')], { encoding: 'utf8' }).trim();
 process.env.WHATSAPP_BRIDGE_SECRET = secret;
 
 const WhatsAppBridge = require(path.join(__dirname, '../../automation/whatsapp-bridge'));
@@ -46,14 +60,16 @@ function post(url, body) {
 
 function cancelAllQueued() {
   // Cancel anything left in test DB so polling cannot send mid-test
-  execSync(`/Applications/XAMPP/xamppfiles/bin/php -r '
-    putenv("WA_TEST_MODE=1"); putenv("HCC_DB_NAME=hcc_wa_test");
-    $_SERVER["SCRIPT_NAME"]="/tmp/x.php"; $_SERVER["HTTP_HOST"]="localhost";
-    require "${path.join(__dirname, "../../config/database.php").replace(/\\/g, "/")}";
-    $db=getDB();
-    $n=$db->exec("UPDATE whatsapp_outbound_queue SET status=\\"cancelled\\" WHERE status IN (\\"queued\\",\\"processing\\",\\"revoke_pending\\") OR msg_type=\\"revoke\\"");
-    echo "cancelled_rows=$n\\n";
-  '`, { encoding: 'utf8' });
+  const dbPhp = path.join(__dirname, '../../config/database.php').replace(/\\/g, '/');
+  const code = [
+    'putenv("WA_TEST_MODE=1"); putenv("HCC_DB_NAME=hcc_wa_test");',
+    '$_SERVER["SCRIPT_NAME"]="/tmp/x.php"; $_SERVER["HTTP_HOST"]="localhost";',
+    `require "${dbPhp}";`,
+    '$db=getDB();',
+    '$n=$db->exec("UPDATE whatsapp_outbound_queue SET status=\'cancelled\' WHERE status IN (\'queued\',\'processing\',\'revoke_pending\') OR msg_type=\'revoke\'");',
+    'echo "cancelled_rows=$n\\n";',
+  ].join(' ');
+  execFileSync(PHP_BIN, ['-r', code], { encoding: 'utf8' });
 }
 
 (async () => {

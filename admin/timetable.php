@@ -43,6 +43,7 @@ if (!empty($nameParts[0])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<?php require __DIR__ . '/includes/account_head.php'; ?>
     <meta name="description" content="Design, manage and publish examination schedules for HCC High School">
     <meta name="csrf-token" content="<?= htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') ?>">
     <title><?= sanitize($pageTitle) ?> | <?= sanitize($schoolName) ?></title>

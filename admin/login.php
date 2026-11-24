@@ -343,7 +343,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </footer>
             </aside>
 
-            <main class="login-main col-12 col-lg-6 d-flex flex-column align-items-center justify-content-center px-3 py-4 p-sm-4 p-xl-5" aria-label="Admin login">
+            <main class="login-main col-12 col-lg-6 d-flex flex-column align-items-center px-3 py-4 p-sm-4 p-xl-5" aria-label="Admin login">
                 <div class="login-wrap w-100 mx-auto">
                     <div class="login-mobile-brand d-flex d-lg-none align-items-center gap-3 p-3 mb-3 rounded-4 text-white">
                         <img class="login-mark rounded-3 border bg-white p-1 flex-shrink-0" src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="Hindustani Covenant Church High School logo">
@@ -353,7 +353,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </div>
                     </div>
 
-                    <div class="d-none d-lg-flex align-items-center justify-content-between mb-3 px-1 small text-body-secondary">
+                    <div class="login-card-meta d-none d-lg-flex align-items-center justify-content-between mb-3 px-1 small text-body-secondary">
                         <span class="d-inline-flex align-items-center gap-2 fw-semibold">
                             <i class="fa-solid fa-building-columns text-primary" aria-hidden="true"></i>
                             <span>HCC High School &middot; Solapur Campus</span>
@@ -492,7 +492,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </div>
                     </div>
 
-                    <p class="text-center small text-body-secondary mt-3 mb-0">
+                    <p class="login-copy text-center small text-body-secondary mt-3 mb-0">
                         Authorized school personnel only &bull; Activity is logged for security auditing
                     </p>
                 </div>

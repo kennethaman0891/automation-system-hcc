@@ -40,6 +40,7 @@ foreach (preg_split('/\s+/', $adminName) as $part) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<?php require __DIR__ . '/includes/account_head.php'; ?>
     <meta name="csrf-token" content="<?= htmlspecialchars(generateCSRFToken(), ENT_QUOTES) ?>">
     <title>Admission Follow-up Hub — <?= sanitize($schoolName) ?></title>
     <link rel="icon" href="../assets/images/hcclogo.jpg">

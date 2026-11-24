@@ -243,6 +243,7 @@ $googleConfigured = !empty($settings['google_client_id']) && !empty($settings['g
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<?php require __DIR__ . '/includes/account_head.php'; ?>
     <title>Account Security &amp; Password | <?= sanitize($schoolName) ?></title>
     <link rel="icon" href="../assets/images/hcclogo.jpg">
     <link rel="stylesheet" href="../assets/vendor/font-awesome@6.5.0/css/all.min.css">
@@ -738,8 +739,11 @@ $googleConfigured = !empty($settings['google_client_id']) && !empty($settings['g
                 </div>
                 <div class="header-actions">
                     <div class="admin-user">
-                        <i class="fas fa-shield-alt"></i>
-                        <span><?= sanitize($adminUser) ?> (<?= strtoupper(sanitize($adminRole)) ?>)</span>
+                        <span class="user-avatar" aria-hidden="true"><?= sanitize(hccAdminInitials($adminUser)) ?></span>
+                        <span class="user-meta">
+                            <strong><?= sanitize($adminUser) ?></strong>
+                            <small><?= sanitize(ucfirst((string)$adminRole)) ?></small>
+                        </span>
                     </div>
                 </div>
             </header>

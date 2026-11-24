@@ -11,6 +11,7 @@ Google Drive sharing, certificates and parent-sign workflows.
 
 ## Setup
 
+### macOS / Linux
 1. Clone into XAMPP's docroot so URLs resolve as `/hcc/...`:
    ```
    cd /Applications/XAMPP/xamppfiles/htdocs
@@ -30,11 +31,24 @@ Google Drive sharing, certificates and parent-sign workflows.
    JWT_SECRET is replaced.
 4. Import the MySQL schema (database name from `DB_NAME`, default `hcc_admin`)
    and load `data/migrations/create_timetable_tables.sql`.
-5. For the WhatsApp bridge:
+5. For the WhatsApp bridge (optional): copy `automation/.env.example` to `automation/.env`, then:
    ```
    cd automation && npm install && node whatsapp-bridge.js
    ```
 6. Open `http://localhost/hcc/admin/` and log in.
+
+### Windows (XAMPP at `C:\xampp\htdocs\hcc`)
+1. Install prerequisites: XAMPP for Windows (Apache + MariaDB + PHP 8.3+), Composer 2, Rust (`rustup` + VS C++ Build Tools), Ollama (`ollama pull llama3.2:1b`), and optionally Node.js 18+ + Chrome/Edge for the WhatsApp bridge.
+2. Clone or stage into `C:\xampp\htdocs\hcc`.
+3. Run the automated setup script in PowerShell:
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File C:\xampp\htdocs\hcc\automation\windows\setup-windows.ps1
+   ```
+   This verifies PHP/extensions, creates `config\env.php` (with a random `JWT_SECRET`) and `automation\.env`, runs `composer install`, builds both Rust `.exe` services (`admission-ai-service.exe` and `hcc-automation-engine.exe`), pulls `llama3.2:1b`, and installs bridge packages if Node is present.
+4. Edit `config\env.php` to set `DB_PASS`, run the database migrations (see `docs/WINDOWS_DEPLOYMENT.md`), start services in order, and verify with:
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File C:\xampp\htdocs\hcc\automation\windows\verify-windows.ps1 -RunE2E
+   ```
 
 ## Admission enquiry workflow
 

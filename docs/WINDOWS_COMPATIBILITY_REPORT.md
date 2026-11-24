@@ -1,7 +1,13 @@
 # Windows Compatibility Report — HCC / School WhatsApp Hub
 
 **Date:** 2026-11-17
-**Update 2026-11-24:** On Windows the bridge and PHP share flags in `storage/whatsapp/ipc` (not each user's temp folder). `automation\start-bridge.bat` starts the restarting supervisor. The Windows start scripts refuse a copied macOS Mach-O binary. A macOS `DB_SOCKET` value in `config\env.php` is ignored on Windows so MySQL uses TCP.
+**Update 2026-11-24:**
+- On Windows the bridge and PHP share flags in `storage/whatsapp/ipc` (not each user's temp folder). `automation\start-bridge.bat` starts the restarting supervisor (and its fallback loop logs to `logs\whatsapp-bridge.log`).
+- The Windows start scripts refuse a copied macOS Mach-O binary (`automation/windows/hcc-pe.ps1`).
+- A macOS `DB_SOCKET` value in `config\env.php` is ignored on Windows so MySQL uses TCP.
+- `.gitignore` now tracks the Rust service source trees (`automation/admission-ai-service/` and `automation/rust_engine/`) while ignoring only their `target/` build directories (resolving Blocker #1 once committed).
+- Added `automation/.env.example`, `automation/windows/setup-windows.ps1` (automated setup), and `automation/windows/verify-windows.ps1` (pre-flight & E2E verifier).
+- PHP migrations (`admin/migrate_whatsapp_replica.php`, `admin/migrate_ai_admission.php`) now use `hccEnsureColumn()`/`hccEnsureIndex()` instead of MariaDB-only DDL; `tests/e2e_offline/test_bridge_mock.js` and `tests/e2e_offline/run_all.bat` were updated for Windows compatibility.
 **Audience:** School IT administrator (Windows PC deployment)
 **Scope:** Can this project run end-to-end on Windows, what hardware/software is required, and exactly what must be done before it can be called ready?
 **Method:** Direct inspection of the checkout at `C:\...\htdocs\hcc` equivalent (macOS path `/Applications/XAMPP/xamppfiles/htdocs/hcc`) on 2026-11-17. Evidence was taken from `.gitignore`, `composer.json`, `config/*.php`, `data/migrations/*`, `admin/*.php`, `admin/includes/*.php`, `automation/*` (Rust source, Node bridge, Windows scripts), `.htaccess` files, and `docs/*`. Version numbers were taken from `php -v` (PHP 8.5.12), `node -v` (v24.19.0), `composer.json`, and `automation/package.json`. Findings are stated honestly; items not yet tested on Windows are labelled as such.

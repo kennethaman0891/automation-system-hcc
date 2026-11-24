@@ -142,6 +142,7 @@ $notifData = rcGetRecentNotifications(8);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<?php require __DIR__ . '/includes/account_head.php'; ?>
     <title>Promote Students — <?= sanitize($schoolName) ?></title>
     <link rel="icon" href="../assets/images/hcclogo.jpg">
     <link rel="stylesheet" href="../assets/vendor/font-awesome@6.5.0/css/all.min.css">

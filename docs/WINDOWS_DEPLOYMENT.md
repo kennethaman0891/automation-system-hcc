@@ -38,6 +38,22 @@ C:\xampp\htdocs\hcc
 
 The site is then `http://localhost/hcc/admin/`.
 
+## Automated setup & verification helpers
+
+After installing the prerequisites above, you can run the idempotent Windows setup script from PowerShell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\xampp\htdocs\hcc\automation\windows\setup-windows.ps1
+```
+
+It checks PHP 8.3+ and required extensions, creates `config\env.php` (with `DB_HOST=127.0.0.1`, `DB_SOCKET=''`, and a freshly generated `JWT_SECRET`) and `automation\.env` (from `automation\.env.example`) if missing, runs `composer install`, builds both Windows Rust `.exe` binaries, pulls `llama3.2:1b`, and installs bridge Node packages if Node.js is present. Pass `-RunMigrations` once MariaDB and `hcc_admin` are ready.
+
+After starting the services, run the read-only health and pre-flight verifier (add `-RunE2E` to also execute the mandatory release gate):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\xampp\htdocs\hcc\automation\windows\verify-windows.ps1 -RunE2E
+```
+
 ## Config file
 
 Copy `config\env.example.php` to `config\env.php`. Edit the copy. Never commit `config\env.php`.

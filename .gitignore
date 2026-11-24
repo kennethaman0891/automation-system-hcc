@@ -21,8 +21,8 @@ storage/whatsapp/media/*
 !storage/whatsapp/media/.gitkeep
 automation/.whatsapp-session/
 automation/.whatsapp-session-test/
-automation/admission-ai-service/
-automation/rust_engine/
+automation/admission-ai-service/target/
+automation/rust_engine/target/
 automation/bin/
 
 # --- private runtime data ---

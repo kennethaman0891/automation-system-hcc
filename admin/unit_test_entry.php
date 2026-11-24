@@ -285,6 +285,7 @@ $pageTitle = ($edit ? 'Edit Student Entry' : 'Add New Student Entry') . ' — ' 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<?php require __DIR__ . '/includes/account_head.php'; ?>
     <title><?= sanitize($pageTitle) ?></title>
     <link rel="icon" href="../assets/images/hcclogo.jpg">
     <link rel="preconnect" href="https://fonts.googleapis.com">

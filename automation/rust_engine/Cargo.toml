@@ -1,0 +1,12 @@
+[package]
+name = "hcc-automation-engine"
+version = "1.0.0"
+edition = "2021"
+authors = ["HCC Automation System"]
+description = "High-performance Rust automation engine and durable MySQL-backed job queue for Admission Follow-up Management"
+
+[dependencies]
+mysql = { version = "28.0.4", default-features = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }

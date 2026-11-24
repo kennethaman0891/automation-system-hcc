@@ -21,7 +21,8 @@ function pdo_to(string $dbName): PDO {
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     ];
-    $sock = defined('DB_SOCKET') ? DB_SOCKET : '/Applications/XAMPP/xamppfiles/var/mysql/mysql.sock';
+    $defaultSock = (PHP_OS_FAMILY === 'Windows') ? '' : '/Applications/XAMPP/xamppfiles/var/mysql/mysql.sock';
+    $sock = defined('DB_SOCKET') ? DB_SOCKET : $defaultSock;
     $dsns = [];
     if ($sock && file_exists($sock)) {
         $dsns[] = "mysql:unix_socket={$sock};dbname={$dbName};charset=utf8mb4";
