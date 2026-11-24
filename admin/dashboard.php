@@ -10,10 +10,11 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High Schoo
 $topPerformer = rcTopPerformer();
 $lowestPerformer = rcLowestPerformer();
 $schoolTagline = $settings['school_tagline'] ?? '';
-$schoolLogo = $settings['logo'] ?? 'assets/images/hcclogo.jpg';
-$principalName = $settings['principal_name'] ?? '';
-$grNo = $settings['gr_no'] ?? '';
-$contactAddress = $settings['contact_address'] ?? '';
+$schoolLogoRel = trim((string)($settings['logo'] ?? ''));
+if ($schoolLogoRel === '' || !is_file(__DIR__ . '/../' . ltrim($schoolLogoRel, '/'))) {
+    $schoolLogoRel = 'assets/images/hcclogo.jpg';
+}
+$schoolLogoUrl = BASE_URL . ltrim($schoolLogoRel, '/');
 $notifData = rcGetRecentNotifications(8);
 
 /* ── WhatsApp hub quick stats (fail-soft: WhatsApp tables may not exist yet) ── */
@@ -56,7 +57,6 @@ try {
 } catch (Throwable $e) {}
 try {
     $opsDb = $opsDb ?? getDB();
-    // Count students flagged with High FA (>=65%) / Low SA (<35%) OR overall failing/drop across terms in active year
     $diagStmt = $opsDb->prepare("
         SELECT COUNT(DISTINCT CONCAT(std,'|',division,'|',roll_no))
         FROM report_card
@@ -90,7 +90,7 @@ try {
     $seatingPlansCount = (int)$opsDb->query("SELECT COUNT(*) FROM exam_seating_plans WHERE exam_date >= CURDATE()")->fetchColumn();
 } catch (Throwable $e) {}
 
-/* Mark-as-read endpoint for the header bell (same contract as results.php). */
+/* Mark-as-read endpoint for the dashboard feed (same contract as results.php). */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'mark_notifs_read') {
     if (!verifyCSRFToken()) {
         header('Content-Type: application/json');
@@ -105,14 +105,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'mark_
 
 /* ── View state ── */
 $adminName = sanitize($_SESSION['admin_name'] ?? 'Admin');
+$adminRole = sanitize(ucfirst(trim((string)($_SESSION['admin_role'] ?? 'Admin')) ?: 'Admin'));
 $adminInitials = strtoupper(implode('', array_map(
     function ($part) { return mb_substr($part, 0, 1); },
-    array_slice(array_filter(preg_split('/\s+/', trim($_SESSION['admin_name'] ?? 'A'))), 0, 2)
+    array_slice(array_filter(preg_split('/\s+/', trim((string)($_SESSION['admin_name'] ?? 'A')))), 0, 2)
 )));
-$hourNow = (int)date('G');
+if ($adminInitials === '') {
+    $adminInitials = 'A';
+}
+
+// Greeting uses Indian Standard Time (Asia/Kolkata) so it matches the school's local time.
+$istNow  = new DateTime('now', new DateTimeZone('Asia/Kolkata'));
+$hourNow = (int)$istNow->format('G');
 $greeting = $hourNow < 12 ? 'Good morning' : ($hourNow < 17 ? 'Good afternoon' : 'Good evening');
 $hasData = ((int)($stats['students'] ?? 0)) > 0;
 $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
+
+$heroVideoFile = __DIR__ . '/../assets/videos/hcc-project-promo.mp4';
+$heroFallbackVideoFile = __DIR__ . '/../assets/videos/whatsapp-hub-promo.mp4';
+if (is_file($heroVideoFile)) {
+    $heroVideoSrc = BASE_URL . 'assets/videos/hcc-project-promo.mp4?v=' . filemtime($heroVideoFile);
+} else {
+    $heroVideoSrc = BASE_URL . 'assets/videos/whatsapp-hub-promo.mp4' . (is_file($heroFallbackVideoFile) ? '?v=' . filemtime($heroFallbackVideoFile) : '');
+}
+
+$heroPosterFile = __DIR__ . '/../assets/images/hcc-project-promo-poster.jpg';
+$heroFallbackPosterFile = __DIR__ . '/../assets/images/wa-promo-poster.jpg';
+if (is_file($heroPosterFile)) {
+    $heroPosterSrc = BASE_URL . 'assets/images/hcc-project-promo-poster.jpg?v=' . filemtime($heroPosterFile);
+} else {
+    $heroPosterSrc = BASE_URL . 'assets/images/wa-promo-poster.jpg' . (is_file($heroFallbackPosterFile) ? '?v=' . filemtime($heroFallbackPosterFile) : '');
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -125,7 +148,7 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <meta name="csrf-token" content="<?= htmlspecialchars(generateCSRFToken(), ENT_QUOTES) ?>">
+    <meta name="csrf-token" content="<?= htmlspecialchars(generateCSRFToken(), ENT_QUOTES, 'UTF-8') ?>">
     <link rel="stylesheet" href="<?= BASE_URL ?>assets/css/admin.css?v=<?= (is_file(__DIR__ . '/../assets/css/admin.css') ? filemtime(__DIR__ . '/../assets/css/admin.css') : 0) ?>">
     <link rel="stylesheet" href="<?= BASE_URL ?>assets/css/admin-dash.css?v=<?= (is_file(__DIR__ . '/../assets/css/admin-dash.css') ? filemtime(__DIR__ . '/../assets/css/admin-dash.css') : 0) ?>">
     <link rel="stylesheet" href="<?= BASE_URL ?>assets/css/hcc-assistant.css?v=<?= (is_file(__DIR__ . '/../assets/css/hcc-assistant.css') ? filemtime(__DIR__ . '/../assets/css/hcc-assistant.css') : 0) ?>">
@@ -135,327 +158,255 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
         <?php require_once __DIR__ . '/includes/sidebar.php'; ?>
         <main class="admin-main">
             <header class="admin-header">
-                <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Toggle navigation" aria-controls="sidebar"><i class="fas fa-bars"></i></button>
+                <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Toggle navigation" aria-controls="sidebar" aria-expanded="false">
+                    <i class="fas fa-bars" aria-hidden="true"></i>
+                </button>
                 <div class="header-titles">
                     <h1 class="page-title">Dashboard</h1>
                     <p class="page-sub">At-a-glance results, classes and performance for <?= sanitize($schoolName) ?>.</p>
                 </div>
-                <?= csrfField() ?>
-                <?php require __DIR__ . '/includes/notif_bell.php'; ?>
-                <a href="whatsapp_share.php" class="wa-quick-btn" id="waQuickBtn" title="Open WhatsApp Share Hub" aria-label="Open WhatsApp Share Hub">
-                    <i class="fa-brands fa-whatsapp"></i>
-                </a>
-                <div class="admin-user">
-                    <span class="user-avatar"><?= sanitize($adminInitials) ?></span>
-                    <span class="user-meta">
-                        <strong><?= $adminName ?></strong>
-                        <small>Admin</small>
-                    </span>
+                <div class="header-actions">
+                    <a href="whatsapp_share.php" class="wa-quick-btn" id="waQuickBtn" title="Open WhatsApp Share Hub" aria-label="Open WhatsApp Share Hub">
+                        <i class="fa-brands fa-whatsapp" aria-hidden="true"></i>
+                    </a>
+                    <?php require __DIR__ . '/includes/notif_bell.php'; ?>
+                    <div class="admin-user">
+                        <span class="user-avatar"><?= sanitize($adminInitials) ?></span>
+                        <span class="user-meta">
+                            <strong><?= $adminName ?></strong>
+                            <small><?= $adminRole ?></small>
+                        </span>
+                    </div>
                 </div>
             </header>
             <div class="admin-content">
                 <div class="dash-wrap">
+                <?= csrfField() ?>
 
                 <?php if (($_GET['err'] ?? '') === 'admin_only'): ?>
-                <div class="alert alert-warning" style="background:#fffbeb; color:#92400e; border:1px solid #fde68a; padding:12px 16px; border-radius:8px; margin-bottom:16px; display:flex; align-items:center; gap:10px; font-weight:600; font-size:0.88rem;">
-                    <i class="fa-solid fa-lock"></i>
+                <div class="alert alert-warning" role="alert" style="background:#fffbeb; color:#92400e; border:1px solid #fde68a; padding:12px 16px; border-radius:8px; margin-bottom:16px; display:flex; align-items:center; gap:10px; font-weight:600; font-size:0.88rem;">
+                    <i class="fa-solid fa-lock" aria-hidden="true"></i>
                     <span>Access Restricted: That feature requires Administrator privileges.</span>
                 </div>
                 <?php endif; ?>
 
-                <!-- ═══ Hero ═══ -->
-                <section class="dash-hero">
-                    <img class="dash-hero-logo" src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="HCC logo">
-                    <div class="dash-hero-body">
-                        <h2>Welcome to <span class="dash-hero-accent">Automation System</span></h2>
-                        <p><?= sanitize($greeting) ?>, <?= $adminName ?> — <?= sanitize($schoolTagline) !== '' ? sanitize($schoolTagline) : 'Learn &middot; Lead &middot; Serve' ?></p>
-                    </div>
-                </section>
-
-                <!-- ═══ WhatsApp Hub Advertisement Showcase ═══ -->
-                <section class="dash-wa-promo-card" id="dashWaLauncher" aria-label="WhatsApp Parent Communication Hub">
-                    <!-- 1. Clean & Professional WhatsApp Hub Header -->
-                    <div class="dash-wa-promo-header">
-                        <div class="dash-wa-promo-branding">
-                            <span class="dash-wa-promo-orb" aria-hidden="true"><i class="fa-brands fa-whatsapp"></i></span>
-                            <div class="dash-wa-promo-meta">
-                                <div class="dash-wa-title-row">
-                                    <h2 class="dash-wa-promo-title">WhatsApp Share &amp; Dispatch Hub</h2>
-                                    <span class="dash-wa-live-badge"><span class="dash-wa-dot"></span> Active</span>
-                                </div>
-                                <p class="dash-wa-promo-subtitle">
-                                    Instant academic dispatch for Report Cards, Unit Test Slips &amp; parent notifications.
-                                </p>
-                            </div>
-                        </div>
-
-                        <div class="dash-wa-promo-header-actions">
-                            <div class="dash-wa-stats-bar" role="group" aria-label="WhatsApp dispatch statistics">
-                                <div class="dash-wa-stat-item" title="Verified parent phone numbers">
-                                    <span class="stat-label">Parents</span>
-                                    <span class="stat-num"><?= (int)$waContacts ?></span>
-                                </div>
-                                <span class="dash-wa-stat-sep" aria-hidden="true"></span>
-                                <div class="dash-wa-stat-item is-sent" title="Total messages sent">
-                                    <span class="stat-label">Dispatched</span>
-                                    <span class="stat-num"><?= (int)$waSent ?></span>
-                                </div>
-                                <span class="dash-wa-stat-sep" aria-hidden="true"></span>
-                                <div class="dash-wa-stat-item is-queue" title="Messages in queue">
-                                    <span class="stat-label">In Queue</span>
-                                    <span class="stat-num"><?= (int)$waPending ?></span>
-                                </div>
-                                <span class="dash-wa-stat-sep" aria-hidden="true"></span>
-                                <a href="admission_enquiries.php" class="dash-wa-stat-item is-enquiry" title="Active admission enquiries">
-                                    <span class="stat-label">Enquiries</span>
-                                    <span class="stat-num"><?= (int)$waEnquiries ?></span>
-                                </a>
-                            </div>
-                            <div class="dash-wa-btn-group">
-                                <a href="admission_enquiries.php" class="btn-wa-header btn-wa-admissions" title="Open Admission Enquiry Management">
-                                    <i class="fa-solid fa-user-plus"></i>
-                                    <span>Admissions</span>
-                                </a>
-                                <a href="whatsapp_share.php" class="btn-wa-header btn-wa-launch" title="Open Complete WhatsApp Share Hub">
-                                    <span>Open Hub</span>
-                                    <i class="fas fa-arrow-up-right-from-square"></i>
-                                </a>
-                            </div>
-                        </div>
+                <!-- ═══ Executive Ambient Background-Video Hero Section ═══ -->
+                <section class="dash-hero" id="dashHero" aria-labelledby="dashHeroHeading">
+                    <!-- Layer 0 & 1: Running Background Video + Masked Frost + Maroon-Slate Scrim -->
+                    <div class="dash-hero-media">
+                        <video class="dash-hero-bg-video" id="dashHeroVideo"
+                               autoplay muted loop playsinline preload="metadata"
+                               aria-hidden="true" tabindex="-1"
+                               disablepictureinpicture disableremoteplayback
+                               poster="<?= htmlspecialchars($heroPosterSrc, ENT_QUOTES, 'UTF-8') ?>">
+                            <source src="<?= htmlspecialchars($heroVideoSrc, ENT_QUOTES, 'UTF-8') ?>" type="video/mp4">
+                        </video>
+                        <div class="dash-hero-frost"></div>
+                        <div class="dash-hero-scrim"></div>
                     </div>
 
-                    <!-- 2. WAY MORE BROADER VIDEO STAGE -->
-                    <div class="dash-wa-video-stage">
-                        <div class="dash-wa-video-container" id="dashWaVideoWrapper">
-                            <?php
-                            $hasProjectVideo = file_exists(__DIR__ . '/../assets/videos/hcc-project-promo.mp4');
-                            $defaultVideoSrc = $hasProjectVideo ? BASE_URL . 'assets/videos/hcc-project-promo.mp4' : BASE_URL . 'assets/videos/whatsapp-hub-promo.mp4';
-                            $defaultPosterSrc = file_exists(__DIR__ . '/../assets/images/hcc-project-promo-poster.jpg') ? BASE_URL . 'assets/images/hcc-project-promo-poster.jpg' : BASE_URL . 'assets/images/wa-promo-poster.jpg';
-                            ?>
-                            <video
-                                id="dashWaPromoVideo"
-                                class="dash-wa-video-player"
-                                autoplay
-                                muted
-                                loop
-                                playsinline
-                                preload="metadata"
-                                poster="<?= $defaultPosterSrc ?>?v=<?= time() ?>"
-                                src="<?= $defaultVideoSrc ?>?v=<?= time() ?>">
-                                Your browser does not support HTML5 video.
-                            </video>
-
-                            <!-- Video Overlay UI (Advertisement Overlays) -->
-                            <div class="dash-wa-video-overlay">
-                                <!-- Top Bar -->
-                                <div class="dash-wa-video-topbar">
-                                    <div class="video-tag-chip" id="dashVideoTagChip">
-                                        <i class="fa-solid fa-layer-group"></i>
-                                        <span>HCC Campus Automation System • Full Project Showcase</span>
-                                    </div>
-                                    <div class="video-controls-compact">
-                                        <button type="button" class="btn-video-ctrl" id="waVideoPlayPauseBtn" title="Play / Pause Video" aria-label="Play or pause video">
-                                            <i class="fas fa-pause"></i>
-                                        </button>
-                                        <button type="button" class="btn-video-ctrl" id="waVideoMuteBtn" title="Unmute Audio" aria-label="Mute or unmute audio">
-                                            <i class="fas fa-volume-xmark"></i>
-                                        </button>
-                                        <button type="button" class="btn-video-ctrl" id="waVideoFullscreenBtn" title="Widescreen Theater Fullscreen" aria-label="Toggle fullscreen video">
-                                            <i class="fas fa-expand"></i>
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <!-- Floating Interactive Feature Callouts -->
-                                <div class="dash-wa-video-callouts">
-                                    <div class="wa-callout-card">
-                                        <div class="wa-callout-icon"><i class="fas fa-file-pdf"></i></div>
-                                        <div class="wa-callout-body">
-                                            <strong>Instant 1-Click PDF Dispatch</strong>
-                                            <small>Direct delivery for Semester Report Cards &amp; Unit Test Slips</small>
-                                        </div>
-                                    </div>
-                                    <div class="wa-callout-card">
-                                        <div class="wa-callout-icon"><i class="fas fa-check-double"></i></div>
-                                        <div class="wa-callout-body">
-                                            <strong>Live Delivery Verification</strong>
-                                            <small>Real-time delivery receipts &amp; parent roster database synchronization</small>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- Bottom Progress & Quick Actions -->
-                                <div class="dash-wa-video-bottombar">
-                                    <div class="video-progress-wrap" id="waVideoProgressWrap" title="Click to seek">
-                                        <div class="video-progress-bar" id="waVideoProgressBar"></div>
-                                    </div>
-                                    <div class="video-bottom-meta">
-                                        <span class="video-status-text"><span class="live-recording-dot"></span> Automated Portal Preview</span>
-                                        <div class="video-right-actions">
-                                            <button type="button" class="btn-change-video-link" id="waChangeVideoBtn" title="Change promotional video source">
-                                                <i class="fas fa-sliders"></i> Video Settings
-                                            </button>
-                                            <a href="whatsapp_share.php" class="btn-video-cta" title="Launch WhatsApp Share Hub">
-                                                <span>Launch Workspace</span> <i class="fas fa-paper-plane"></i>
-                                            </a>
-                                        </div>
-                                    </div>
-                                </div>
+                    <!-- Layer 2: Executive Foreground -->
+                    <div class="dash-hero-inner">
+                        <!-- 1. Top Ambient Bar -->
+                        <div class="dash-hero-topbar">
+                            <div class="dash-hero-pill">
+                                <i class="fa-solid fa-graduation-cap" aria-hidden="true"></i>
+                                <span class="dash-hero-pill-text"><?= sanitize($schoolName) ?> &bull; AY <?= sanitize($activeAcYear) ?></span>
                             </div>
 
-                            <!-- Video Settings Floating Modal -->
-                            <div class="dash-wa-video-settings-panel" id="waVideoSettingsPanel" style="display:none;">
-                                <div class="settings-panel-inner">
-                                    <div class="settings-panel-head">
-                                        <h4><i class="fas fa-video"></i> Video Advertisement Settings</h4>
-                                        <button type="button" class="btn-close-settings" id="waCloseVideoSettings">&times;</button>
-                                    </div>
-                                    <div class="settings-panel-body">
-                                        <p class="text-muted" style="font-size:0.8rem;margin-bottom:12px;">Choose or change the promotional video displayed in the WhatsApp Hub advertisement:</p>
-                                        <div class="video-source-options">
-                                            <label class="video-opt-label">
-                                                <input type="radio" name="video_source_choice" value="project" checked>
-                                                <span>🌟 Full Campus Automation System Motion Graphics (1080p • 60s Showcase)</span>
-                                            </label>
-                                            <label class="video-opt-label" style="margin-top:6px;">
-                                                <input type="radio" name="video_source_choice" value="whatsapp">
-                                                <span>Official WhatsApp Share Hub Motion Graphics (1080p • 18s Promo)</span>
-                                            </label>
-                                            <label class="video-opt-label" style="margin-top:6px;">
-                                                <input type="radio" name="video_source_choice" value="custom">
-                                                <span>Custom Video URL / Path:</span>
-                                            </label>
-                                            <input type="text" id="customVideoUrlInput" class="form-control form-control-sm" placeholder="e.g. assets/videos/custom.mp4 or https://..." style="margin-top:4px;font-size:0.78rem;padding:6px 10px;border-radius:6px;border:1px solid #cbd5e1;width:100%;">
-                                        </div>
-                                        <div style="margin-top:14px;display:flex;justify-content:flex-end;gap:8px;">
-                                            <button type="button" class="btn btn-sm btn-secondary" id="waCancelVideoSettings" style="padding:5px 12px;font-size:0.78rem;">Cancel</button>
-                                            <button type="button" class="btn btn-sm btn-primary" id="waSaveVideoSettings" style="padding:5px 14px;font-size:0.78rem;background:#00a884;border:none;">Apply Video</button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 3. Key Feature Pillars & Direct Document Dispatch Shortcuts -->
-                    <div class="dash-wa-promo-footer">
-                        <div class="dash-wa-features-grid">
-                            <div class="dash-wa-feat-item">
-                                <i class="fas fa-bolt feat-icon"></i>
-                                <div class="feat-body">
-                                    <strong>1-Click Direct Delivery</strong>
-                                    <span>Send PDFs directly to parent chat without manual downloads or external tools</span>
-                                </div>
-                            </div>
-                            <div class="dash-wa-feat-item">
-                                <i class="fas fa-database feat-icon"></i>
-                                <div class="feat-body">
-                                    <strong>Synced Parent Directory</strong>
-                                    <span>Filtered by Class, Std, Division &amp; Roll No with instant database phone lookup</span>
-                                </div>
-                            </div>
-                            <div class="dash-wa-feat-item">
-                                <i class="fas fa-shield-halved feat-icon"></i>
-                                <div class="feat-body">
-                                    <strong>Secure &amp; Official School Branding</strong>
-                                    <span>Tamper-proof PDF generation with official school seal, principal sign &amp; verified badges</span>
-                                </div>
+                            <div class="dash-hero-media-ctrls" role="group" aria-label="Showcase video controls">
+                                <span class="dash-hero-video-tag" id="heroVideoStatusBadge">
+                                    <span class="live-dot" aria-hidden="true"></span>
+                                    <span id="heroShowcaseStatus">HCC Campus Showcase</span>
+                                </span>
+                                <button type="button" class="dash-hero-ctrl-btn" id="heroPlayToggle"
+                                        aria-label="Pause background video" title="Pause background video">
+                                    <i class="fa-solid fa-pause" aria-hidden="true"></i>
+                                </button>
+                                <button type="button" class="dash-hero-ctrl-btn" id="heroMuteToggle"
+                                        aria-label="Unmute background video" title="Unmute background video">
+                                    <i class="fa-solid fa-volume-xmark" aria-hidden="true"></i>
+                                </button>
+                                <button type="button" class="dash-hero-ctrl-btn" id="heroExpandBtn"
+                                        aria-label="Watch full showcase video in fullscreen" title="Watch full showcase video">
+                                    <i class="fa-solid fa-expand" aria-hidden="true"></i>
+                                </button>
                             </div>
                         </div>
 
-                        <div class="dash-wa-quick-dispatch">
-                            <span class="quick-dispatch-label"><i class="fas fa-paperclip"></i> Quick Batch Dispatch:</span>
-                            <div class="quick-dispatch-chips">
-                                <a href="whatsapp_share.php?doc_type=report_card" class="dash-wa-chip"><i class="fas fa-file-lines" aria-hidden="true"></i> Report Cards</a>
-                                <a href="whatsapp_share.php?doc_type=unit_test" class="dash-wa-chip"><i class="fas fa-pen-to-square" aria-hidden="true"></i> Unit Test Slips</a>
-                                <a href="whatsapp_share.php?doc_type=bonafide" class="dash-wa-chip"><i class="fas fa-certificate" aria-hidden="true"></i> Bonafide Certificates</a>
-                                <a href="whatsapp_share.php?doc_type=announcement" class="dash-wa-chip"><i class="fas fa-bullhorn" aria-hidden="true"></i> School Notices</a>
+                        <!-- 2. Asymmetric Main Stage (Left Executive Copy + Right Open Video Viewport) -->
+                        <div class="dash-hero-stage">
+                            <div class="dash-hero-copy">
+                                <div class="dash-hero-brand">
+                                    <img class="dash-hero-logo" src="<?= htmlspecialchars($schoolLogoUrl, ENT_QUOTES, 'UTF-8') ?>" width="56" height="56" decoding="async" alt="<?= sanitize($schoolName) ?> crest">
+                                    <div class="dash-hero-eyebrow">
+                                        <p id="dashGreetingLine">
+                                            <span id="dashGreetingText"><?= sanitize($greeting) ?></span>, <strong><?= $adminName ?></strong>
+                                        </p>
+                                        <span class="dash-hero-motto"><?= sanitize($schoolTagline) !== '' ? sanitize($schoolTagline) : 'Learn &middot; Lead &middot; Serve' ?></span>
+                                    </div>
+                                </div>
+
+                                <h2 class="dash-hero-title" id="dashHeroHeading">Welcome to <span class="dash-hero-accent">Automation System</span></h2>
+                                <p class="dash-hero-lead">Unified exam evaluation, instant WhatsApp parent dispatch, and daily campus operations in one command center.</p>
+
+                                <div class="dash-hero-actions">
+                                    <a href="results.php" class="dash-hero-btn dash-hero-btn--primary">
+                                        <i class="fa-solid fa-chart-line" aria-hidden="true"></i>
+                                        <span>Academic Results</span>
+                                    </a>
+                                    <a href="whatsapp_share.php" class="dash-hero-btn dash-hero-btn--wa">
+                                        <i class="fa-brands fa-whatsapp" aria-hidden="true"></i>
+                                        <span>WhatsApp Hub</span>
+                                    </a>
+                                    <a href="unit_test_entry.php" class="dash-hero-btn dash-hero-btn--ghost">
+                                        <i class="fa-solid fa-pen-nib" aria-hidden="true"></i>
+                                        <span>Unit Test Entry</span>
+                                    </a>
+                                    <a href="timetable.php" class="dash-hero-btn dash-hero-btn--ghost">
+                                        <i class="fa-solid fa-calendar-days" aria-hidden="true"></i>
+                                        <span>Time-Table</span>
+                                    </a>
+                                </div>
+                            </div>
+
+                            <!-- Open right-hand stage lets ambient motion graphics run visibly in background -->
+                            <div class="dash-hero-showcase-space" aria-hidden="true"></div>
+                        </div>
+
+                        <!-- 3. Bottom Docked Glass KPI Ribbon -->
+                        <div class="dash-hero-metrics" role="group" aria-label="Key campus performance metrics">
+                            <div class="dash-hero-metric-item">
+                                <span class="metric-val"><?= number_format((int)($stats['students'] ?? 0)) ?></span>
+                                <span class="metric-lbl">Students &bull; AY <?= sanitize($activeAcYear) ?></span>
+                            </div>
+                            <div class="dash-hero-metric-item">
+                                <span class="metric-val"><?= number_format((float)($stats['pass_rate'] ?? 0), 1) ?>%</span>
+                                <span class="metric-lbl">Overall Pass Rate</span>
+                            </div>
+                            <div class="dash-hero-metric-item">
+                                <span class="metric-val"><?= number_format((int)$waSent) ?></span>
+                                <span class="metric-lbl">WhatsApp Sent<?= $waPending > 0 ? ' (' . (int)$waPending . ' queued)' : ($waContacts > 0 ? ' • ' . (int)$waContacts . ' parents' : '') ?></span>
+                            </div>
+                            <div class="dash-hero-metric-item is-live">
+                                <span class="metric-val">
+                                    <span class="dash-hero-live-dot" aria-hidden="true"></span>
+                                    <span><?= $waEnquiries > 0 ? (int)$waEnquiries . ' Active' : 'Live' ?></span>
+                                </span>
+                                <span class="metric-lbl"><?= $waEnquiries > 0 ? 'Admission Enquiries' : 'Portal Operational' ?></span>
                             </div>
                         </div>
                     </div>
                 </section>
 
-                <!-- Daily Office & Academic Operations Hub -->
-                <section class="dash-section" aria-label="Daily Office and Academic Operations Hub">
-                    <div class="dash-section-head" style="flex-wrap:wrap;gap:10px;">
-                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                            <h2><i class="fas fa-bolt"></i> Daily Office &amp; Academic Operations Hub</h2>
-                            <span class="dash-count"><?= sanitize($activeAcYear) ?></span>
+                <!-- ═══ Daily Office & Academic Operations Hub ═══ -->
+                <section class="ops-hub" aria-labelledby="opsHubHeading">
+                    <div class="ops-hub-head">
+                        <div class="ops-hub-heading">
+                            <span class="ops-hub-icon" aria-hidden="true"><i class="fa-solid fa-bolt"></i></span>
+                            <div>
+                                <h2 id="opsHubHeading">Daily Office &amp; Academic Operations</h2>
+                                <p>Real-time intervention queues, parent signature tracking, and exam logistics.</p>
+                            </div>
                         </div>
-                        <a href="whatsapp_share.php" class="dash-wa-chip" style="text-decoration:none;">
-                            <i class="fa-solid fa-robot" aria-hidden="true"></i>
-                            Inbound AI Action Cards: <strong><?= (int)$inboundAiCount ?></strong>
-                        </a>
+                        <div class="ops-hub-head-actions">
+                            <span class="ops-hub-year"><i class="fa-solid fa-calendar-check" aria-hidden="true"></i> AY <?= sanitize($activeAcYear) ?></span>
+                            <a href="admission_enquiries.php" class="ops-hub-ai-chip">
+                                <i class="fa-solid fa-envelope-open-text" aria-hidden="true"></i>
+                                <span>Admissions</span>
+                                <strong><?= (int)$waEnquiries ?></strong>
+                            </a>
+                            <?php if ($inboundAiCount > 0): ?>
+                            <a href="whatsapp_share.php" class="ops-hub-ai-chip">
+                                <i class="fa-solid fa-robot" aria-hidden="true"></i>
+                                <span>AI Signals</span>
+                                <strong><?= (int)$inboundAiCount ?></strong>
+                            </a>
+                            <?php endif; ?>
+                        </div>
                     </div>
-                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;">
-                        <a href="at_risk_radar.php" class="panel" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;justify-content:space-between;padding:16px 18px;border-left:4px solid #b91c1c;">
-                            <div>
-                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                                    <span style="width:36px;height:36px;border-radius:10px;background:#fef2f2;color:#b91c1c;display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-radar fa-wave-square"></i></span>
-                                    <span class="dash-count" style="background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;"><?= (int)$atRiskCount ?> Alerts</span>
-                                </div>
-                                <strong style="display:block;font-size:0.96rem;margin-bottom:4px;">At-Risk Student Radar</strong>
-                                <small style="color:var(--muted);line-height:1.4;display:block;">Flags &ge;12% UT-to-Sem drops &amp; High FA / Fail SA patterns with 1-click PTM invite.</small>
+
+                    <div class="ops-hub-grid">
+                        <a href="at_risk_radar.php" class="ops-card ops-card--danger">
+                            <div class="ops-card-top">
+                                <span class="ops-card-icon" aria-hidden="true"><i class="fa-solid fa-triangle-exclamation"></i></span>
+                                <span class="ops-card-count"><?= (int)$atRiskCount ?> Alerts</span>
                             </div>
-                            <div style="margin-top:12px;font-size:0.78rem;font-weight:700;color:var(--brand);">Open Radar <i class="fas fa-arrow-right"></i></div>
+                            <div class="ops-card-body">
+                                <h3>At-Risk Student Radar</h3>
+                                <p>Flags High FA / Low SA exam drops and failing trends for 1-click PTM outreach.</p>
+                            </div>
+                            <div class="ops-card-foot">
+                                <span>Open Radar</span>
+                                <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
+                            </div>
                         </a>
 
-                        <a href="parent_sign_chase.php" class="panel" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;justify-content:space-between;padding:16px 18px;border-left:4px solid #d97706;">
-                            <div>
-                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                                    <span style="width:36px;height:36px;border-radius:10px;background:#fffbeb;color:#b45309;display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-signature"></i></span>
-                                    <span class="dash-count" style="background:#fffbeb;color:#b45309;border:1px solid #fde68a;"><?= (int)$unsignedParentCount ?> Unsigned</span>
-                                </div>
-                                <strong style="display:block;font-size:0.96rem;margin-bottom:4px;">Parent-Sign Morning Queue</strong>
-                                <small style="color:var(--muted);line-height:1.4;display:block;">Never Sent / Sent Unopened / Opened Unsigned chase list &amp; assembly sheet.</small>
+                        <a href="parent_sign_chase.php" class="ops-card ops-card--warning">
+                            <div class="ops-card-top">
+                                <span class="ops-card-icon" aria-hidden="true"><i class="fa-solid fa-file-signature"></i></span>
+                                <span class="ops-card-count"><?= (int)$unsignedParentCount ?> Unsigned</span>
                             </div>
-                            <div style="margin-top:12px;font-size:0.78rem;font-weight:700;color:var(--brand);">Open Queue <i class="fas fa-arrow-right"></i></div>
+                            <div class="ops-card-body">
+                                <h3>Parent-Sign Morning Queue</h3>
+                                <p>Track unsigned report cards and unit test slips with class-wise follow-up lists.</p>
+                            </div>
+                            <div class="ops-card-foot">
+                                <span>Open Queue</span>
+                                <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
+                            </div>
                         </a>
 
-                        <a href="substitute_allocator.php" class="panel" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;justify-content:space-between;padding:16px 18px;border-left:4px solid #0284c7;">
-                            <div>
-                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                                    <span style="width:36px;height:36px;border-radius:10px;background:#f0f9ff;color:#0369a1;display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-user-clock"></i></span>
-                                    <span class="dash-count" style="background:#f0f9ff;color:#0369a1;border:1px solid #bae6fd;"><?= (int)$subsTodayCount ?> Today</span>
-                                </div>
-                                <strong style="display:block;font-size:0.96rem;margin-bottom:4px;">Substitute Teacher Desk</strong>
-                                <small style="color:var(--muted);line-height:1.4;display:block;">Detect period collisions, assign free teachers &amp; stage WhatsApp slip notices.</small>
+                        <a href="substitute_allocator.php" class="ops-card ops-card--info">
+                            <div class="ops-card-top">
+                                <span class="ops-card-icon" aria-hidden="true"><i class="fa-solid fa-people-arrows"></i></span>
+                                <span class="ops-card-count"><?= (int)$subsTodayCount ?> Today</span>
                             </div>
-                            <div style="margin-top:12px;font-size:0.78rem;font-weight:700;color:var(--brand);">Manage Substitutions <i class="fas fa-arrow-right"></i></div>
+                            <div class="ops-card-body">
+                                <h3>Substitute Teacher Desk</h3>
+                                <p>Resolve period collisions, assign free faculty, and dispatch duty slips.</p>
+                            </div>
+                            <div class="ops-card-foot">
+                                <span>Manage Substitutions</span>
+                                <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
+                            </div>
                         </a>
 
-                        <a href="exam_seating.php" class="panel" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;justify-content:space-between;padding:16px 18px;border-left:4px solid #15803d;">
-                            <div>
-                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                                    <span style="width:36px;height:36px;border-radius:10px;background:#f0fdf4;color:#15803d;display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-chair"></i></span>
-                                    <span class="dash-count" style="background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0;"><?= (int)$seatingPlansCount ?> Upcoming</span>
-                                </div>
-                                <strong style="display:block;font-size:0.96rem;margin-bottom:4px;">Exam Hall Seating Planner</strong>
-                                <small style="color:var(--muted);line-height:1.4;display:block;">Alternate-bench Std mixing, room matrix printouts &amp; desk slip stickers.</small>
+                        <a href="exam_seating.php" class="ops-card ops-card--success">
+                            <div class="ops-card-top">
+                                <span class="ops-card-icon" aria-hidden="true"><i class="fa-solid fa-chair"></i></span>
+                                <span class="ops-card-count"><?= (int)$seatingPlansCount ?> Upcoming</span>
                             </div>
-                            <div style="margin-top:12px;font-size:0.78rem;font-weight:700;color:var(--brand);">Open Seating Planner <i class="fas fa-arrow-right"></i></div>
+                            <div class="ops-card-body">
+                                <h3>Exam Hall Seating Planner</h3>
+                                <p>Alternate-bench class mixing, room matrix charts, and printable desk slips.</p>
+                            </div>
+                            <div class="ops-card-foot">
+                                <span>Open Seating Planner</span>
+                                <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
+                            </div>
                         </a>
                     </div>
                 </section>
 
                 <?php if (!$hasData): ?>
                 <div class="dash-onboard">
-                    <div class="dash-onboard-icon"><i class="fas fa-rocket"></i></div>
+                    <div class="dash-onboard-icon" aria-hidden="true"><i class="fas fa-rocket"></i></div>
                     <div class="dash-onboard-body">
                         <h2>Welcome to HCC Admin</h2>
                         <p>No results yet. Import your first Excel sheet to start tracking marks, grades, pass rate and class averages.</p>
                     </div>
-                    <a href="import_excel.php" class="btn btn-primary"><i class="fas fa-plus"></i> Import Excel</a>
+                    <a href="import_excel.php" class="btn btn-primary"><i class="fas fa-plus" aria-hidden="true"></i> Import Excel</a>
                 </div>
                 <?php endif; ?>
 
                 <!-- Promotion & System Alerts -->
-                <section class="dash-section">
-                    <div class="dash-section-head" style="flex-wrap:wrap;gap:12px;">
-                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                            <h2><i class="fas fa-bell"></i> Promotion &amp; System Alerts</h2>
+                <section class="dash-section" aria-labelledby="alertsSectionHeading">
+                    <div class="dash-section-head">
+                        <div class="dash-section-head-title">
+                            <h2 id="alertsSectionHeading"><i class="fas fa-bell" aria-hidden="true"></i> Promotion &amp; System Alerts</h2>
                             <?php if (!empty($notifData['unread'])): ?>
-                                <span class="dash-count dash-count--unread" id="notifUnreadCountBadge"><span class="unread-pulse"></span> <?= (int)$notifData['unread'] ?> Unread</span>
+                                <span class="dash-count dash-count--unread" id="notifUnreadCountBadge"><span class="unread-pulse" aria-hidden="true"></span> <?= (int)$notifData['unread'] ?> Unread</span>
                             <?php endif; ?>
                             <?php if (!empty($notifData['items'])): ?>
                                 <span class="dash-count"><?= count($notifData['items']) ?> Total</span>
@@ -464,13 +415,13 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
 
                         <!-- Quick Filter Tabs -->
                         <?php if (!empty($notifData['items'])): ?>
-                        <div class="dash-section-head-filters" id="notifFilterBar">
-                            <button type="button" class="notif-filter-btn active" data-filter="all">All (<?= count($notifData['items']) ?>)</button>
+                        <div class="dash-section-head-filters" id="notifFilterBar" role="group" aria-label="Filter notifications">
+                            <button type="button" class="notif-filter-btn active" data-filter="all" aria-pressed="true">All (<?= count($notifData['items']) ?>)</button>
                             <?php if (!empty($notifData['unread'])): ?>
-                            <button type="button" class="notif-filter-btn" data-filter="unread" id="notifFilterUnreadBtn">Unread (<?= (int)$notifData['unread'] ?>)</button>
+                            <button type="button" class="notif-filter-btn" data-filter="unread" id="notifFilterUnreadBtn" aria-pressed="false">Unread (<?= (int)$notifData['unread'] ?>)</button>
                             <?php endif; ?>
-                            <button type="button" class="notif-filter-btn" data-filter="unit_test">Unit Tests</button>
-                            <button type="button" class="notif-filter-btn" data-filter="promotion">Promotions</button>
+                            <button type="button" class="notif-filter-btn" data-filter="unit_test" aria-pressed="false">Unit Tests</button>
+                            <button type="button" class="notif-filter-btn" data-filter="promotion" aria-pressed="false">Promotions</button>
                         </div>
                         <?php endif; ?>
                     </div>
@@ -478,43 +429,42 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
                         <?php if (empty($notifData['items'])): ?>
                             <div class="panel-body">
                                 <div class="notif-empty">
-                                    <i class="fas fa-bell-slash"></i>
+                                    <i class="fas fa-bell-slash" aria-hidden="true"></i>
                                     No notifications yet. Promotion and system alerts will appear here.
                                 </div>
                             </div>
                         <?php else: ?>
-                            <div class="dash-notif-list">
-                                <?php foreach ($notifData['items'] as $nt): 
+                            <div class="dash-notif-list" id="dashNotifList">
+                                <?php foreach ($notifData['items'] as $nt):
                                     $rawType = strtolower($nt['type'] ?? 'system');
                                     $titleLower = strtolower($nt['title'] ?? '');
 
                                     if (strpos($rawType, 'unit_test') !== false || strpos($titleLower, 'unit test') !== false) {
                                         $typeKey = 'unit_test';
                                         $typeLabel = 'Unit Test';
-                                        $typeIcon = 'fa-pen-to-square';
+                                        $typeIcon = 'fa-solid fa-pen-to-square';
                                     } elseif (strpos($rawType, 'promotion') !== false || strpos($titleLower, 'promot') !== false) {
                                         $typeKey = 'promotion';
                                         $typeLabel = 'Promotion';
-                                        $typeIcon = 'fa-graduation-cap';
+                                        $typeIcon = 'fa-solid fa-graduation-cap';
                                     } elseif (strpos($rawType, 'results') !== false || strpos($titleLower, 'report card') !== false || strpos($titleLower, 'marks') !== false) {
                                         $typeKey = 'results';
                                         $typeLabel = 'Results';
-                                        $typeIcon = 'fa-table-list';
+                                        $typeIcon = 'fa-solid fa-table-list';
                                     } elseif (strpos($rawType, 'excel') !== false || strpos($titleLower, 'excel') !== false || strpos($titleLower, 'import') !== false) {
                                         $typeKey = 'excel';
                                         $typeLabel = 'Excel Import';
-                                        $typeIcon = 'fa-file-excel';
+                                        $typeIcon = 'fa-solid fa-file-excel';
                                     } elseif (strpos($rawType, 'whatsapp') !== false || strpos($titleLower, 'whatsapp') !== false) {
                                         $typeKey = 'whatsapp';
                                         $typeLabel = 'WhatsApp';
-                                        $typeIcon = 'fa-whatsapp';
+                                        $typeIcon = 'fa-brands fa-whatsapp';
                                     } else {
                                         $typeKey = 'system';
                                         $typeLabel = 'System Alert';
-                                        $typeIcon = 'fa-bell';
+                                        $typeIcon = 'fa-solid fa-bell';
                                     }
 
-                                    // One-line "time ago" for the meta row; exact date on hover (title attr).
                                     $ntCreatedAt = (int) strtotime($nt['created_at'] ?? 'now');
                                     $ntDiff = time() - $ntCreatedAt;
                                     if ($ntDiff < 60) {
@@ -531,56 +481,78 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
 
                                     $isUnread = empty($nt['is_read']);
                                     $itemClasses = "notif-item type-{$typeKey}" . ($isUnread ? ' notif-item--unread' : '');
-                                    $linkUrl = !empty($nt['link']) ? sanitize($nt['link']) : '#';
+                                    $hasLink = !empty($nt['link']);
+                                    $linkUrl = $hasLink ? sanitize($nt['link']) : '';
                                 ?>
+                                    <?php if ($hasLink): ?>
                                     <a href="<?= $linkUrl ?>" class="<?= $itemClasses ?>" data-type="<?= $typeKey ?>" data-unread="<?= $isUnread ? '1' : '0' ?>">
-                                        <div class="notif-item-icon icon-box-<?= $typeKey ?>">
-                                            <i class="fa-solid <?= $typeIcon ?>"></i>
+                                    <?php else: ?>
+                                    <div class="<?= $itemClasses ?>" data-type="<?= $typeKey ?>" data-unread="<?= $isUnread ? '1' : '0' ?>">
+                                    <?php endif; ?>
+                                        <div class="notif-item-icon icon-box-<?= $typeKey ?>" aria-hidden="true">
+                                            <i class="<?= $typeIcon ?>"></i>
                                         </div>
                                         <div class="notif-item-body">
                                             <div class="notif-item-top">
                                                 <h3 class="notif-item-title"><?= sanitize($nt['title']) ?></h3>
                                                 <?php if ($isUnread): ?>
-                                                    <span class="notif-unread-badge"><span class="unread-pulse"></span> NEW</span>
+                                                    <span class="notif-unread-badge"><span class="unread-pulse" aria-hidden="true"></span> NEW</span>
                                                 <?php endif; ?>
                                             </div>
                                             <div class="notif-item-desc"><?= sanitize($nt['message']) ?></div>
                                             <div class="notif-item-meta">
-                                                <span class="notif-pill pill-<?= $typeKey ?>"><i class="fa-solid <?= $typeIcon ?>"></i> <?= $typeLabel ?></span>
+                                                <span class="notif-pill pill-<?= $typeKey ?>"><i class="<?= $typeIcon ?>" aria-hidden="true"></i> <?= $typeLabel ?></span>
                                                 <span title="<?= date('l, d M Y • h:i A', $ntCreatedAt) ?>"><?= $notifTimeAgo ?></span>
-                                                <?php if (!empty($nt['link'])): ?>
+                                                <?php if ($hasLink): ?>
                                                     <span class="notif-item-open"><i class="fas fa-arrow-up-right-from-square" aria-hidden="true"></i> Open</span>
                                                 <?php endif; ?>
                                             </div>
                                         </div>
-                                        <div class="notif-item-arrow"><i class="fas fa-chevron-right"></i></div>
+                                        <?php if ($hasLink): ?>
+                                        <div class="notif-item-arrow" aria-hidden="true"><i class="fas fa-chevron-right"></i></div>
+                                        <?php endif; ?>
+                                    <?php if ($hasLink): ?>
                                     </a>
+                                    <?php else: ?>
+                                    </div>
+                                    <?php endif; ?>
                                 <?php endforeach; ?>
                             </div>
+                            <div class="notif-empty" id="notifFilterEmpty" hidden>
+                                <i class="fas fa-filter" aria-hidden="true"></i>
+                                No notifications match this filter.
+                            </div>
                             <div class="dash-notif-foot">
-                                <span class="dash-notif-foot-note"><i class="fas fa-circle-info" aria-hidden="true"></i>
-                                    <?= count($notifData['items']) ?> notification<?= count($notifData['items']) === 1 ? '' : 's' ?><?= !empty($notifData['unread']) ? ' • ' . (int)$notifData['unread'] . ' unread' : '' ?>
+                                <span class="dash-notif-foot-note" id="dashNotifFootNote" data-total="<?= count($notifData['items']) ?>">
+                                    <i class="fas fa-circle-info" aria-hidden="true"></i>
+                                    <span id="dashNotifFootText"><?= count($notifData['items']) ?> notification<?= count($notifData['items']) === 1 ? '' : 's' ?><?= !empty($notifData['unread']) ? ' • ' . (int)$notifData['unread'] . ' unread' : '' ?></span>
                                 </span>
-                                <button type="button" id="notifMarkAll" class="btn btn-outline btn-sm"><i class="fas fa-check-double"></i> Mark all read</button>
+                                <?php $hasUnreadNotifs = !empty($notifData['unread']); ?>
+                                <button type="button" id="notifMarkAll" class="btn btn-outline btn-sm"<?= !$hasUnreadNotifs ? ' disabled' : '' ?>>
+                                    <i class="fas <?= $hasUnreadNotifs ? 'fa-check-double' : 'fa-check' ?>" aria-hidden="true"></i>
+                                    <?= $hasUnreadNotifs ? 'Mark all read' : 'All caught up' ?>
+                                </button>
                             </div>
                         <?php endif; ?>
                     </div>
                 </section>
 
                 <!-- Classes -->
-                <section class="dash-section">
+                <section class="dash-section" aria-labelledby="classesSectionHeading">
                     <div class="dash-section-head">
-                        <h2><i class="fas fa-layer-group"></i> Classes</h2>
-                        <?php if (!empty($classes)): ?><span class="dash-count"><?= count($classes) ?></span><?php endif; ?>
+                        <div class="dash-section-head-title">
+                            <h2 id="classesSectionHeading"><i class="fas fa-layer-group" aria-hidden="true"></i> Classes</h2>
+                            <?php if (!empty($classes)): ?><span class="dash-count"><?= count($classes) ?></span><?php endif; ?>
+                        </div>
                     </div>
                     <div class="panel">
                         <div class="panel-body dash-classes">
                             <?php if (empty($classes)): ?>
-                            <p class="dash-empty"><i class="fas fa-inbox"></i> <span>No classes yet — they appear here once you <a href="import_excel.php">import your first Excel sheet</a>.</span></p>
+                            <p class="dash-empty"><i class="fas fa-inbox" aria-hidden="true"></i> <span>No classes yet — they appear here once you <a href="import_excel.php">import your first Excel sheet</a>.</span></p>
                             <?php else: ?>
                                 <?php foreach ($classes as $c): ?>
                                 <a class="class-chip" href="results.php?class=<?= e_url($c['academic_year'] . '|' . $c['std'] . '|' . $c['division'] . '|' . $c['semester']) ?>">
-                                    <i class="fas fa-graduation-cap"></i>
+                                    <i class="fas fa-graduation-cap" aria-hidden="true"></i>
                                     <span>STD <?= sanitize($c['std']) ?> <?= sanitize($c['division']) ?> — <?= sanitize($c['semester']) ?></span>
                                     <small>(<?= (int)$c['students'] ?>)</small>
                                 </a>
@@ -592,13 +564,17 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
 
                 <!-- Performance -->
                 <?php if ($hasPerf): ?>
-                <section class="dash-section">
-                    <div class="dash-section-head"><h2><i class="fas fa-trophy"></i> Performance Overview</h2></div>
+                <section class="dash-section" aria-labelledby="perfSectionHeading">
+                    <div class="dash-section-head">
+                        <div class="dash-section-head-title">
+                            <h2 id="perfSectionHeading"><i class="fas fa-trophy" aria-hidden="true"></i> Performance Overview</h2>
+                        </div>
+                    </div>
                     <div class="perf-grid">
                         <?php if (!empty($topPerformer)): ?>
                         <a href="results.php" class="perf-card">
-                            <span class="perf-icon"><i class="fas fa-trophy"></i></span>
-                            <div class="perf-label"><i class="fas fa-star"></i> Top Performer</div>
+                            <span class="perf-icon" aria-hidden="true"><i class="fas fa-trophy"></i></span>
+                            <div class="perf-label"><i class="fas fa-star" aria-hidden="true"></i> Top Performer</div>
                             <div class="perf-name"><?= sanitize($topPerformer['student_name'] ?? '') ?></div>
                             <div class="perf-score"><?= e_attr((float)($topPerformer['pct'] ?? 0)) ?>%</div>
                             <div class="perf-detail">STD <?= sanitize($topPerformer['std'] ?? '') ?> <?= sanitize($topPerformer['division'] ?? '') ?> — <?= sanitize($topPerformer['academic_year'] ?? '') ?></div>
@@ -606,8 +582,8 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
                         <?php endif; ?>
                         <?php if (!empty($lowestPerformer)): ?>
                         <a href="results.php" class="perf-card perf-card--low">
-                            <span class="perf-icon"><i class="fas fa-chart-column"></i></span>
-                            <div class="perf-label"><i class="fas fa-hand-holding-heart"></i> Needs Support</div>
+                            <span class="perf-icon" aria-hidden="true"><i class="fas fa-chart-column"></i></span>
+                            <div class="perf-label"><i class="fas fa-hand-holding-heart" aria-hidden="true"></i> Needs Support</div>
                             <div class="perf-name"><?= sanitize($lowestPerformer['student_name'] ?? '') ?></div>
                             <div class="perf-score"><?= e_attr((float)($lowestPerformer['pct'] ?? 0)) ?>%</div>
                             <div class="perf-detail">STD <?= sanitize($lowestPerformer['std'] ?? '') ?> <?= sanitize($lowestPerformer['division'] ?? '') ?> — <?= sanitize($lowestPerformer['academic_year'] ?? '') ?></div>
@@ -621,271 +597,314 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
             </div><!-- .admin-content -->
         </main>
     </div>
-    <script>
-        /* ═══ WhatsApp Hub Advertisement & Broad Video Controller ═══ */
-    (function () {
-        var video = document.getElementById('dashWaPromoVideo');
-        var wrapper = document.getElementById('dashWaVideoWrapper');
-        var playPauseBtn = document.getElementById('waVideoPlayPauseBtn');
-        var muteBtn = document.getElementById('waVideoMuteBtn');
-        var fsBtn = document.getElementById('waVideoFullscreenBtn');
-        var progressBar = document.getElementById('waVideoProgressBar');
-        var progressWrap = document.getElementById('waVideoProgressWrap');
-        var settingsBtn = document.getElementById('waChangeVideoBtn');
-        var settingsPanel = document.getElementById('waVideoSettingsPanel');
-        var closeSettingsBtn = document.getElementById('waCloseVideoSettings');
-        var cancelSettingsBtn = document.getElementById('waCancelVideoSettings');
-        var saveSettingsBtn = document.getElementById('waSaveVideoSettings');
-        var customUrlInput = document.getElementById('customVideoUrlInput');
 
+    <script>
+    /* ═══ Ambient Background Video Controller (Play/Pause, Mute, Fullscreen, Reduced Motion & Viewport Saver) ═══ */
+    (function () {
+        'use strict';
+        var video = document.getElementById('dashHeroVideo');
         if (!video) return;
 
-        // Restore custom or preferred video source if previously saved
-        try {
-            var savedChoice = localStorage.getItem('hcc_promo_video_choice');
-            var savedVideo = localStorage.getItem('hcc_wa_promo_video');
-            var tagChip = document.getElementById('dashVideoTagChip');
+        var playBtn = document.getElementById('heroPlayToggle');
+        var muteBtn = document.getElementById('heroMuteToggle');
+        var expandBtn = document.getElementById('heroExpandBtn');
+        var statusBadge = document.getElementById('heroVideoStatusBadge');
+        var statusText = document.getElementById('heroShowcaseStatus');
 
-            if (savedChoice === 'whatsapp') {
-                video.src = '<?= BASE_URL ?>assets/videos/whatsapp-hub-promo.mp4?v=<?= (file_exists(__DIR__ . '/../assets/videos/whatsapp-hub-promo.mp4') ? filemtime(__DIR__ . '/../assets/videos/whatsapp-hub-promo.mp4') : 1) ?>';
-                video.poster = '<?= BASE_URL ?>assets/images/wa-promo-poster.jpg';
-                if (tagChip) tagChip.innerHTML = '<i class="fa-brands fa-whatsapp"></i> <span>HCC WhatsApp Parent Portal • Live Showcase</span>';
-                var waRadio = document.querySelector('input[name="video_source_choice"][value="whatsapp"]');
-                if (waRadio) waRadio.checked = true;
-            } else if (savedChoice === 'custom' && savedVideo) {
-                video.src = savedVideo;
-                if (customUrlInput) customUrlInput.value = savedVideo;
-                var customRadio = document.querySelector('input[name="video_source_choice"][value="custom"]');
-                if (customRadio) customRadio.checked = true;
-            } else {
-                var projRadio = document.querySelector('input[name="video_source_choice"][value="project"]');
-                if (projRadio) projRadio.checked = true;
+        var reduceMotionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+        var userPaused = !!(reduceMotionQuery && reduceMotionQuery.matches);
+        var inViewport = true;
+
+        video.defaultMuted = true;
+        video.muted = true;
+
+        function updatePlayUI(isPaused) {
+            if (playBtn) {
+                playBtn.innerHTML = isPaused
+                    ? '<i class="fa-solid fa-play" aria-hidden="true"></i>'
+                    : '<i class="fa-solid fa-pause" aria-hidden="true"></i>';
+                var label = isPaused ? 'Play background video' : 'Pause background video';
+                playBtn.setAttribute('aria-label', label);
+                playBtn.setAttribute('title', label);
             }
-        } catch (e) {}
-
-        // Play / Pause toggle
-        function togglePlayPause() {
-            if (video.paused || video.ended) {
-                video.play().then(function () {
-                    if (playPauseBtn) playPauseBtn.innerHTML = '<i class="fas fa-pause"></i>';
-                }).catch(function () {});
-            } else {
-                video.pause();
-                if (playPauseBtn) playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+            if (statusBadge) {
+                statusBadge.classList.toggle('is-paused', isPaused);
+            }
+            if (statusText) {
+                statusText.textContent = isPaused ? 'Showcase Paused' : 'HCC Campus Showcase';
             }
         }
-        if (playPauseBtn) playPauseBtn.addEventListener('click', togglePlayPause);
 
-        // Mute / Unmute toggle
-        function toggleMute() {
-            video.muted = !video.muted;
+        function updateMuteUI(isMuted) {
             if (muteBtn) {
-                muteBtn.innerHTML = video.muted ? '<i class="fas fa-volume-xmark"></i>' : '<i class="fas fa-volume-high"></i>';
-                muteBtn.title = video.muted ? 'Unmute Audio' : 'Mute Audio';
+                muteBtn.innerHTML = isMuted
+                    ? '<i class="fa-solid fa-volume-xmark" aria-hidden="true"></i>'
+                    : '<i class="fa-solid fa-volume-high" aria-hidden="true"></i>';
+                var label = isMuted ? 'Unmute background video' : 'Mute background video';
+                muteBtn.setAttribute('aria-label', label);
+                muteBtn.setAttribute('title', label);
             }
         }
-        if (muteBtn) muteBtn.addEventListener('click', toggleMute);
 
-        // Update progress bar
-        video.addEventListener('timeupdate', function () {
-            if (progressBar && video.duration) {
-                var pct = (video.currentTime / video.duration) * 100;
-                progressBar.style.width = pct + '%';
-            }
-        });
-
-        // Click on progress bar to seek
-        if (progressWrap) {
-            progressWrap.addEventListener('click', function (e) {
-                if (!video.duration) return;
-                var rect = progressWrap.getBoundingClientRect();
-                var pos = (e.clientX - rect.left) / rect.width;
-                video.currentTime = pos * video.duration;
-            });
+        function isVideoFullscreen() {
+            return document.fullscreenElement === video || document.webkitFullscreenElement === video;
         }
 
-        // Fullscreen Theater
-        function toggleFullscreen() {
-            var target = wrapper || video;
-            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-                if (target.requestFullscreen) {
-                    target.requestFullscreen();
-                } else if (target.webkitRequestFullscreen) {
-                    target.webkitRequestFullscreen();
-                }
-                if (fsBtn) fsBtn.innerHTML = '<i class="fas fa-compress"></i>';
-            } else {
-                if (document.exitFullscreen) {
-                    document.exitFullscreen();
-                } else if (document.webkitExitFullscreen) {
-                    document.webkitExitFullscreen();
-                }
-                if (fsBtn) fsBtn.innerHTML = '<i class="fas fa-expand"></i>';
-            }
-        }
-        if (fsBtn) fsBtn.addEventListener('click', toggleFullscreen);
-
-        document.addEventListener('fullscreenchange', function () {
-            if (!document.fullscreenElement && fsBtn) {
-                fsBtn.innerHTML = '<i class="fas fa-expand"></i>';
-            }
-        });
-
-        // Settings Modal Toggle
-        if (settingsBtn && settingsPanel) {
-            settingsBtn.addEventListener('click', function (e) {
-                e.stopPropagation();
-                settingsPanel.style.display = (settingsPanel.style.display === 'none' || !settingsPanel.style.display) ? 'block' : 'none';
-            });
-        }
-        if (closeSettingsBtn && settingsPanel) {
-            closeSettingsBtn.addEventListener('click', function () { settingsPanel.style.display = 'none'; });
-        }
-        if (cancelSettingsBtn && settingsPanel) {
-            cancelSettingsBtn.addEventListener('click', function () { settingsPanel.style.display = 'none'; });
-        }
-
-        if (saveSettingsBtn) {
-            saveSettingsBtn.addEventListener('click', function () {
-                var checkedChoice = document.querySelector('input[name="video_source_choice"]:checked');
-                var val = checkedChoice ? checkedChoice.value : 'project';
-                var tagChip = document.getElementById('dashVideoTagChip');
-
-                if (val === 'custom') {
-                    var customUrl = (customUrlInput ? customUrlInput.value.trim() : '');
-                    if (customUrl) {
-                        try {
-                            localStorage.setItem('hcc_promo_video_choice', 'custom');
-                            localStorage.setItem('hcc_wa_promo_video', customUrl);
-                        } catch (e) {}
-                        video.src = customUrl;
-                        if (tagChip) tagChip.innerHTML = '<i class="fas fa-video"></i> <span>Custom Video Stream</span>';
-                        video.load();
-                        video.play().catch(function () {});
-                    }
-                } else if (val === 'whatsapp') {
-                    try {
-                        localStorage.setItem('hcc_promo_video_choice', 'whatsapp');
-                        localStorage.removeItem('hcc_wa_promo_video');
-                    } catch (e) {}
-                    video.src = '<?= BASE_URL ?>assets/videos/whatsapp-hub-promo.mp4?v=<?= (file_exists(__DIR__ . '/../assets/videos/whatsapp-hub-promo.mp4') ? filemtime(__DIR__ . '/../assets/videos/whatsapp-hub-promo.mp4') : 1) ?>';
-                    video.poster = '<?= BASE_URL ?>assets/images/wa-promo-poster.jpg';
-                    if (tagChip) tagChip.innerHTML = '<i class="fa-brands fa-whatsapp"></i> <span>HCC WhatsApp Parent Portal • Live Showcase</span>';
-                    video.load();
-                    video.play().catch(function () {});
+        function syncPlayback() {
+            var shouldPlay = !userPaused && (inViewport || isVideoFullscreen()) && !document.hidden;
+            if (shouldPlay) {
+                if (video.paused) {
+                    video.play().then(function () {
+                        updatePlayUI(false);
+                    }).catch(function () {
+                        updatePlayUI(true);
+                    });
                 } else {
-                    try {
-                        localStorage.setItem('hcc_promo_video_choice', 'project');
-                        localStorage.removeItem('hcc_wa_promo_video');
-                    } catch (e) {}
-                    video.src = '<?= BASE_URL ?>assets/videos/hcc-project-promo.mp4?v=<?= (file_exists(__DIR__ . '/../assets/videos/hcc-project-promo.mp4') ? filemtime(__DIR__ . '/../assets/videos/hcc-project-promo.mp4') : 1) ?>';
-                    video.poster = '<?= BASE_URL ?>assets/images/hcc-project-promo-poster.jpg';
-                    if (tagChip) tagChip.innerHTML = '<i class="fa-solid fa-layer-group"></i> <span>HCC Campus Automation System • Full Project Showcase</span>';
-                    video.load();
-                    video.play().catch(function () {});
+                    updatePlayUI(false);
                 }
-                if (settingsPanel) settingsPanel.style.display = 'none';
+            } else {
+                if (!video.paused) {
+                    video.pause();
+                }
+                updatePlayUI(userPaused || video.paused);
+            }
+        }
+
+        function onFullscreenChange() {
+            var fs = isVideoFullscreen();
+            video.controls = fs;
+            if (fs) {
+                video.removeAttribute('aria-hidden');
+                video.removeAttribute('tabindex');
+            } else {
+                video.setAttribute('aria-hidden', 'true');
+                video.setAttribute('tabindex', '-1');
+                userPaused = video.paused;
+                updatePlayUI(video.paused);
+                updateMuteUI(video.muted);
+                syncPlayback();
+            }
+        }
+
+        if (userPaused) {
+            video.pause();
+            updatePlayUI(true);
+        } else {
+            syncPlayback();
+        }
+        updateMuteUI(video.muted);
+
+        if (playBtn) {
+            playBtn.addEventListener('click', function () {
+                if (video.paused) {
+                    userPaused = false;
+                    video.play().then(function () {
+                        updatePlayUI(false);
+                    }).catch(function () {});
+                } else {
+                    userPaused = true;
+                    video.pause();
+                    updatePlayUI(true);
+                }
             });
         }
 
-        // Auto-pause video when out of viewport to optimize CPU/RAM
+        if (muteBtn) {
+            muteBtn.addEventListener('click', function () {
+                video.muted = !video.muted;
+                updateMuteUI(video.muted);
+                if (!video.muted && video.paused) {
+                    userPaused = false;
+                    video.play().then(function () { updatePlayUI(false); }).catch(function () {});
+                }
+            });
+        }
+
+        if (expandBtn) {
+            expandBtn.addEventListener('click', function () {
+                if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                    if (video.requestFullscreen) {
+                        video.requestFullscreen().catch(function () {});
+                    } else if (video.webkitRequestFullscreen) {
+                        video.webkitRequestFullscreen();
+                    } else if (video.webkitEnterFullscreen) {
+                        video.webkitEnterFullscreen();
+                    }
+                    if (video.paused) {
+                        userPaused = false;
+                        video.play().then(function () { updatePlayUI(false); }).catch(function () {});
+                    }
+                } else {
+                    if (document.exitFullscreen) {
+                        document.exitFullscreen().catch(function () {});
+                    } else if (document.webkitExitFullscreen) {
+                        document.webkitExitFullscreen();
+                    }
+                }
+            });
+        }
+
+        document.addEventListener('fullscreenchange', onFullscreenChange);
+        document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+        video.addEventListener('webkitendfullscreen', onFullscreenChange);
+
         if ('IntersectionObserver' in window) {
+            var heroSection = document.getElementById('dashHero') || video;
             var observer = new IntersectionObserver(function (entries) {
                 entries.forEach(function (entry) {
-                    if (!entry.isIntersecting) {
-                        if (!video.paused) video.pause();
-                        if (playPauseBtn) playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
-                    } else {
-                        if (video.paused && !video.ended) {
-                            video.play().then(function () {
-                                if (playPauseBtn) playPauseBtn.innerHTML = '<i class="fas fa-pause"></i>';
-                            }).catch(function () {});
-                        }
-                    }
+                    inViewport = entry.isIntersecting;
+                    syncPlayback();
                 });
-            }, { threshold: 0.25 });
-            observer.observe(video);
+            }, { threshold: 0.15 });
+            observer.observe(heroSection);
+        }
+
+        document.addEventListener('visibilitychange', syncPlayback);
+
+        if (reduceMotionQuery) {
+            var onMotionPrefChange = function (e) {
+                userPaused = !!e.matches;
+                syncPlayback();
+            };
+            if (typeof reduceMotionQuery.addEventListener === 'function') {
+                reduceMotionQuery.addEventListener('change', onMotionPrefChange);
+            } else if (typeof reduceMotionQuery.addListener === 'function') {
+                reduceMotionQuery.addListener(onMotionPrefChange);
+            }
         }
     })();
 
-        /* Header notification bell: toggle dropdown + mark-as-read on open. */
+    /* ═══ Dashboard Notification Feed & Mark-Read Sync ═══ */
     (function () {
+        'use strict';
         var trigger = document.getElementById('notifTrigger');
-        var dropdown = document.getElementById('notifDropdown');
         var badge = document.getElementById('notifBadge');
-        function markAllRead(done) {
+        var filterBar = document.getElementById('notifFilterBar');
+        var filterEmpty = document.getElementById('notifFilterEmpty');
+        var footNote = document.getElementById('dashNotifFootNote');
+        var footText = document.getElementById('dashNotifFootText');
+        var activeFilter = 'all';
+
+        function applyFilter(filter) {
+            activeFilter = filter;
+            var notifRows = document.querySelectorAll('.dash-notif-list .notif-item');
+            var visibleCount = 0;
+            notifRows.forEach(function (row) {
+                var show = false;
+                if (filter === 'all') {
+                    show = true;
+                } else if (filter === 'unread') {
+                    show = (row.getAttribute('data-unread') === '1');
+                } else {
+                    show = (row.getAttribute('data-type') === filter);
+                }
+                row.style.display = show ? '' : 'none';
+                if (show) visibleCount++;
+            });
+            if (filterEmpty) {
+                filterEmpty.hidden = (visibleCount > 0);
+            }
+        }
+
+        function markAllRead(onSuccess, onFail) {
+            var meta = document.querySelector('meta[name="csrf-token"]');
             var csrf = document.querySelector('input[name="csrf_token"]');
+            var token = (csrf && csrf.value) ? csrf.value : (meta ? meta.content : '');
             var fd = new FormData();
             fd.append('action', 'mark_notifs_read');
-            if (csrf) fd.append('csrf_token', csrf.value);
-            fetch('dashboard.php', { method: 'POST', body: fd }).then(done).catch(function () {});
+            if (token) fd.append('csrf_token', token);
+            fetch('dashboard.php', { method: 'POST', body: fd, credentials: 'same-origin' })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                    if (d && d.ok) {
+                        if (onSuccess) onSuccess();
+                    } else if (onFail) {
+                        onFail();
+                    }
+                })
+                .catch(function () {
+                    if (onFail) onFail();
+                });
         }
+
         function clearUnreadUI() {
             if (badge) badge.style.display = 'none';
-            if (trigger) trigger.classList.remove('has-unread');
+            if (trigger) {
+                trigger.classList.remove('has-unread');
+                trigger.setAttribute('aria-label', 'Notifications');
+            }
+            var dropdownUnread = document.querySelectorAll('#notifDropdown .notif-item.is-unread');
+            dropdownUnread.forEach(function (el) { el.classList.remove('is-unread'); });
+
             var unreadCountBadge = document.getElementById('notifUnreadCountBadge');
             if (unreadCountBadge) unreadCountBadge.style.display = 'none';
+
             var unreadFilterBtn = document.getElementById('notifFilterUnreadBtn');
+            var wasUnreadFilter = unreadFilterBtn && unreadFilterBtn.classList.contains('active');
             if (unreadFilterBtn) unreadFilterBtn.style.display = 'none';
 
-            // Clear unread highlights and badges from rows
-            var unreadRows = document.querySelectorAll('.notif-item--unread');
+            var unreadRows = document.querySelectorAll('.dash-notif-list .notif-item--unread');
             unreadRows.forEach(function (row) {
                 row.classList.remove('notif-item--unread');
                 row.setAttribute('data-unread', '0');
                 var uBadge = row.querySelector('.notif-unread-badge');
                 if (uBadge) uBadge.remove();
             });
+
+            if (footNote && footText) {
+                var total = parseInt(footNote.getAttribute('data-total') || '0', 10);
+                footText.textContent = total + ' notification' + (total === 1 ? '' : 's');
+            }
+
+            var markAllBtn = document.getElementById('notifMarkAll');
+            if (markAllBtn) {
+                markAllBtn.disabled = true;
+                markAllBtn.innerHTML = '<i class="fas fa-check" aria-hidden="true"></i> All caught up';
+            }
+
+            if (wasUnreadFilter && filterBar) {
+                var allBtn = filterBar.querySelector('[data-filter="all"]');
+                if (allBtn) allBtn.click();
+            } else {
+                applyFilter(activeFilter);
+            }
         }
-        /* Header notification bell: toggle handled globally in admin.js (this page loads it),
-           so we intentionally do NOT attach a second toggle here — a second toggle would fight
-           admin.js and make the bell appear dead (double-toggle = never opens). */
+
         var markAllBtn = document.getElementById('notifMarkAll');
         if (markAllBtn) {
             markAllBtn.addEventListener('click', function () {
                 markAllBtn.disabled = true;
-                markAllRead(function () {
-                    clearUnreadUI();
-                    markAllBtn.innerHTML = '<i class="fas fa-check"></i> All caught up';
+                markAllRead(clearUnreadUI, function () {
+                    markAllBtn.disabled = false;
                 });
             });
         }
 
-        // Interactive Notification Filter Tabs
-        var filterBar = document.getElementById('notifFilterBar');
+        /* Sync dashboard feed when topbar bell is opened (admin.js marks notifications read on open) */
+        if (trigger) {
+            trigger.addEventListener('click', function () {
+                setTimeout(function () {
+                    if (trigger.getAttribute('aria-expanded') === 'true') {
+                        clearUnreadUI();
+                    }
+                }, 250);
+            });
+        }
+
         if (filterBar) {
             var filterBtns = filterBar.querySelectorAll('.notif-filter-btn');
-            var notifRows = document.querySelectorAll('.dash-notif-list .notif-item');
-
             filterBtns.forEach(function (btn) {
                 btn.addEventListener('click', function () {
-                    filterBtns.forEach(function (b) { b.classList.remove('active'); });
-                    btn.classList.add('active');
-
-                    var filter = btn.getAttribute('data-filter');
-                    notifRows.forEach(function (row) {
-                        if (filter === 'all') {
-                            row.style.display = '';
-                        } else if (filter === 'unread') {
-                            row.style.display = (row.getAttribute('data-unread') === '1') ? '' : 'none';
-                        } else {
-                            row.style.display = (row.getAttribute('data-type') === filter) ? '' : 'none';
-                        }
+                    filterBtns.forEach(function (b) {
+                        var isSelected = (b === btn);
+                        b.classList.toggle('active', isSelected);
+                        b.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
                     });
+                    applyFilter(btn.getAttribute('data-filter') || 'all');
                 });
             });
         }
     })();
-    </script>
-    <script src="<?= BASE_URL ?>assets/vendor/jspdf@2.5.1/jspdf.umd.min.js"></script>
-    <script src="<?= BASE_URL ?>assets/js/hcc-logo-base64.js?v=<?= (is_file(__DIR__ . '/../assets/js/hcc-logo-base64.js') ? filemtime(__DIR__ . '/../assets/js/hcc-logo-base64.js') : 0) ?>"></script>
-    <script type="application/json" id="waHubData">
-        <?= json_encode([
-            "schoolName" => $schoolName,
-            "waContacts" => (int)$waContacts,
-            "waSent"     => (int)$waSent,
-            "waPending"  => (int)$waPending
-        ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>
     </script>
     <script src="<?= BASE_URL ?>assets/js/admin.js?v=<?= (is_file(__DIR__ . '/../assets/js/admin.js') ? filemtime(__DIR__ . '/../assets/js/admin.js') : 0) ?>"></script>
 
@@ -896,9 +915,9 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
         <span class="hcc-bot-dot" aria-hidden="true"></span>
     </button>
     <section class="hcc-bot-panel" id="hccBotPanel" role="dialog" aria-modal="false" aria-labelledby="hccBotTitle" aria-hidden="true"
-             data-endpoint="api_assistant_chat.php" data-admin="<?= htmlspecialchars(explode(' ', trim($_SESSION['admin_name'] ?? ''))[0], ENT_QUOTES, 'UTF-8') ?>">
+             data-endpoint="api_assistant_chat.php" data-logo="<?= htmlspecialchars($schoolLogoUrl, ENT_QUOTES, 'UTF-8') ?>" data-admin="<?= htmlspecialchars(explode(' ', trim((string)($_SESSION['admin_name'] ?? '')))[0], ENT_QUOTES, 'UTF-8') ?>">
         <header class="hcc-bot-head">
-            <span class="hcc-bot-avatar" aria-hidden="true"><img src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="HCC logo"></span>
+            <span class="hcc-bot-avatar" aria-hidden="true"><img src="<?= htmlspecialchars($schoolLogoUrl, ENT_QUOTES, 'UTF-8') ?>" alt=""></span>
             <div class="hcc-bot-head-text">
                 <strong id="hccBotTitle">HCC Assistant</strong>
                 <span>Online · System help</span>
@@ -912,8 +931,53 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
             <input type="text" id="hccBotInput" maxlength="500" placeholder="Ask how the system works…">
             <button type="submit" id="hccBotSend" aria-label="Send message" disabled><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
         </form>
-        <div class="hcc-bot-foot">Answers are about the HCC system workflow.</div>
+        <div class="hcc-bot-foot">Steps stay in this chat. Open is the button that goes to a page.</div>
     </section>
     <script src="<?= BASE_URL ?>assets/js/hcc-assistant.js?v=<?= (is_file(__DIR__ . '/../assets/js/hcc-assistant.js') ? filemtime(__DIR__ . '/../assets/js/hcc-assistant.js') : 0) ?>"></script>
+
+    <!-- Live IST greeting: updates as Indian time changes without page reload -->
+    <script>
+    (function () {
+        'use strict';
+        var textEl = document.getElementById('dashGreetingText');
+        if (!textEl) return;
+
+        function istHour(date) {
+            var d = date || new Date();
+            try {
+                var parts = new Intl.DateTimeFormat('en-US', {
+                    timeZone: 'Asia/Kolkata', hour: '2-digit', hour12: false
+                }).formatToParts(d);
+                var hourPart = null;
+                for (var i = 0; i < parts.length; i++) {
+                    if (parts[i].type === 'hour') { hourPart = parts[i]; break; }
+                }
+                if (hourPart) return parseInt(hourPart.value, 10) % 24;
+            } catch (e) {
+                return new Date(d.getTime() + (5.5 * 60 * 60 * 1000)).getUTCHours();
+            }
+            return d.getHours();
+        }
+
+        function greetingFor(hour) {
+            if (hour < 12) return 'Good morning';
+            if (hour < 17) return 'Good afternoon';
+            return 'Good evening';
+        }
+
+        function updateGreeting() {
+            var text = greetingFor(istHour());
+            if (textEl.textContent !== text) textEl.textContent = text;
+        }
+
+        updateGreeting();
+        setInterval(updateGreeting, 30000);
+        document.addEventListener('visibilitychange', function () {
+            if (!document.hidden) updateGreeting();
+        });
+        window.addEventListener('focus', updateGreeting);
+        window.addEventListener('pageshow', updateGreeting);
+    })();
+    </script>
 </body>
 </html>

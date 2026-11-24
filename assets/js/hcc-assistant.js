@@ -13,6 +13,7 @@
     var closeBtn = document.getElementById('hccBotClose');
     var resetBtn = document.getElementById('hccBotReset');
     var endpoint = panel.getAttribute('data-endpoint') || 'api_assistant_chat.php';
+    var logo = panel.getAttribute('data-logo') || '';
     var busy = false;
     var greeted = false;
 
@@ -34,7 +35,90 @@
     }
     function scrollDown() { body.scrollTop = body.scrollHeight; }
     function safeHref(h) { return /^[a-z0-9_]+\.php$/.test(h || '') ? h : null; }
+    function iconOk(cls) { return /^fa-(solid|brands) fa-[a-z0-9-]+$/.test(cls || ''); }
+    function badgeOk(cls) { return /^(gold|wa|archive|crm|pipeline|drive)$/.test(cls || ''); }
 
+    function appendIcon(parent, cls) {
+        if (!iconOk(cls)) return;
+        var i = document.createElement('i');
+        i.className = cls;
+        i.setAttribute('aria-hidden', 'true');
+        parent.appendChild(i);
+    }
+    function addPoints(parent, points) {
+        if (!points || !points.length) return;
+        var ol = el('ol', 'hcc-bot-points');
+        points.forEach(function (p) {
+            var t = p == null ? '' : String(p);
+            if (!t) return;
+            ol.appendChild(el('li', null, t));
+        });
+        if (ol.childNodes.length) parent.appendChild(ol);
+    }
+    function addOpenButton(parent, item) {
+        var href = safeHref(item && item.href);
+        if (!href || !item.label) return;
+        var wrap = el('div', 'hcc-bot-links');
+        var a = el('a');
+        a.href = href;
+        a.setAttribute('aria-label', 'Open ' + item.label);
+        if (iconOk(item.icon)) {
+            var i = document.createElement('i');
+            i.className = item.icon;
+            i.setAttribute('aria-hidden', 'true');
+            a.appendChild(i);
+        }
+        a.appendChild(document.createTextNode('Open'));
+        wrap.appendChild(a);
+        parent.appendChild(wrap);
+    }
+    /* Explanation cards are never links. href is rendered only as Open. */
+    function addModuleCard(parent, item) {
+        var row = el('div', 'hcc-bot-nav');
+        var ico = el('span', 'hcc-bot-ico');
+        appendIcon(ico, item.icon);
+        row.appendChild(ico);
+        var navBody = el('span', 'hcc-bot-nav-body');
+        if (item.label || item.badge) {
+            var title = el('span', 'hcc-bot-nav-title');
+            if (item.label) title.appendChild(el('strong', null, item.label));
+            if (item.badge) {
+                var badgeCls = 'hcc-bot-badge' + (badgeOk(item.badgeClass) ? ' is-' + item.badgeClass : '');
+                title.appendChild(el('span', badgeCls, item.badge));
+            }
+            navBody.appendChild(title);
+        }
+        if (item.points && item.points.length) addPoints(navBody, item.points);
+        else if (item.text) navBody.appendChild(el('span', 'hcc-bot-nav-text', item.text));
+        addOpenButton(navBody, item);
+        row.appendChild(navBody);
+        parent.appendChild(row);
+    }
+    function addFlow(parent, items) {
+        var list = el('div', 'hcc-bot-flow');
+        items.forEach(function (item) {
+            if (!item || typeof item === 'string') {
+                list.appendChild(el('p', 'hcc-bot-nav-text', item || ''));
+                return;
+            }
+            addModuleCard(list, item);
+        });
+        if (list.childNodes.length) parent.appendChild(list);
+    }
+
+    function miniMark() {
+        var mini = el('span', 'hcc-bot-mini');
+        mini.setAttribute('aria-hidden', 'true');
+        if (logo) {
+            var img = document.createElement('img');
+            img.src = logo;
+            img.alt = '';
+            mini.appendChild(img);
+        } else {
+            appendIcon(mini, 'fa-solid fa-shield-halved');
+        }
+        return mini;
+    }
     function addUser(text) {
         var row = el('div', 'hcc-bot-msg user');
         var b = el('div', 'hcc-bot-bubble');
@@ -46,26 +130,48 @@
     }
     function addBot(reply, isError) {
         var row = el('div', 'hcc-bot-msg bot' + (isError ? ' error' : ''));
-        var mini = el('span', 'hcc-bot-mini');
-        mini.setAttribute('aria-hidden', 'true');
-        mini.appendChild(el('i', 'fa-solid fa-robot'));
-        row.appendChild(mini);
+        row.appendChild(miniMark());
         var b = el('div', 'hcc-bot-bubble');
         if (reply.title) b.appendChild(el('h4', null, reply.title));
         if (reply.text) b.appendChild(el('p', null, reply.text));
+        if (reply.groups && reply.groups.length) {
+            reply.groups.forEach(function (g) {
+                if (!g) return;
+                if (g.label) b.appendChild(el('p', 'hcc-bot-group-label', g.label));
+                if (g.items && g.items.length) addFlow(b, g.items);
+            });
+        }
         if (reply.steps && reply.steps.length) {
-            var list = el(reply.steps.length > 1 && reply.ordered !== false ? 'ol' : 'ul');
-            reply.steps.forEach(function (s) { list.appendChild(el('li', null, s)); });
-            b.appendChild(list);
+            var blockSteps = reply.steps.some(function (s) { return s && typeof s === 'object'; });
+            if (blockSteps) {
+                var flow = el('div', 'hcc-bot-flow');
+                reply.steps.forEach(function (s) {
+                    if (s && typeof s === 'object') addModuleCard(flow, s);
+                    else flow.appendChild(el('p', 'hcc-bot-nav-text', s == null ? '' : String(s)));
+                });
+                b.appendChild(flow);
+            } else {
+                var ordered = reply.steps.length > 1 && reply.ordered !== false;
+                var list = el(ordered ? 'ol' : 'ul', ordered ? 'hcc-bot-steps' : 'hcc-bot-steps is-plain');
+                reply.steps.forEach(function (s) {
+                    list.appendChild(el('li', null, s == null ? '' : String(s)));
+                });
+                b.appendChild(list);
+            }
         }
         if (reply.links && reply.links.length) {
             var wrap = el('div', 'hcc-bot-links');
             reply.links.forEach(function (l) {
                 var href = safeHref(l.href);
-                if (!href) return;
+                if (!href || !l.label) return;
                 var a = el('a');
                 a.href = href;
-                a.appendChild(el('i', 'fa-solid fa-arrow-up-right-from-square'));
+                if (iconOk(l.icon)) {
+                    var i = document.createElement('i');
+                    i.className = l.icon;
+                    i.setAttribute('aria-hidden', 'true');
+                    a.appendChild(i);
+                }
                 a.appendChild(document.createTextNode(l.label));
                 wrap.appendChild(a);
             });
@@ -75,7 +181,13 @@
         row.appendChild(b);
         body.appendChild(row);
         if (reply.followups && reply.followups.length) addChips(reply.followups);
-        scrollDown();
+        var longAnswer = (reply.groups && reply.groups.length) || (reply.steps && reply.steps.length > 3);
+        if (longAnswer) {
+            var top = row.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop;
+            body.scrollTop = Math.max(0, top - 8);
+        } else {
+            scrollDown();
+        }
     }
     function addChips(items) {
         var old = body.querySelectorAll('.hcc-bot-chips');
@@ -92,9 +204,7 @@
     function showTyping() {
         var row = el('div', 'hcc-bot-msg bot hcc-bot-typing');
         row.id = 'hccBotTyping';
-        var mini = el('span', 'hcc-bot-mini');
-        mini.appendChild(el('i', 'fa-solid fa-robot'));
-        row.appendChild(mini);
+        row.appendChild(miniMark());
         var b = el('div', 'hcc-bot-bubble');
         b.setAttribute('aria-label', 'Assistant is typing');
         b.appendChild(el('i')); b.appendChild(el('i')); b.appendChild(el('i'));
@@ -109,7 +219,7 @@
         var name = panel.getAttribute('data-admin') || '';
         addBot({
             title: 'Hi' + (name ? ' ' + name : '') + ' 👋',
-            text: "I'm the HCC Assistant. I can explain how the system works and take you to the right page. What would you like to know?",
+            text: "I'm the HCC Assistant. I explain each part of the system in steps. Open is the button that takes you to a page. What would you like to know?",
             followups: ['Explain the system workflow', 'How do I enter marks?', 'How does WhatsApp sharing work?', "Show me today's stats"]
         });
     }

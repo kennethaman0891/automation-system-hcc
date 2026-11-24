@@ -17,6 +17,8 @@ node_modules/
 # --- large / session artifacts (never commit) ---
 storage/whatsapp/ipc/*
 !storage/whatsapp/ipc/.gitkeep
+storage/whatsapp/media/*
+!storage/whatsapp/media/.gitkeep
 automation/.whatsapp-session/
 automation/.whatsapp-session-test/
 automation/admission-ai-service/

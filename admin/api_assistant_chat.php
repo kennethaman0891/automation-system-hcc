@@ -57,12 +57,8 @@ if (str_word_count($q) <= 5 && preg_match('/\b(thanks|thank you|thx|ty|great|awe
     ]]);
 }
 if (preg_match('/\b(who are you|what are you|your name|help|what can you do)\b/u', $q) && !preg_match('/\b(marks|whatsapp|timetable|admission|import)\b/u', $q)) {
-    hccAssistantRespond(200, ['ok' => true, 'reply' => [
-        'title' => 'I\'m the HCC Assistant',
-        'text' => 'I explain how the school automation system works and point you to the right page. I can help with:',
-        'steps' => ['Marks entry & Excel import', 'Results, report cards & pass criteria', 'Unit tests, timetable, seating & substitutes', 'At-Risk Radar & Parent-Sign Chase', 'WhatsApp Hub & admissions', 'Promotion, certificates, archive & Drive', 'Live dashboard statistics'],
-        'links' => [], 'followups' => $defaultSuggestions,
-    ]]);
+    $topics = hccAssistantTopics();
+    hccAssistantRespond(200, ['ok' => true, 'reply' => hccAssistantPublicReply($topics['overview'])]);
 }
 
 /* Live stats */
@@ -87,27 +83,36 @@ if (preg_match('/\b(stats|statistics|how many|total students|figures|numbers)\b/
         'title' => 'Live summary',
         'text' => $steps ? 'Here are the current figures from the system:' : 'I couldn\'t read the statistics right now. Please check the database connection.',
         'steps' => $steps,
-        'links' => [['label' => 'Results Matrix', 'href' => 'results.php']],
+        'links' => [['label' => 'Results Matrix', 'href' => 'results.php', 'icon' => 'fa-solid fa-table']],
         'followups' => ['What is the At-Risk Radar?', 'What is the passing percentage?'],
     ]]);
 }
 
-/* Topic scoring */
+/* Topic scoring. A longer matched phrase wins a tie, so "whatsapp hub"
+   is not swallowed by a shorter generic word. */
 $topics = hccAssistantTopics();
 $best = null;
 $bestScore = 0;
+$bestLen = 0;
 foreach ($topics as $key => $t) {
     $score = 0;
+    $matchedLen = 0;
     foreach ($t['keywords'] as $kw) {
         $kw = mb_strtolower($kw);
+        $hit = 0;
         if (mb_strpos($q, ' ' . $kw . ' ') !== false) {
-            $score += 2 + substr_count($kw, ' ') * 2; // multi-word phrases weigh more
+            $hit = 2 + substr_count($kw, ' ') * 2; // multi-word phrases weigh more
         } elseif (mb_strlen($kw) >= 4 && mb_strpos($q, $kw) !== false) {
-            $score += 1; // partial / plural match
+            $hit = 1; // partial / plural match
+        }
+        if ($hit > 0) {
+            $score += $hit;
+            $matchedLen = max($matchedLen, mb_strlen($kw));
         }
     }
-    if ($score > $bestScore) {
+    if ($score > $bestScore || ($score === $bestScore && $score > 0 && $matchedLen > $bestLen)) {
         $bestScore = $score;
+        $bestLen = $matchedLen;
         $best = $key;
     }
 }
@@ -121,14 +126,4 @@ if ($best === null) {
     ]]);
 }
 
-$t = $topics[$best];
-$links = [];
-foreach ($t['links'] as $l) {
-    if (preg_match('/^[a-z0-9_]+\.php$/', $l['href']) && is_file(__DIR__ . '/' . $l['href'])) {
-        $links[] = $l;
-    }
-}
-hccAssistantRespond(200, ['ok' => true, 'reply' => [
-    'title' => $t['title'], 'text' => $t['text'], 'steps' => $t['steps'],
-    'links' => $links, 'followups' => $t['followups'],
-]]);
+hccAssistantRespond(200, ['ok' => true, 'reply' => hccAssistantPublicReply($topics[$best])]);

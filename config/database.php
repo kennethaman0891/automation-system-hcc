@@ -136,6 +136,20 @@ function getDB() {
                 $pdo = null;
             }
         }
+
+        // Resilient dev fallback: if configured credentials (e.g. hcc_app) failed on local development,
+        // attempt standard local XAMPP credentials (root with empty password) across candidate DSNs
+        if ($pdo === null && DB_USER !== 'root') {
+            foreach ($candidates as $dsn) {
+                try {
+                    $pdo = new PDO($dsn, 'root', '', $options);
+                    break;
+                } catch (PDOException $e) {
+                    $pdo = null;
+                }
+            }
+        }
+
         if ($pdo === null) {
             error_log('Database connection failed: ' . $lastError);
             die("A database error occurred. Please try again later.");

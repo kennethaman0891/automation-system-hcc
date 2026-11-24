@@ -671,7 +671,7 @@ if ($selectedRollsParam !== '') {
                     <!-- ══════════════ LEFT: WHATSAPP CHAT LIST ══════════════ -->
                     <aside class="wa-chatlist">
                         <div class="wa-cl-header">
-                            <div class="wa-cl-avatar"><?= sanitize($adminInitials) ?></div>
+                            <div class="wa-cl-avatar wa-cl-avatar-logo"><img src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="HCC logo"></div>
                             <div class="wa-cl-title">
                                 <b>WhatsApp Hub</b>
                                 <span><?= sanitize($classLabel) ?></span>
