@@ -132,6 +132,7 @@ try {
 $allCohort = [];
 try {
     $where  = ['academic_year = ?'];
+    rcEnsureParentSignatureStorage();
     $params = [$selectedYear];
     if ($source === 'unit_test') {
         $where[]  = 'test_type = ?';
@@ -141,6 +142,7 @@ try {
         $sql = "SELECT std, division, test_type AS term_val, roll_no,
                        MAX(student_name) AS student_name,
                        MAX(parents_sign) AS parents_sign,
+                       MAX(NULLIF(parent_signature_data, '')) AS parent_signature_data,
                        MAX(NULLIF(parent_phone, '')) AS parent_phone,
                        SUM(CASE WHEN is_absent = 1 THEN 0 ELSE COALESCE(marks_obtained,0) END) AS obtained,
                        SUM(max_marks) AS maxtotal
@@ -156,6 +158,7 @@ try {
         $sql = "SELECT std, division, semester AS term_val, roll_no,
                        MAX(student_name) AS student_name,
                        MAX(parents_sign) AS parents_sign,
+                       MAX(NULLIF(parent_signature_data, '')) AS parent_signature_data,
                        MAX(NULLIF(parent_phone, '')) AS parent_phone,
                        SUM(fa_obtained + sa_obtained) AS obtained,
                        SUM(fa_max + sa_max) AS maxtotal
@@ -251,9 +254,10 @@ foreach ($allCohort as $stu) {
         'roll_no'      => $roll,
         'student_name' => trim((string)$stu['student_name']),
         'parent_phone' => $phone,
-        'pct'          => $pct,
-        'signed'       => $signed,
-        'wa_status'    => $waStatus,
+        'pct'            => $pct,
+        'signed'         => $signed,
+        'signature_data' => trim((string)($stu['parent_signature_data'] ?? '')),
+        'wa_status'      => $waStatus,
         'wa_at'        => $waAt,
         'is_sent'      => $isSentOrOpened,
         'class_key'    => $classKeyRaw,
@@ -583,7 +587,9 @@ $exportUrl = '?' . http_build_query([
                                     <?php endif; ?>
                                 </td>
                                 <td class="js-sign-cell">
-                                    <?php if ($r['signed']): ?>
+                                    <?php if ($r['signed'] && !empty($r['signature_data'])): ?>
+                                        <img src="<?= htmlspecialchars($r['signature_data'], ENT_QUOTES, 'UTF-8') ?>" alt="Parent signature" style="max-height:24px;max-width:86px;object-fit:contain;display:inline-block;vertical-align:middle;background:#fff;border:1px solid #bbf7d0;border-radius:6px;padding:2px 4px;">
+                                    <?php elseif ($r['signed']): ?>
                                         <span class="ops-pill pill-signed"><i class="fa-solid fa-check"></i> Signed</span>
                                     <?php else: ?>
                                         <span class="ops-pill pill-never"><i class="fa-regular fa-clock"></i> Unsigned</span>
@@ -595,6 +601,22 @@ $exportUrl = '?' . http_build_query([
                                 </td>
                                 <td class="no-print text-end">
                                     <div class="d-inline-flex gap-1">
+                                        <button type="button"
+                                                class="btn-hcc btn-sm btn-hcc-outline js-open-sign-board psb-keep-label"
+                                                data-roll="<?= htmlspecialchars($r['roll_no'], ENT_QUOTES, 'UTF-8') ?>"
+                                                data-student-name="<?= htmlspecialchars($r['student_name'], ENT_QUOTES, 'UTF-8') ?>"
+                                                data-table="<?= $source === 'unit_test' ? 'unit_test_results' : 'report_card' ?>"
+                                                data-class="<?= htmlspecialchars($r['class_key'], ENT_QUOTES, 'UTF-8') ?>"
+                                                data-year="<?= htmlspecialchars($selectedYear, ENT_QUOTES, 'UTF-8') ?>"
+                                                data-std="<?= htmlspecialchars($r['std'], ENT_QUOTES, 'UTF-8') ?>"
+                                                data-division="<?= htmlspecialchars($r['division'], ENT_QUOTES, 'UTF-8') ?>"
+                                                data-test-type="<?= htmlspecialchars($selectedTerm, ENT_QUOTES, 'UTF-8') ?>"
+                                                data-signed="<?= $r['signed'] ? '1' : '0' ?>"
+                                                data-signature="<?= htmlspecialchars($r['signature_data'], ENT_QUOTES, 'UTF-8') ?>"
+                                                title="Open Digital Signature Board">
+                                            <i class="fa-solid fa-signature"></i>
+                                            <span>Board</span>
+                                        </button>
                                         <button type="button"
                                                 class="btn-hcc btn-sm <?= $r['signed'] ? 'btn-hcc-outline' : 'btn-hcc-primary' ?> js-toggle-sign"
                                                 data-roll="<?= htmlspecialchars($r['roll_no'], ENT_QUOTES, 'UTF-8') ?>"
@@ -712,7 +734,40 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     });
+
+    document.addEventListener('hcc:parent-sign-updated', (ev) => {
+        const detail = ev && ev.detail ? ev.detail : null;
+        if (!detail || !detail.trigger) return;
+        const tr = detail.trigger.closest('tr');
+        if (!tr) return;
+        const signCell = tr.querySelector('.js-sign-cell');
+        const toggleBtn = tr.querySelector('.js-toggle-sign');
+        const isNowSigned = !!detail.signed;
+
+        if (signCell) {
+            signCell.textContent = '';
+            if (isNowSigned && detail.signature_data) {
+                const img = document.createElement('img');
+                img.src = detail.signature_data;
+                img.alt = 'Parent signature';
+                img.style.cssText = 'max-height:24px;max-width:86px;object-fit:contain;display:inline-block;vertical-align:middle;background:#fff;border:1px solid #bbf7d0;border-radius:6px;padding:2px 4px;';
+                signCell.appendChild(img);
+            } else if (isNowSigned) {
+                signCell.innerHTML = '<span class="ops-pill pill-signed"><i class="fa-solid fa-check"></i> Signed</span>';
+            } else {
+                signCell.innerHTML = '<span class="ops-pill pill-never"><i class="fa-regular fa-clock"></i> Unsigned</span>';
+            }
+        }
+        if (toggleBtn) {
+            toggleBtn.setAttribute('data-next-sign', isNowSigned ? '0' : '1');
+            toggleBtn.className = 'btn-hcc btn-sm js-toggle-sign ' + (isNowSigned ? 'btn-hcc-outline' : 'btn-hcc-primary');
+            toggleBtn.innerHTML = isNowSigned
+                ? '<i class="fa-solid fa-rotate-left"></i> <span>Undo Sign</span>'
+                : '<i class="fa-solid fa-check"></i> <span>Mark Signed</span>';
+        }
+    });
 });
 </script>
+<script src="<?= BASE_URL ?>assets/js/parent-sign.js?v=<?= is_file(__DIR__ . '/../assets/js/parent-sign.js') ? filemtime(__DIR__ . '/../assets/js/parent-sign.js') : 1 ?>"></script>
 </body>
 </html>

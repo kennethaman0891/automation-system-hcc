@@ -251,7 +251,7 @@ $parentPhone = preg_replace('/\D+/', '', (string)($report['rows'][0]['parent_pho
                 <div class="details-grid">
                     <div><strong>Remark</strong><span><?= sanitize(rcDisplayRemark($report['remark'] ?? '', $report['percentage'] ?? 0) ?: '—') ?></span></div>
                     <div><strong>Attendance</strong><span><?= sanitize($report['attendance'] ?: '—') ?></span></div>
-                    <div><strong>Parent Signature</strong><span><?= $report['parents_sign'] ? 'Confirmed' : 'Not Signed' ?></span></div>
+                    <div><strong>Parent Signature</strong><span><?php if (!empty($report['parents_sign']) && !empty($report['parent_signature_data'])): ?><img src="<?= e_attr($report['parent_signature_data']) ?>" alt="Parent signature" style="max-height:28px;max-width:110px;object-fit:contain;vertical-align:middle;"><?php else: ?><?= $report['parents_sign'] ? 'Confirmed' : 'Not Signed' ?><?php endif; ?></span></div>
                     <div><strong>Date Issued</strong><span><?= $today ?></span></div>
                     <div><strong>Class Teacher</strong><span></span></div>
                     <div><strong>Principal</strong><span></span></div>

@@ -849,14 +849,30 @@ $notifData = rcGetRecentNotifications(8);
                                                    maxlength="5">
                                         </td>
                                         <td style="text-align:center;">
-                                            <?php $isSigned = !empty($stu['parents_sign']); ?>
+                                            <?php
+                                            $isSigned = !empty($stu['parents_sign']);
+                                            $sigImg   = trim((string)($stu['parent_signature_data'] ?? ''));
+                                            ?>
                                             <button type="button"
-                                                    class="ut-sign-toggle <?= $isSigned ? 'is-signed' : '' ?>"
+                                                    class="psb-trigger js-open-sign-board <?= $isSigned ? 'is-signed' : '' ?>"
+                                                    data-table="unit_test_results"
+                                                    data-year="<?= e_attr($year) ?>"
+                                                    data-std="<?= e_attr($std) ?>"
+                                                    data-division="<?= e_attr($division) ?>"
+                                                    data-test-type="<?= e_attr($testType) ?>"
                                                     data-roll="<?= e_attr($stu['roll_no']) ?>"
+                                                    data-student-name="<?= e_attr($stu['student_name']) ?>"
                                                     data-signed="<?= $isSigned ? '1' : '0' ?>"
+                                                    data-signature="<?= e_attr($sigImg) ?>"
                                                     aria-pressed="<?= $isSigned ? 'true' : 'false' ?>"
-                                                    title="<?= $isSigned ? 'Parent signature verified (click to untick)' : 'Parent signature pending (click to verify)' ?>">
-                                                <i class="<?= $isSigned ? 'fas fa-check' : 'far fa-circle' ?>"></i>
+                                                    title="<?= $isSigned ? 'Parent digital signature saved (click to view or re-sign)' : 'Open digital signature board' ?>">
+                                                <?php if ($isSigned && $sigImg !== ''): ?>
+                                                    <img src="<?= e_attr($sigImg) ?>" alt="Parent signature" class="psb-thumb">
+                                                <?php elseif ($isSigned): ?>
+                                                    <i class="fas fa-check" aria-hidden="true"></i><span>Signed</span>
+                                                <?php else: ?>
+                                                    <i class="fas fa-signature" aria-hidden="true"></i><span>Sign</span>
+                                                <?php endif; ?>
                                             </button>
                                         </td>
                                         <td style="text-align:center;white-space:nowrap;">
@@ -1016,7 +1032,20 @@ $notifData = rcGetRecentNotifications(8);
                 setTimeout(function () { btn.classList.remove('is-error'); }, 1200);
             });
         });
+        document.addEventListener('hcc:parent-sign-updated', function (ev) {
+            const detail = ev && ev.detail ? ev.detail : null;
+            if (!detail || !detail.roll) return;
+            if (Array.isArray(bridgeMeta.students)) {
+                const match = bridgeMeta.students.find(function (s) { return String(s.roll_no) === String(detail.roll); });
+                if (match) {
+                    match.parents_sign = detail.signed ? 1 : 0;
+                    match.parent_signature_data = detail.signature_data || '';
+                }
+                if (bridgeEl) bridgeEl.textContent = JSON.stringify(bridgeMeta);
+            }
+        });
     })();
     </script>
+    <script src="<?= BASE_URL ?>assets/js/parent-sign.js?v=<?= (is_file(__DIR__ . '/../assets/js/parent-sign.js') ? filemtime(__DIR__ . '/../assets/js/parent-sign.js') : 0) ?>"></script>
 </body>
 </html>

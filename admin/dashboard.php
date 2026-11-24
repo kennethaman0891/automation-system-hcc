@@ -191,110 +191,74 @@ if (is_file($heroPosterFile)) {
                 </div>
                 <?php endif; ?>
 
-                <!-- ═══ Executive Ambient Background-Video Hero Section ═══ -->
+                <!-- ═══ Executive Welcome Header & Ambient Showcase Video ═══ -->
                 <section class="dash-hero" id="dashHero" aria-labelledby="dashHeroHeading">
-                    <!-- Layer 0 & 1: Running Background Video + Masked Frost + Maroon-Slate Scrim -->
-                    <div class="dash-hero-media">
-                        <video class="dash-hero-bg-video" id="dashHeroVideo"
-                               autoplay muted loop playsinline preload="metadata"
-                               aria-hidden="true" tabindex="-1"
-                               disablepictureinpicture disableremoteplayback
-                               poster="<?= htmlspecialchars($heroPosterSrc, ENT_QUOTES, 'UTF-8') ?>">
-                            <source src="<?= htmlspecialchars($heroVideoSrc, ENT_QUOTES, 'UTF-8') ?>" type="video/mp4">
-                        </video>
-                        <div class="dash-hero-frost"></div>
-                        <div class="dash-hero-scrim"></div>
+                    <!-- Executive Copy & Quick Actions (placed above the video) -->
+                    <div class="dash-hero-copy">
+                        <div class="dash-hero-copy-main">
+                            <div class="dash-hero-brand">
+                                <img class="dash-hero-logo" src="<?= htmlspecialchars($schoolLogoUrl, ENT_QUOTES, 'UTF-8') ?>" width="56" height="56" decoding="async" alt="<?= sanitize($schoolName) ?> crest">
+                                <div class="dash-hero-eyebrow">
+                                    <p id="dashGreetingLine">
+                                        <span id="dashGreetingText"><?= sanitize($greeting) ?></span>, <strong><?= $adminName ?></strong>
+                                    </p>
+                                    <span class="dash-hero-motto"><?= sanitize($schoolTagline) !== '' ? sanitize($schoolTagline) : 'Learn &middot; Lead &middot; Serve' ?></span>
+                                </div>
+                            </div>
+
+                            <h2 class="dash-hero-title" id="dashHeroHeading">Welcome to <span class="dash-hero-accent">Automation System</span></h2>
+                            <p class="dash-hero-lead">Unified exam evaluation, instant WhatsApp parent dispatch, and daily campus operations in one command center.</p>
+                        </div>
+
+                        <div class="dash-hero-actions">
+                            <a href="results.php" class="dash-hero-btn dash-hero-btn--primary">
+                                <i class="fa-solid fa-chart-line" aria-hidden="true"></i>
+                                <span>Academic Results</span>
+                            </a>
+                            <a href="whatsapp_share.php" class="dash-hero-btn dash-hero-btn--wa">
+                                <i class="fa-brands fa-whatsapp" aria-hidden="true"></i>
+                                <span>WhatsApp Hub</span>
+                            </a>
+                            <a href="unit_test_entry.php" class="dash-hero-btn dash-hero-btn--ghost">
+                                <i class="fa-solid fa-pen-nib" aria-hidden="true"></i>
+                                <span>Unit Test Entry</span>
+                            </a>
+                            <a href="timetable.php" class="dash-hero-btn dash-hero-btn--ghost">
+                                <i class="fa-solid fa-calendar-days" aria-hidden="true"></i>
+                                <span>Time-Table</span>
+                            </a>
+                        </div>
                     </div>
 
-                    <!-- Layer 2: Executive Foreground -->
-                    <div class="dash-hero-inner">
-                        <!-- 1. Top Ambient Bar -->
-                        <div class="dash-hero-topbar">
-                            <div class="dash-hero-pill">
-                                <i class="fa-solid fa-graduation-cap" aria-hidden="true"></i>
-                                <span class="dash-hero-pill-text"><?= sanitize($schoolName) ?> &bull; AY <?= sanitize($activeAcYear) ?></span>
-                            </div>
-
-                            <div class="dash-hero-media-ctrls" role="group" aria-label="Showcase video controls">
-                                <span class="dash-hero-video-tag" id="heroVideoStatusBadge">
-                                    <span class="live-dot" aria-hidden="true"></span>
-                                    <span id="heroShowcaseStatus">HCC Campus Showcase</span>
-                                </span>
-                                <button type="button" class="dash-hero-ctrl-btn" id="heroPlayToggle"
-                                        aria-label="Pause background video" title="Pause background video">
-                                    <i class="fa-solid fa-pause" aria-hidden="true"></i>
-                                </button>
-                                <button type="button" class="dash-hero-ctrl-btn" id="heroMuteToggle"
-                                        aria-label="Unmute background video" title="Unmute background video">
-                                    <i class="fa-solid fa-volume-xmark" aria-hidden="true"></i>
-                                </button>
-                                <button type="button" class="dash-hero-ctrl-btn" id="heroExpandBtn"
-                                        aria-label="Watch full showcase video in fullscreen" title="Watch full showcase video">
-                                    <i class="fa-solid fa-expand" aria-hidden="true"></i>
-                                </button>
-                            </div>
+                    <!-- Full-bleed Ambient Showcase Video (unobstructed) -->
+                    <div class="dash-hero-showcase">
+                        <div class="dash-hero-media">
+                            <video class="dash-hero-bg-video" id="dashHeroVideo"
+                                   autoplay muted loop playsinline preload="metadata"
+                                   aria-hidden="true" tabindex="-1"
+                                   disablepictureinpicture disableremoteplayback
+                                   poster="<?= htmlspecialchars($heroPosterSrc, ENT_QUOTES, 'UTF-8') ?>">
+                                <source src="<?= htmlspecialchars($heroVideoSrc, ENT_QUOTES, 'UTF-8') ?>" type="video/mp4">
+                            </video>
+                            <div class="dash-hero-scrim"></div>
                         </div>
 
-                        <!-- 2. Asymmetric Main Stage (Left Executive Copy + Right Open Video Viewport) -->
-                        <div class="dash-hero-stage">
-                            <div class="dash-hero-copy">
-                                <div class="dash-hero-brand">
-                                    <img class="dash-hero-logo" src="<?= htmlspecialchars($schoolLogoUrl, ENT_QUOTES, 'UTF-8') ?>" width="56" height="56" decoding="async" alt="<?= sanitize($schoolName) ?> crest">
-                                    <div class="dash-hero-eyebrow">
-                                        <p id="dashGreetingLine">
-                                            <span id="dashGreetingText"><?= sanitize($greeting) ?></span>, <strong><?= $adminName ?></strong>
-                                        </p>
-                                        <span class="dash-hero-motto"><?= sanitize($schoolTagline) !== '' ? sanitize($schoolTagline) : 'Learn &middot; Lead &middot; Serve' ?></span>
-                                    </div>
+                        <div class="dash-hero-inner">
+                            <div class="dash-hero-topbar">
+                                <div class="dash-hero-media-ctrls" role="group" aria-label="Showcase video controls">
+                                    <button type="button" class="dash-hero-ctrl-btn" id="heroPlayToggle"
+                                            aria-label="Pause background video" title="Pause background video">
+                                        <i class="fa-solid fa-pause" aria-hidden="true"></i>
+                                    </button>
+                                    <button type="button" class="dash-hero-ctrl-btn" id="heroMuteToggle"
+                                            aria-label="Unmute background video" title="Unmute background video">
+                                        <i class="fa-solid fa-volume-xmark" aria-hidden="true"></i>
+                                    </button>
+                                    <button type="button" class="dash-hero-ctrl-btn" id="heroExpandBtn"
+                                            aria-label="Watch full showcase video in fullscreen" title="Watch full showcase video">
+                                        <i class="fa-solid fa-expand" aria-hidden="true"></i>
+                                    </button>
                                 </div>
-
-                                <h2 class="dash-hero-title" id="dashHeroHeading">Welcome to <span class="dash-hero-accent">Automation System</span></h2>
-                                <p class="dash-hero-lead">Unified exam evaluation, instant WhatsApp parent dispatch, and daily campus operations in one command center.</p>
-
-                                <div class="dash-hero-actions">
-                                    <a href="results.php" class="dash-hero-btn dash-hero-btn--primary">
-                                        <i class="fa-solid fa-chart-line" aria-hidden="true"></i>
-                                        <span>Academic Results</span>
-                                    </a>
-                                    <a href="whatsapp_share.php" class="dash-hero-btn dash-hero-btn--wa">
-                                        <i class="fa-brands fa-whatsapp" aria-hidden="true"></i>
-                                        <span>WhatsApp Hub</span>
-                                    </a>
-                                    <a href="unit_test_entry.php" class="dash-hero-btn dash-hero-btn--ghost">
-                                        <i class="fa-solid fa-pen-nib" aria-hidden="true"></i>
-                                        <span>Unit Test Entry</span>
-                                    </a>
-                                    <a href="timetable.php" class="dash-hero-btn dash-hero-btn--ghost">
-                                        <i class="fa-solid fa-calendar-days" aria-hidden="true"></i>
-                                        <span>Time-Table</span>
-                                    </a>
-                                </div>
-                            </div>
-
-                            <!-- Open right-hand stage lets ambient motion graphics run visibly in background -->
-                            <div class="dash-hero-showcase-space" aria-hidden="true"></div>
-                        </div>
-
-                        <!-- 3. Bottom Docked Glass KPI Ribbon -->
-                        <div class="dash-hero-metrics" role="group" aria-label="Key campus performance metrics">
-                            <div class="dash-hero-metric-item">
-                                <span class="metric-val"><?= number_format((int)($stats['students'] ?? 0)) ?></span>
-                                <span class="metric-lbl">Students &bull; AY <?= sanitize($activeAcYear) ?></span>
-                            </div>
-                            <div class="dash-hero-metric-item">
-                                <span class="metric-val"><?= number_format((float)($stats['pass_rate'] ?? 0), 1) ?>%</span>
-                                <span class="metric-lbl">Overall Pass Rate</span>
-                            </div>
-                            <div class="dash-hero-metric-item">
-                                <span class="metric-val"><?= number_format((int)$waSent) ?></span>
-                                <span class="metric-lbl">WhatsApp Sent<?= $waPending > 0 ? ' (' . (int)$waPending . ' queued)' : ($waContacts > 0 ? ' • ' . (int)$waContacts . ' parents' : '') ?></span>
-                            </div>
-                            <div class="dash-hero-metric-item is-live">
-                                <span class="metric-val">
-                                    <span class="dash-hero-live-dot" aria-hidden="true"></span>
-                                    <span><?= $waEnquiries > 0 ? (int)$waEnquiries . ' Active' : 'Live' ?></span>
-                                </span>
-                                <span class="metric-lbl"><?= $waEnquiries > 0 ? 'Admission Enquiries' : 'Portal Operational' ?></span>
                             </div>
                         </div>
                     </div>
@@ -609,8 +573,6 @@ if (is_file($heroPosterFile)) {
         var playBtn = document.getElementById('heroPlayToggle');
         var muteBtn = document.getElementById('heroMuteToggle');
         var expandBtn = document.getElementById('heroExpandBtn');
-        var statusBadge = document.getElementById('heroVideoStatusBadge');
-        var statusText = document.getElementById('heroShowcaseStatus');
 
         var reduceMotionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
         var userPaused = !!(reduceMotionQuery && reduceMotionQuery.matches);
@@ -627,12 +589,6 @@ if (is_file($heroPosterFile)) {
                 var label = isPaused ? 'Play background video' : 'Pause background video';
                 playBtn.setAttribute('aria-label', label);
                 playBtn.setAttribute('title', label);
-            }
-            if (statusBadge) {
-                statusBadge.classList.toggle('is-paused', isPaused);
-            }
-            if (statusText) {
-                statusText.textContent = isPaused ? 'Showcase Paused' : 'HCC Campus Showcase';
             }
         }
 

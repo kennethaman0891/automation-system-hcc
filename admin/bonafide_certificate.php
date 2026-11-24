@@ -317,7 +317,6 @@ $defaults = [
     'issue_date'    => date('d/m/Y'),
 ];
 $publicBonafideUrl = rcGetPublicBonafideUrl($grNo, $certSerial);
-$certQrDataUri     = rcRenderQrSvgDataUri($publicBonafideUrl);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -377,7 +376,6 @@ $certQrDataUri     = rcRenderQrSvgDataUri($publicBonafideUrl);
         }
 
         /* ── Form panel ── */
-        .panel-eyebrow { display: inline-flex; align-items: center; gap: 7px; font-size: .7rem; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: var(--bf-brand); background: rgba(26,35,126,.07); border: 1px solid rgba(26,35,126,.14); padding: 5px 11px; border-radius: 999px; margin-bottom: 10px; }
         .panel-title { font-size: 1.08rem; font-weight: 800; color: var(--bf-ink); margin: 0 0 4px; letter-spacing: -.01em; }
         .panel-sub { font-size: .82rem; color: var(--bf-muted); margin: 0 0 16px; line-height: 1.55; }
         .form-group { margin-bottom: 12px; }
@@ -514,14 +512,6 @@ $certQrDataUri     = rcRenderQrSvgDataUri($publicBonafideUrl);
         .instant-gr-item strong { display: block; color: var(--bf-ink); font-weight: 700; }
         .instant-gr-item small { color: var(--bf-muted); font-size: .71rem; }
 
-        /* Compact QR Verification Seal inside Certificate */
-        .cert-qr-bar { display: flex; align-items: center; gap: 10px; margin-top: 14px; padding-top: 10px; border-top: 1px dashed #cbd5e1; font-family: 'Inter', sans-serif; font-size: .72rem; color: #475569; position: relative; z-index: 1; }
-        .cert-qr-bar img { width: 52px; height: 52px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; padding: 2px; flex-shrink: 0; }
-        .cert-qr-info { flex: 1; min-width: 0; line-height: 1.4; }
-        .cert-qr-info strong { display: block; color: var(--bf-brand); font-size: .74rem; font-weight: 800; letter-spacing: .02em; }
-        .cert-qr-info a { color: #334155; text-decoration: none; font-weight: 600; word-break: break-all; }
-        .cert-qr-info a:hover { text-decoration: underline; }
-
         /* Editing affordances */
         .cert-sheet[data-mode="edit"] [data-editable] { border-radius: 4px; transition: background .12s, outline-color .12s; }
         .cert-sheet[data-mode="edit"] [data-editable]:hover { outline: 2px dashed #f59e0b; outline-offset: 3px; cursor: text; background: rgba(245,158,11,.06); }
@@ -586,7 +576,6 @@ $certQrDataUri     = rcRenderQrSvgDataUri($publicBonafideUrl);
 
     <!-- ═══════════ LEFT: FORM PANEL ═══════════ -->
     <div class="form-panel">
-        <span class="panel-eyebrow"><i class="fas fa-certificate"></i> Certificate Studio</span>
         <h2 class="panel-title">Bonafide Certificate</h2>
         <p class="panel-sub">Select a student, then edit any field. Untouched fields keep the auto-filled value.</p>
 
@@ -749,14 +738,6 @@ $certQrDataUri     = rcRenderQrSvgDataUri($publicBonafideUrl);
                 <div class="cert-principal">
                     <div class="sig-line"></div>
                     <span data-editable="principal"><?= sanitize($principalNm) ?></span>
-                </div>
-            </div>
-
-            <div class="cert-qr-bar" id="certQrBar">
-                <img id="certQrImg" src="<?= e_attr($certQrDataUri) ?>" alt="Certificate Verification QR">
-                <div class="cert-qr-info">
-                    <strong><i class="fas fa-shield-halved"></i> Official Digital Verification &bull; GR <span id="certQrGr"><?= sanitize($grNo) ?></span> &bull; Sr. <span id="certQrSr"><?= sanitize($certSerial) ?></span></strong>
-                    <a id="certQrLink" href="<?= e_attr($publicBonafideUrl) ?>" target="_blank" rel="noopener">Scan QR to verify authenticity at HCC Public Registry</a>
                 </div>
             </div>
 

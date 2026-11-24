@@ -440,7 +440,26 @@ function rcSaveBulkMarks(string $classKey, array $marks): array {
     }
 }
 
+/* Ensure parent_signature_data column exists on report_card and unit_test_results (idempotent). */
+function rcEnsureParentSignatureStorage(): void {
+    static $checked = false;
+    if ($checked) return;
+    $checked = true;
+    try {
+        $db = getDB();
+        foreach (['report_card', 'unit_test_results'] as $tbl) {
+            $chk = $db->query("SHOW COLUMNS FROM `{$tbl}` LIKE 'parent_signature_data'");
+            if ($chk && $chk->rowCount() === 0) {
+                $db->exec("ALTER TABLE `{$tbl}` ADD COLUMN parent_signature_data MEDIUMTEXT NULL AFTER parents_sign");
+            }
+        }
+    } catch (\Throwable $e) {
+        error_log('rcEnsureParentSignatureStorage failed: ' . $e->getMessage());
+    }
+}
+
 function rcAllStudents($filters = []) {
+    rcEnsureParentSignatureStorage();
     $db = getDB();
     $sql = "SELECT roll_no, student_name, academic_year, std, division, semester,
                    SUM(fa_obtained+sa_obtained) AS obtained,
@@ -451,6 +470,7 @@ function rcAllStudents($filters = []) {
                    MAX(NULLIF(remark, '')) AS raw_remark,
                    MAX(NULLIF(attendance, '')) AS attendance,
                    MAX(parents_sign) AS parents_sign,
+                   MAX(NULLIF(parent_signature_data, '')) AS parent_signature_data,
                    MAX(NULLIF(parent_phone, '')) AS parent_phone
             FROM report_card";
     $params = [];
@@ -488,6 +508,7 @@ function rcAllStudents($filters = []) {
         unset($r['raw_remark']);
         $r['attendance'] = $r['attendance'] ?? '';
         $r['parents_sign'] = (int)($r['parents_sign'] ?? 0);
+        $r['parent_signature_data'] = $r['parent_signature_data'] ?? '';
         $r['parent_phone'] = $r['parent_phone'] ?? '';
         $rows[] = $r;
     }
@@ -496,6 +517,7 @@ function rcAllStudents($filters = []) {
 
 /* ── Single student report for entry page ── */
 function rcStudentReport($classKey, $roll) {
+    rcEnsureParentSignatureStorage();
     $c = rcParseClassKey(urldecode($classKey));
     $db = getDB();
     $stmt = $db->prepare("SELECT * FROM report_card WHERE academic_year=? AND std=? AND division=? AND semester=? AND roll_no=? ORDER BY id");
@@ -525,6 +547,7 @@ function rcStudentReport($classKey, $roll) {
         'remark' => rcDisplayRemark($rows[0]['remark'] ?? '', $percentage),
         'attendance' => $rows[0]['attendance'],
         'parents_sign' => (int)$rows[0]['parents_sign'],
+        'parent_signature_data' => $rows[0]['parent_signature_data'] ?? '',
         'date_of_birth' => $rows[0]['date_of_birth'] ?? '',
     ];
 }
@@ -1485,13 +1508,14 @@ function rcSaveUnitTestConfig(string $year, string $std, string $testType, array
 /* Fetch complete matrix dataset for a Unit Test class */
 function rcGetUnitTestClassData(string $year, string $std, string $division, string $testType): array {
     rcEnsureUnitTestTables();
+    rcEnsureParentSignatureStorage();
     $db = getDB();
 
     // 1. Fetch subjects & max marks
     $subjects = rcGetUnitTestSubjects($year, $std, $testType);
 
     // 2. Fetch all student records for this class
-    $stmt = $db->prepare("SELECT roll_no, student_name, gender, subject_name, max_marks, marks_obtained, is_absent, grade, remark, attendance, parents_sign, parent_phone 
+    $stmt = $db->prepare("SELECT roll_no, student_name, gender, subject_name, max_marks, marks_obtained, is_absent, grade, remark, attendance, parents_sign, parent_signature_data, parent_phone 
                           FROM unit_test_results 
                           WHERE academic_year = ? AND std = ? AND division = ? AND test_type = ?
                           ORDER BY CAST(roll_no AS UNSIGNED), roll_no, id");
@@ -1504,12 +1528,13 @@ function rcGetUnitTestClassData(string $year, string $std, string $division, str
         $roll = (string)$r['roll_no'];
         if (!isset($students[$roll])) {
             $students[$roll] = [
-                'roll_no'        => $roll,
-                'student_name'   => $r['student_name'],
-                'gender'         => $r['gender'] ?? '',
-                'attendance'     => $r['attendance'] ?? '',
-                'parents_sign'   => (int)$r['parents_sign'],
-                'parent_phone'   => $r['parent_phone'] ?? '',
+                'roll_no'               => $roll,
+                'student_name'          => $r['student_name'],
+                'gender'                => $r['gender'] ?? '',
+                'attendance'            => $r['attendance'] ?? '',
+                'parents_sign'          => (int)$r['parents_sign'],
+                'parent_signature_data' => $r['parent_signature_data'] ?? '',
+                'parent_phone'          => $r['parent_phone'] ?? '',
                 'stored_remark'  => trim((string)($r['remark'] ?? '')),
                 'subjects'       => [],
                 'total_obtained' => 0.0,
@@ -1825,8 +1850,9 @@ function rcGetNextUnitTestRollNumber(string $year, string $std, string $division
 /* Fetch single student Unit Test report */
 function rcGetStudentUnitTestReport(string $year, string $std, string $division, string $testType, string $roll): ?array {
     rcEnsureUnitTestTables();
+    rcEnsureParentSignatureStorage();
     $db = getDB();
-    $stmt = $db->prepare("SELECT roll_no, student_name, gender, subject_name, max_marks, marks_obtained, is_absent, grade, remark, attendance, parents_sign, parent_phone
+    $stmt = $db->prepare("SELECT roll_no, student_name, gender, subject_name, max_marks, marks_obtained, is_absent, grade, remark, attendance, parents_sign, parent_signature_data, parent_phone
                           FROM unit_test_results
                           WHERE academic_year = ? AND std = ? AND division = ? AND test_type = ? AND roll_no = ?
                           ORDER BY id");
@@ -1877,9 +1903,10 @@ function rcGetStudentUnitTestReport(string $year, string $std, string $division,
         'roll_no'         => (string)$first['roll_no'],
         'student_name'    => $first['student_name'],
         'gender'          => $first['gender'] ?? '',
-        'attendance'      => $first['attendance'] ?? '',
-        'parents_sign'    => (int)$first['parents_sign'],
-        'parent_phone'    => $first['parent_phone'] ?? '',
+        'attendance'            => $first['attendance'] ?? '',
+        'parents_sign'          => (int)$first['parents_sign'],
+        'parent_signature_data' => $first['parent_signature_data'] ?? '',
+        'parent_phone'          => $first['parent_phone'] ?? '',
         'remark'          => $first['remark'] ?? $calc['remark'],
         'grade'           => $first['grade'] ?? $calc['grade'],
         'percentage'      => $percentage,

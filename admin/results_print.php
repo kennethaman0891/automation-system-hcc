@@ -338,8 +338,12 @@ $today = date('d-m-Y');
                 <td class="col-parent-sign" style="<?= $showSign ? '' : 'display:none;' ?>">
                     <div class="sign-block" data-signed="<?= !empty($stu['parents_sign']) ? '1' : '0' ?>">
                         <span class="digital-sign-content" style="<?= ($digitalSign && !empty($stu['parents_sign'])) ? '' : 'display:none;' ?>">
-                            <span style="font-family:'Brush Script MT', 'Lucida Calligraphy', cursive, sans-serif; font-size:13pt; color:#0f172a; line-height:1.1;">Signed</span>
-                            <small style="display:block; font-family:Arial, sans-serif; font-size:6.5pt; color:#64748b; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">Digital Sign</small>
+                            <?php if (!empty($stu['parent_signature_data'])): ?>
+                                <img src="<?= e_attr($stu['parent_signature_data']) ?>" alt="Parent signature" style="max-height:24px;max-width:86px;object-fit:contain;display:block;margin:0 auto;">
+                            <?php else: ?>
+                                <span style="font-family:'Brush Script MT', 'Lucida Calligraphy', cursive, sans-serif; font-size:13pt; color:#0f172a; line-height:1.1;">Signed</span>
+                                <small style="display:block; font-family:Arial, sans-serif; font-size:6.5pt; color:#64748b; font-weight:700; letter-spacing:0.5px; text-transform:uppercase;">Digital Sign</small>
+                            <?php endif; ?>
                         </span>
                     </div>
                 </td>

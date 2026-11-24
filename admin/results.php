@@ -394,15 +394,13 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
             padding: 16px 20px;
             margin-bottom: 20px;
             display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 16px;
+            flex-direction: column;
+            gap: 14px;
             box-shadow: 0 2px 6px rgba(0,0,0,0.03);
         }
         .ut-filter-inputs {
             display: flex;
-            align-items: center;
+            align-items: flex-end;
             gap: 12px;
             flex-wrap: wrap;
         }
@@ -410,6 +408,29 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
             display: flex;
             flex-direction: column;
             gap: 4px;
+        }
+        .ut-filter-field--search {
+            flex: 1 1 100%;
+            width: 100%;
+            min-width: 0;
+        }
+        .ut-search-wrap {
+            position: relative;
+            width: 100%;
+        }
+        .ut-search-wrap i {
+            position: absolute;
+            left: 13px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #94a3b8;
+            font-size: 0.88rem;
+            pointer-events: none;
+        }
+        .ut-filter-inputs .ut-search-wrap input {
+            width: 100%;
+            height: 40px;
+            padding: 8px 14px 8px 38px;
         }
         .ut-filter-label {
             font-size: 0.72rem;
@@ -526,16 +547,121 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
             color: var(--brand);
             transform: translateY(1px);
         }
+        /* Action toolbar: its own row under the filters, left aligned, with a
+           divider. Every button shares one common surface/colour; only the
+           single primary action (Save) is filled. Icon tints keep meaning. */
         .ut-action-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px 14px;
+            flex-wrap: wrap;
+            width: 100%;
+            padding-top: 14px;
+            border-top: 1px solid var(--border);
+        }
+        .ut-action-toolbar-left,
+        .ut-action-toolbar-right {
             display: flex;
             align-items: center;
             gap: 8px;
             flex-wrap: wrap;
         }
+        .ut-action-toolbar-right {
+            margin-left: auto;
+        }
         .ut-btn-group {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .ut-btn-divider {
+            width: 1px;
+            height: 24px;
+            background: var(--border);
+            margin: 0 2px;
+        }
+        @media (max-width: 960px) {
+            .ut-action-toolbar-right {
+                margin-left: 0;
+            }
+            .ut-btn-divider {
+                display: none;
+            }
+        }
+        .ut-action-toolbar .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            height: 38px;
+            padding: 0 14px;
+            border-radius: 9px;
+            font-size: 0.82rem;
+            font-weight: 700;
+            line-height: 1;
+            border: 1.5px solid var(--border);
+            background: #ffffff;
+            color: #334155;
+            box-shadow: none;
+            text-decoration: none;
+            white-space: nowrap;
+            transition: background .15s ease, border-color .15s ease, color .15s ease, box-shadow .15s ease, transform .15s ease;
+        }
+        .ut-action-toolbar .btn:hover {
+            background: #fdf5f6;
+            border-color: rgba(122, 34, 56, 0.45);
+            color: var(--brand);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(122, 34, 56, 0.10);
+            filter: none;
+        }
+        .ut-action-toolbar .btn:active {
+            transform: translateY(0);
+        }
+        .ut-action-toolbar .btn:focus-visible {
+            outline: 2px solid var(--brand);
+            outline-offset: 2px;
+        }
+        .ut-action-toolbar .btn i {
+            font-size: 0.9rem;
+        }
+        /* Semantic icon tints on the uniform surface */
+        .ut-action-toolbar .btn-whatsapp i { color: #128c4b; }
+        .ut-action-toolbar .btn-danger i { color: #b91c1c; }
+        /* WhatsApp buttons inherit the common surface (their class forces a
+           white !important colour and green fill, so override both). */
+        .ut-action-toolbar .btn-whatsapp,
+        .ut-action-toolbar .btn-whatsapp:hover,
+        .ut-action-toolbar .btn-whatsapp:active {
+            background: #ffffff;
+            color: #334155 !important;
+            border: 1.5px solid var(--border);
+            box-shadow: none;
+        }
+        .ut-action-toolbar .btn-whatsapp:hover {
+            background: #fdf5f6;
+            border-color: rgba(122, 34, 56, 0.45);
+            color: var(--brand) !important;
+        }
+        /* Single filled primary action */
+        .ut-action-toolbar .btn-primary,
+        .ut-action-toolbar .btn-primary:hover,
+        .ut-action-toolbar .btn-primary:active {
+            background: var(--brand);
+            border-color: var(--brand);
+            color: #ffffff;
+        }
+        .ut-action-toolbar .btn-primary:hover {
+            background: var(--brand-dark);
+            border-color: var(--brand-dark);
+            box-shadow: 0 6px 16px rgba(122, 34, 56, 0.24);
+        }
+        .ut-action-toolbar .btn-primary i { color: #ffffff; }
+        .ut-action-toolbar .ut-bulk-count {
+            background: rgba(122, 34, 56, 0.10);
+            color: var(--brand);
         }
 
         /* KPI Summary Grid */
@@ -1111,6 +1237,14 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
                 ?>
                 <div class="ut-filter-bar">
                     <form method="GET" class="ut-filter-inputs">
+                        <div class="ut-filter-field ut-filter-field--search">
+                            <label class="ut-filter-label" for="studentSearchInput"><i class="fas fa-search"></i> Search Student</label>
+                            <div class="ut-search-wrap">
+                                <input type="search" name="search" id="studentSearchInput" value="<?= sanitize($search) ?>" placeholder="Search by roll number or student name…" autocomplete="off">
+                                <i class="fas fa-search" aria-hidden="true"></i>
+                            </div>
+                        </div>
+
                         <div class="ut-filter-field">
                             <label class="ut-filter-label" for="aySelect"><i class="fas fa-calendar-alt"></i> Academic Year</label>
                             <div class="ay-select">
@@ -1156,60 +1290,56 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
                         <div class="ut-filter-field">
                             <label class="ut-filter-label"><i class="fas fa-signature"></i> Parents Sign</label>
                             <select name="sign_mode" onchange="this.form.submit()">
-                                <option value="digital" <?= $signMode === 'digital' ? 'selected' : '' ?>>Digital Sign (Interactive Toggle)</option>
+                                <option value="digital" <?= $signMode === 'digital' ? 'selected' : '' ?>>Digital Sign (Signature Board)</option>
                                 <option value="blank" <?= $signMode === 'blank' ? 'selected' : '' ?>>Blank Block (Physical Sign)</option>
                                 <option value="hide" <?= $signMode === 'hide' ? 'selected' : '' ?>>Hide Parents Column</option>
                             </select>
-                        </div>
-
-                        <div class="ut-filter-field" style="min-width:180px;">
-                            <label class="ut-filter-label"><i class="fas fa-search"></i> Search Student</label>
-                            <div style="position:relative;">
-                                <input type="search" name="search" id="studentSearchInput" value="<?= sanitize($search) ?>" placeholder="Filter roll or name…" autocomplete="off" style="padding-left:32px;width:100%;">
-                                <i class="fas fa-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#94a3b8;font-size:0.8rem;pointer-events:none;"></i>
-                            </div>
                         </div>
                     </form>
 
                     <!-- Quick Actions Toolbar -->
                     <div class="ut-action-toolbar">
-                        <div class="ut-btn-group">
-                            <a href="import_excel.php?class=<?= e_url($classKey) ?>" class="btn btn-sm btn-secondary" title="Upload spreadsheet">
-                                <i class="fas fa-file-excel"></i> Import
-                            </a>
-                            <a href="results.php?action=export_excel&year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&semester=<?= urlencode($semester) ?>&sign_mode=<?= urlencode($signMode) ?>" class="btn btn-sm btn-secondary" title="Download Excel template">
-                                <i class="fas fa-download"></i> Export
-                            </a>
-                            <a href="results_print.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&semester=<?= urlencode($semester) ?>&sign_mode=<?= urlencode($signMode) ?>" target="_blank" class="btn btn-sm btn-secondary" title="Print-ready marksheet">
-                                <i class="fas fa-print"></i> Print
-                            </a>
+                        <div class="ut-action-toolbar-left">
+                            <div class="ut-btn-group">
+                                <a href="import_excel.php?class=<?= e_url($classKey) ?>" class="btn btn-sm btn-secondary" title="Upload spreadsheet">
+                                    <i class="fas fa-file-excel"></i> Import
+                                </a>
+                                <a href="results.php?action=export_excel&year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&semester=<?= urlencode($semester) ?>&sign_mode=<?= urlencode($signMode) ?>" class="btn btn-sm btn-secondary" title="Download Excel template">
+                                    <i class="fas fa-download"></i> Export
+                                </a>
+                                <a href="results_print.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&semester=<?= urlencode($semester) ?>&sign_mode=<?= urlencode($signMode) ?>" target="_blank" class="btn btn-sm btn-secondary" title="Print-ready marksheet">
+                                    <i class="fas fa-print"></i> Print
+                                </a>
+                            </div>
+
+                            <span class="ut-btn-divider" aria-hidden="true"></span>
+
+                            <div class="ut-btn-group">
+                                <a href="whatsapp_share.php?class=<?= e_url($classKey) ?>" class="btn btn-sm btn-whatsapp" title="Open WhatsApp Dispatcher">
+                                    <i class="fa-brands fa-whatsapp"></i> WhatsApp Hub
+                                </a>
+                                <a href="entry.php?class=<?= e_url($classKey) ?>" class="btn btn-sm btn-secondary" title="Manage Subjects / Settings">
+                                    <i class="fas fa-sliders-h"></i> Subjects
+                                </a>
+                            </div>
                         </div>
 
-                        <div class="ut-btn-group">
-                            <a href="whatsapp_share.php?class=<?= e_url($classKey) ?>" class="btn btn-sm btn-whatsapp" title="Open WhatsApp Dispatcher">
-                                <i class="fa-brands fa-whatsapp"></i> WhatsApp Hub
-                            </a>
-                            <a href="entry.php?class=<?= e_url($classKey) ?>" class="btn btn-sm btn-secondary" title="Manage Subjects / Settings">
-                                <i class="fas fa-sliders-h"></i> Subjects
-                            </a>
-                        </div>
+                        <div class="ut-action-toolbar-right">
+                            <?php if (!empty($students)): ?>
+                            <div class="ut-btn-group">
+                                <button type="button" class="btn btn-sm btn-whatsapp" id="bulkWaBtn" title="Share selected students via WhatsApp" disabled>
+                                    <i class="fa-brands fa-whatsapp"></i> WhatsApp <span class="ut-bulk-count" id="bulkWaCount">0</span>
+                                </button>
+                                <button type="button" class="btn btn-sm btn-danger" id="bulkDeleteBtn" title="Delete selected students" disabled>
+                                    <i class="fas fa-trash"></i> Delete <span class="ut-bulk-count" id="bulkDeleteCount">0</span>
+                                </button>
+                            </div>
+                            <?php endif; ?>
 
-                        <div class="ut-btn-group">
                             <button type="submit" form="bulkMarksForm" class="btn btn-sm btn-primary" id="bulkSaveBtn" title="Save All Marks (Ctrl+S)">
                                 <i class="fas fa-save"></i> Save Changes
                             </button>
                         </div>
-
-                        <?php if (!empty($students)): ?>
-                        <div class="ut-btn-group">
-                            <button type="button" class="btn btn-sm btn-whatsapp" id="bulkWaBtn" title="Share selected students via WhatsApp" disabled>
-                                <i class="fa-brands fa-whatsapp"></i> WhatsApp <span class="ut-bulk-count" id="bulkWaCount">0</span>
-                            </button>
-                            <button type="button" class="btn btn-sm btn-danger" id="bulkDeleteBtn" title="Delete selected students" disabled>
-                                <i class="fas fa-trash"></i> Delete <span class="ut-bulk-count" id="bulkDeleteCount">0</span>
-                            </button>
-                        </div>
-                        <?php endif; ?>
                     </div>
                 </div>
 
@@ -1455,15 +1585,31 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
 
                                         <!-- Parents Sign Column -->
                                         <?php if ($showSign): ?>
-                                        <td class="col-parent-sign" style="text-align:center;min-width:85px;vertical-align:middle;">
+                                        <td class="col-parent-sign" style="text-align:center;min-width:110px;vertical-align:middle;">
                                             <?php if ($signMode === 'blank'): ?>
                                                 <div style="height:26px;width:100%;min-width:60px;" title="Blank empty block for physical parent signature"></div>
-                                            <?php else: ?>
-                                                <input type="checkbox" class="sign-check parent-sign-toggle"
-                                                    data-roll="<?= e_attr($s['roll_no']) ?>"
-                                                    data-class="<?= e_attr($rowCk) ?>"
-                                                    <?= !empty($s['parents_sign']) ? 'checked' : '' ?>
-                                                    title="Parents digital signature — click to toggle digital confirmation">
+                                            <?php else:
+                                                $isSigned = !empty($s['parents_sign']);
+                                                $sigImg = trim((string)($s['parent_signature_data'] ?? ''));
+                                            ?>
+                                                <button type="button"
+                                                        class="psb-trigger js-open-sign-board <?= $isSigned ? 'is-signed' : '' ?>"
+                                                        data-table="report_card"
+                                                        data-roll="<?= e_attr($s['roll_no']) ?>"
+                                                        data-student-name="<?= e_attr($s['student_name']) ?>"
+                                                        data-class="<?= e_attr($rowCk) ?>"
+                                                        data-signed="<?= $isSigned ? '1' : '0' ?>"
+                                                        data-signature="<?= e_attr($sigImg) ?>"
+                                                        aria-pressed="<?= $isSigned ? 'true' : 'false' ?>"
+                                                        title="<?= $isSigned ? 'Parent digital signature saved (click to view or re-sign)' : 'Open digital signature board' ?>">
+                                                    <?php if ($isSigned && $sigImg !== ''): ?>
+                                                        <img src="<?= e_attr($sigImg) ?>" alt="Parent signature" class="psb-thumb">
+                                                    <?php elseif ($isSigned): ?>
+                                                        <i class="fas fa-check" aria-hidden="true"></i><span>Signed</span>
+                                                    <?php else: ?>
+                                                        <i class="fas fa-signature" aria-hidden="true"></i><span>Sign</span>
+                                                    <?php endif; ?>
+                                                </button>
                                             <?php endif; ?>
                                         </td>
                                         <?php endif; ?>

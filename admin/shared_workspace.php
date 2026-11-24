@@ -1270,7 +1270,7 @@ $connectedColleagueCount = count(array_filter($colleagues, fn($c) => !empty($c['
                                         </a>
                                     <?php else: ?>
                                         <div style="background:#fffbeb; border:1px solid #fde68a; color:#92400e; padding:12px; border-radius:10px; font-size:0.82rem; text-align:left;">
-                                            <i class="fa-solid fa-circle-info"></i> Google OAuth API credentials are not yet configured on this server. You can paste your folder link on the left or add Client ID in <a href="change_password.php" style="color:#7a2238; font-weight:700;">Account Security</a>.
+                                            <i class="fa-solid fa-circle-info"></i> Google OAuth API credentials are not yet configured on this server. You can paste your folder link on the left or add Client ID in <a href="account.php#recovery" style="color:#7a2238; font-weight:700;">Account &amp; Security</a>.
                                         </div>
                                     <?php endif; ?>
                                 </div>

@@ -203,7 +203,7 @@ $qrDataUri = rcRenderQrSvgDataUri($publicSlipUrl, 2);
                 <div class="details-grid">
                     <div><strong>Remark</strong><span><?= sanitize($student['remark'] ?: '—') ?></span></div>
                     <div><strong>Date Issued</strong><span><?= $today ?></span></div>
-                    <div><strong>Parents Sign</strong><span><?= !empty($student['parents_sign']) ? 'Confirmed' : 'Not Signed' ?></span></div>
+                    <div><strong>Parents Sign</strong><span><?php if (!empty($student['parents_sign']) && !empty($student['parent_signature_data'])): ?><img src="<?= e_attr($student['parent_signature_data']) ?>" alt="Parent signature" style="max-height:28px;max-width:110px;object-fit:contain;vertical-align:middle;"><?php else: ?><?= !empty($student['parents_sign']) ? 'Confirmed' : 'Not Signed' ?><?php endif; ?></span></div>
                 </div>
             </div>
             <?php endif; ?>

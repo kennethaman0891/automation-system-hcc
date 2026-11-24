@@ -28,6 +28,18 @@ $roll     = trim((string)($_POST['roll'] ?? ''));
 $sign     = ((int)($_POST['sign'] ?? 0)) === 1 ? 1 : 0;
 $classKey = trim((string)($_POST['class_key'] ?? ''));
 $table    = trim((string)($_POST['table'] ?? 'report_card'));
+$sigRaw   = trim((string)($_POST['signature_data'] ?? ''));
+$hasSigData = array_key_exists('signature_data', $_POST);
+$sigData  = null;
+
+if ($sigRaw !== '') {
+    if (!preg_match('/^data:image\/png;base64,[A-Za-z0-9+\/=]+$/', $sigRaw) || strlen($sigRaw) > 524288) {
+        http_response_code(422);
+        psign_json(['ok' => false, 'error' => 'Invalid digital signature image format']);
+    }
+    $sigData = $sigRaw;
+    $sign = 1;
+}
 
 if ($roll === '') {
     http_response_code(422);
@@ -40,6 +52,7 @@ if (!in_array($table, ['report_card', 'unit_test_results'], true)) {
 }
 
 try {
+    rcEnsureParentSignatureStorage();
     $db = getDB();
 
     if ($table === 'unit_test_results') {
@@ -51,19 +64,35 @@ try {
             http_response_code(423);
             psign_json(['ok' => false, 'error' => "Academic year {$year} is locked in the Records Archive."]);
         }
-        $sql    = 'UPDATE unit_test_results SET parents_sign = ? WHERE roll_no = ?';
-        $params = [$sign, $roll];
+        if ($sign === 0) {
+            $sql    = 'UPDATE unit_test_results SET parents_sign = ?, parent_signature_data = NULL WHERE roll_no = ?';
+            $params = [0, $roll];
+        } elseif ($hasSigData && $sigData !== null) {
+            $sql    = 'UPDATE unit_test_results SET parents_sign = ?, parent_signature_data = ? WHERE roll_no = ?';
+            $params = [1, $sigData, $roll];
+        } else {
+            $sql    = 'UPDATE unit_test_results SET parents_sign = ? WHERE roll_no = ?';
+            $params = [$sign, $roll];
+        }
         if ($year !== '')     { $sql .= ' AND academic_year = ?'; $params[] = $year; }
         if ($std !== '')      { $sql .= ' AND std = ?';           $params[] = $std; }
         if ($division !== '') { $sql .= ' AND division = ?';      $params[] = $division; }
         if ($testType !== '') { $sql .= ' AND test_type = ?';     $params[] = $testType; }
         $stmt = $db->prepare($sql);
         $stmt->execute($params);
-        psign_json(['ok' => true, 'updated' => $stmt->rowCount(), 'sign' => $sign]);
+        psign_json(['ok' => true, 'updated' => $stmt->rowCount(), 'sign' => $sign, 'signature_data' => $sign === 0 ? '' : ($sigData ?? '')]);
     }
 
-    $sql    = 'UPDATE report_card SET parents_sign = ? WHERE roll_no = ?';
-    $params = [$sign, $roll];
+    if ($sign === 0) {
+        $sql    = 'UPDATE report_card SET parents_sign = ?, parent_signature_data = NULL WHERE roll_no = ?';
+        $params = [0, $roll];
+    } elseif ($hasSigData && $sigData !== null) {
+        $sql    = 'UPDATE report_card SET parents_sign = ?, parent_signature_data = ? WHERE roll_no = ?';
+        $params = [1, $sigData, $roll];
+    } else {
+        $sql    = 'UPDATE report_card SET parents_sign = ? WHERE roll_no = ?';
+        $params = [$sign, $roll];
+    }
 
     if ($classKey !== '') {
         $c = rcParseClassKey(urldecode($classKey));
@@ -80,7 +109,7 @@ try {
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
 
-    psign_json(['ok' => true, 'updated' => $stmt->rowCount(), 'sign' => $sign]);
+    psign_json(['ok' => true, 'updated' => $stmt->rowCount(), 'sign' => $sign, 'signature_data' => $sign === 0 ? '' : ($sigData ?? '')]);
 } catch (\Throwable $e) {
     error_log('api_parent_sign failed: ' . $e->getMessage());
     http_response_code(500);

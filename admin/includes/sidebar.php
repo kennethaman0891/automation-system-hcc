@@ -161,17 +161,13 @@ $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church High Schoo
         $hccAcct = hccCurrentAccount();
         $hccAccountHref = (defined('BASE_URL') ? BASE_URL : '/hcc/') . 'admin/account.php';
         ?>
-        <a href="account.php" class="sidebar-security<?= $adminPage === 'account' ? ' active' : '' ?>" title="My account" data-tooltip="My account"<?= $adminPage === 'account' ? ' aria-current="page"' : '' ?>>
+        <a href="account.php" class="sidebar-security<?= ($adminPage === 'account' || $adminPage === 'change_password') ? ' active' : '' ?>" title="Account &amp; Security" data-tooltip="Account &amp; Security"<?= ($adminPage === 'account' || $adminPage === 'change_password') ? ' aria-current="page"' : '' ?>>
             <?php if (!empty($hccAcct['has_photo'])): ?>
             <img class="sidebar-account-photo" src="<?= htmlspecialchars($hccAcct['photo_url'], ENT_QUOTES, 'UTF-8') ?>" alt="" width="30" height="30">
             <?php else: ?>
-            <i class="fa-solid fa-fw fa-user" aria-hidden="true"></i>
-            <?php endif; ?>
-            <span>My account</span>
-        </a>
-        <a href="change_password.php" class="sidebar-security<?= $adminPage === 'change_password' ? ' active' : '' ?>" title="Account Security &amp; Password" data-tooltip="Account Security &amp; Password"<?= $adminPage === 'change_password' ? ' aria-current="page"' : '' ?>>
             <i class="fa-solid fa-fw fa-user-shield" aria-hidden="true"></i>
-            <span>Security</span>
+            <?php endif; ?>
+            <span>Account &amp; Security</span>
         </a>
         <a href="logout.php" class="sidebar-logout js-logout-trigger" id="sidebarLogoutBtn" title="Log out of admin session" data-tooltip="Log Out">
             <i class="fa-solid fa-fw fa-arrow-right-from-bracket" aria-hidden="true"></i>
