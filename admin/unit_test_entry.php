@@ -338,314 +338,267 @@ $pageTitle = ($edit ? 'Edit Student Entry' : 'Add New Student Entry') . ' — ' 
 
         /* ── Control card (class / test picker) ── */
         .entry-top-bar {
-            background: var(--paper);
-            border: 1px solid var(--border);
-            border-radius: var(--ute-radius);
-            padding: 16px 20px;
+            background: var(--paper, #ffffff);
+            border: 1px solid var(--border, #e5e7eb);
+            border-radius: var(--radius, 10px);
+            padding: 14px 18px;
             display: flex;
-            align-items: center;
+            align-items: flex-end;
             justify-content: space-between;
-            gap: 16px;
-            margin-bottom: 16px;
-            box-shadow: var(--ute-shadow);
+            gap: 14px;
+            margin-bottom: 18px;
+            box-shadow: var(--shadow-sm, 0 1px 2px rgba(0,0,0,0.05));
             flex-wrap: wrap;
-            position: relative;
         }
-        .entry-top-bar::before { content: ''; position: absolute; left: 0; top: 14px; bottom: 14px; width: 4px; border-radius: 0 4px 4px 0; background: linear-gradient(180deg, var(--gold), var(--brand)); }
         .class-picker-wrap {
             display: flex;
             align-items: flex-end;
-            gap: 10px;
+            gap: 12px;
             flex-wrap: wrap;
         }
-        .tp-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+        .tp-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
         .tp-field > span {
-            font-size: 0.66rem;
-            font-weight: 800;
-            text-transform: uppercase;
-            letter-spacing: 0.09em;
-            color: var(--text-3);
-            line-height: 1;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: none;
+            letter-spacing: normal;
+            color: var(--text-2, #4b5563);
+            line-height: 1.25;
             display: flex; align-items: center; gap: 5px;
         }
-        .tp-field > span i { color: var(--brand); font-size: .62rem; }
+        .tp-field > span i { color: var(--text-3, #6b7280); font-size: .75rem; }
         .tp-field .form-control {
             appearance: none; -webkit-appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%237a2238' stroke-width='1.8' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
-            background-repeat: no-repeat; background-position: right 12px center;
-            padding-right: 32px !important;
-            height: 42px; font-weight: 600; border-radius: 10px;
+            background-color: #ffffff;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2364748b' stroke-width='1.8' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 11px center;
+            padding: 0 30px 0 11px !important;
+            height: 38px;
+            box-sizing: border-box;
+            font-size: 0.88rem; font-weight: 500;
+            border-radius: var(--radius-sm, 8px);
+            border: 1px solid var(--border, #cbd5e1);
+            color: var(--text, #1f2937);
+            width: auto;
+            box-shadow: none;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
         }
-        .tp-field .form-control { width: auto; padding: 9px 32px 9px 12px; }
-        .tp-sep { width: 1px; align-self: stretch; background: var(--border); margin: 2px 2px; }
+        .tp-field .form-control:hover { border-color: #94a3b8; }
+        .tp-field .form-control:focus {
+            outline: none;
+            border-color: var(--brand, #7a2238);
+            box-shadow: 0 0 0 3px rgba(122, 34, 56, 0.12);
+        }
+        .tp-sep { width: 1px; height: 26px; align-self: flex-end; margin-bottom: 6px; background: var(--border, #e5e7eb); margin-left: 2px; margin-right: 2px; }
         .class-badge-pill {
-            background: linear-gradient(120deg, rgba(122,34,56,.1), rgba(201,162,39,.12));
-            color: var(--brand);
-            font-size: 0.76rem;
-            font-weight: 800;
-            letter-spacing: 0.02em;
-            padding: 10px 16px;
+            background: #f1f5f9;
+            color: #334155;
+            font-size: 0.8rem;
+            font-weight: 600;
+            letter-spacing: normal;
+            height: 38px;
+            box-sizing: border-box;
+            padding: 0 14px;
             border-radius: 999px;
-            border: 1px solid rgba(122, 34, 56, 0.25);
+            border: 1px solid #e2e8f0;
             display: inline-flex;
             align-items: center;
             gap: 7px;
             white-space: nowrap;
             align-self: flex-end;
+            margin-bottom: 0;
         }
-        .class-badge-pill i { color: var(--gold-ink); font-size: 0.72rem; }
-        .tp-count { font-size: 0.8rem; color: var(--text-3); font-weight: 600; align-self: flex-end; padding-bottom: 10px; white-space: nowrap; }
-        .tp-count strong { color: var(--text-2); font-weight: 800; font-variant-numeric: tabular-nums; }
-        .tp-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-
-        /* ── Modern Student Navigation & Switcher Strip ── */
-        .student-nav-strip {
-            background: #ffffff;
-            border: 1px solid #e2e8f0;
-            border-radius: var(--ute-radius, 16px);
-            padding: 14px 20px;
-            display: flex;
+        .class-badge-pill i { color: #64748b; font-size: 0.75rem; }
+        .tp-count {
+            font-size: 0.82rem;
+            color: var(--text-2, #64748b);
+            font-weight: 500;
+            height: 38px;
+            box-sizing: border-box;
+            display: inline-flex;
             align-items: center;
-            justify-content: space-between;
-            gap: 18px;
-            margin-bottom: 22px;
-            box-shadow: 0 1px 3px rgba(15,23,42,.04), 0 8px 24px -12px rgba(15,23,42,.12);
-            position: relative;
-            transition: border-color .2s ease, box-shadow .2s ease;
+            align-self: flex-end;
+            padding: 0 4px;
+            margin-bottom: 0;
+            white-space: nowrap;
         }
-        .student-nav-strip::before {
-            content: '';
-            position: absolute;
-            left: 0;
-            top: 14px;
-            bottom: 14px;
-            width: 4px;
-            border-radius: 0 4px 4px 0;
-            background: linear-gradient(180deg, var(--brand, #7a2238), #a33a4f);
-        }
-        .student-nav-strip.is-new::before {
-            background: linear-gradient(180deg, #10b981, #059669);
-        }
-
-        /* Left: Student Identity */
-        .sns-current {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            min-width: 0;
-            flex-shrink: 0;
-        }
-        .sns-avatar {
-            width: 48px;
-            height: 48px;
-            border-radius: 14px;
-            flex-shrink: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1rem;
-            font-weight: 800;
-            color: #ffffff;
-            background: linear-gradient(135deg, var(--brand, #7a2238), #a33a4f);
-            box-shadow: 0 6px 16px -4px rgba(122,34,56,.45);
-            letter-spacing: .02em;
-        }
-        .student-nav-strip.is-new .sns-avatar {
-            background: linear-gradient(135deg, #059669, #10b981);
-            box-shadow: 0 6px 16px -4px rgba(16,185,129,.45);
-            font-size: 1.1rem;
-        }
-        .sns-meta {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            min-width: 0;
-        }
-        .sns-meta-badges {
+        .tp-count strong { color: var(--text, #1f2937); font-weight: 700; margin-right: 4px; font-variant-numeric: tabular-nums; }
+        .tp-actions {
             display: flex;
             align-items: center;
             gap: 8px;
             flex-wrap: wrap;
+            margin-left: auto;
+            align-self: flex-end;
         }
-        .sns-badge {
+        .tp-actions .btn {
+            height: 38px;
+            box-sizing: border-box;
             display: inline-flex;
             align-items: center;
-            gap: 5px;
-            font-size: 0.68rem;
-            font-weight: 800;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            padding: 2px 8px;
-            border-radius: 999px;
-            line-height: 1.4;
+            justify-content: center;
+            line-height: 1;
+            padding: 0 14px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            border-radius: var(--radius-sm, 8px);
+            white-space: nowrap;
+            vertical-align: middle;
+            text-decoration: none;
+            gap: 6px;
+            margin: 0;
+            border: 1px solid transparent;
         }
-        .sns-badge--edit {
-            background: #eff6ff;
-            color: #1d4ed8;
-            border: 1px solid #bfdbfe;
-        }
-        .sns-badge--new {
-            background: #ecfdf5;
-            color: #047857;
-            border: 1px solid #a7f3d0;
-        }
-        .sns-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: currentColor;
-            display: inline-block;
-        }
-        .sns-pos-pill {
+        .tp-actions .btn i {
+            font-size: 0.8rem;
+            line-height: 1;
             display: inline-flex;
             align-items: center;
-            gap: 5px;
-            font-size: 0.72rem;
-            font-weight: 700;
-            color: #64748b;
+            justify-content: center;
+        }
+        .tp-actions .btn-outline {
+            background: #ffffff;
+            color: var(--text-2, #374151);
+            border: 1px solid var(--border, #cbd5e1);
+            box-shadow: none;
+        }
+        .tp-actions .btn-outline i { color: #64748b; }
+        .tp-actions .btn-outline:hover {
             background: #f8fafc;
-            border: 1px solid #e2e8f0;
-            padding: 2px 9px;
-            border-radius: 999px;
-            font-variant-numeric: tabular-nums;
+            border-color: #94a3b8;
+            color: var(--text, #1f2937);
+            transform: none;
+            box-shadow: none;
         }
-        .sns-pos-pill i { font-size: 0.66rem; color: #94a3b8; }
-        .sns-name-row {
+        .tp-actions .btn-primary {
+            background: var(--brand, #7a2238);
+            color: #ffffff;
+            box-shadow: none;
+        }
+        .tp-actions .btn-primary:hover {
+            background: var(--brand-dark, #5a1a2a);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(122,34,56,.25);
+        }
+        @media (max-width: 900px) {
+            .entry-top-bar { align-items: stretch; }
+            .tp-actions { width: 100%; margin-left: 0; justify-content: flex-start; padding-top: 4px; }
+        }
+
+        /* ── Student Navigation Strip (simple) ── */
+        .student-nav-strip {
+            background: var(--paper, #ffffff);
+            border: 1px solid var(--border, #e5e7eb);
+            border-radius: var(--radius, 10px);
+            padding: 12px 16px;
             display: flex;
             align-items: center;
-            gap: 9px;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 10px 16px;
+            margin-bottom: 20px;
+            box-shadow: var(--shadow-sm, 0 1px 2px rgba(0,0,0,.05));
+        }
+
+        /* Left: current student info */
+        .sns-current {
+            display: flex;
+            align-items: center;
+            gap: 10px;
             min-width: 0;
-            flex-wrap: nowrap;
         }
-        .sns-roll-pill {
-            background: linear-gradient(135deg, rgba(122,34,56,0.1), rgba(163,58,79,0.14));
-            color: var(--brand, #7a2238);
-            border: 1px solid rgba(122,34,56,0.22);
-            font-size: 0.76rem;
-            font-weight: 800;
-            padding: 2px 9px;
-            border-radius: 6px;
-            white-space: nowrap;
-            letter-spacing: 0.02em;
-            font-variant-numeric: tabular-nums;
+        .sns-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--brand, #7a2238);
+            flex-shrink: 0;
         }
-        .sns-roll-pill--suggested {
-            background: #ecfdf5;
-            color: #065f46;
-            border-color: #a7f3d0;
+        .student-nav-strip.is-new .sns-dot {
+            background: #10b981;
         }
-        .sns-name-text {
-            font-size: 0.95rem;
-            font-weight: 800;
-            color: var(--text, #1e293b);
-            letter-spacing: -0.01em;
+        .sns-title {
+            font-size: 0.92rem;
+            font-weight: 700;
+            color: var(--text, #1f2937);
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            max-width: 280px;
+            max-width: 320px;
+        }
+        .sns-sub {
+            font-size: 0.8rem;
+            color: var(--text-2, #6b7280);
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
         }
 
-        /* Center: Controls (Select + Stepper) */
+        /* Right: controls */
         .sns-controls {
             display: flex;
-            align-items: flex-end;
-            gap: 12px;
+            align-items: center;
+            gap: 8px;
             flex-wrap: wrap;
             min-width: 0;
-        }
-        .sns-select-wrap {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-        .sns-select-label {
-            font-size: 0.65rem;
-            font-weight: 800;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: var(--text-3, #94a3b8);
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            line-height: 1;
-        }
-        .sns-select-label i { color: var(--brand, #7a2238); font-size: 0.65rem; }
-        .sns-select-box {
-            position: relative;
-            display: inline-flex;
-            align-items: center;
-        }
-        .sns-select-ico {
-            position: absolute;
-            left: 12px;
-            color: #94a3b8;
-            font-size: 0.82rem;
-            pointer-events: none;
-            z-index: 2;
         }
         .sns-select {
             appearance: none;
             -webkit-appearance: none;
-            background-color: #fbfcfe;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%237a2238' stroke-width='1.8' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+            background-color: #ffffff;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2364748b' stroke-width='1.8' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
             background-repeat: no-repeat;
-            background-position: right 12px center;
-            padding: 8px 34px 8px 34px !important;
-            height: 40px;
+            background-position: right 11px center;
+            padding: 0 30px 0 11px;
+            height: 36px;
+            box-sizing: border-box;
             font-size: 0.85rem;
-            font-weight: 700;
-            color: var(--text, #1e293b);
-            border: 1.5px solid #dbe2ec;
-            border-radius: 10px;
-            min-width: 260px;
-            max-width: 330px;
+            font-weight: 600;
+            font-family: inherit;
+            color: var(--text, #1f2937);
+            border: 1px solid var(--border, #cbd5e1);
+            border-radius: var(--radius-sm, 8px);
+            min-width: 220px;
+            max-width: 300px;
             outline: none;
             cursor: pointer;
-            transition: all .15s ease;
+            transition: border-color .15s ease;
         }
-        .sns-select:hover {
-            border-color: #b9c4d4;
-            background-color: #ffffff;
-        }
+        .sns-select:hover { border-color: #94a3b8; }
         .sns-select:focus {
             border-color: var(--brand, #7a2238);
-            background-color: #ffffff;
             box-shadow: 0 0 0 3px rgba(122,34,56,0.12);
         }
 
-        /* Stepper group */
+        /* Prev/Next stepper */
         .sns-stepper {
             display: inline-flex;
             align-items: center;
-            background: #f1f5f9;
-            border: 1.5px solid #e2e8f0;
-            border-radius: 10px;
-            padding: 3px;
-            height: 40px;
-            box-sizing: border-box;
+            gap: 2px;
         }
         .sns-step-btn {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 0 12px;
-            height: 32px;
-            border: none;
-            background: transparent;
-            color: #334155;
-            font-size: 0.82rem;
-            font-weight: 800;
-            border-radius: 7px;
+            justify-content: center;
+            gap: 5px;
+            padding: 0 10px;
+            height: 36px;
+            border: 1px solid var(--border, #cbd5e1);
+            background: #ffffff;
+            color: var(--text-2, #374151);
+            font-size: 0.8rem;
+            font-weight: 600;
+            border-radius: var(--radius-sm, 8px);
             text-decoration: none;
             cursor: pointer;
-            transition: all .15s ease;
+            transition: background .15s ease, border-color .15s ease;
             white-space: nowrap;
         }
+        .sns-step-btn:first-child { border-radius: var(--radius-sm, 8px) 0 0 var(--radius-sm, 8px); border-right: none; }
+        .sns-step-btn:last-child { border-radius: 0 var(--radius-sm, 8px) var(--radius-sm, 8px) 0; }
         .sns-step-btn:not(.is-disabled):not(:disabled):hover {
-            background: #ffffff;
-            color: var(--brand, #7a2238);
-            box-shadow: 0 2px 6px rgba(15,23,42,0.08);
-            transform: translateY(-0.5px);
+            background: #f8fafc;
+            border-color: #94a3b8;
+            color: var(--text, #1f2937);
         }
         .sns-step-btn.is-disabled, .sns-step-btn:disabled {
             color: #94a3b8;
@@ -653,136 +606,57 @@ $pageTitle = ($edit ? 'Edit Student Entry' : 'Add New Student Entry') . ' — ' 
             opacity: 0.45;
             pointer-events: none;
         }
-        .sns-stepper-divider {
-            width: 1px;
-            height: 18px;
-            background: #cbd5e1;
-            margin: 0 2px;
-        }
 
-        /* Right: Actions Toolbar */
+        /* Action links */
         .sns-actions {
             display: flex;
             align-items: center;
             gap: 8px;
             flex-wrap: wrap;
-            justify-content: flex-end;
             margin-left: auto;
         }
         .sns-btn {
             display: inline-flex;
             align-items: center;
-            gap: 7px;
+            gap: 6px;
             font-size: 0.8rem;
-            font-weight: 700;
-            padding: 0 13px;
-            height: 38px;
-            border-radius: 9px;
+            font-weight: 600;
+            padding: 0 12px;
+            height: 36px;
+            box-sizing: border-box;
+            border-radius: var(--radius-sm, 8px);
             text-decoration: none;
             cursor: pointer;
-            border: 1px solid transparent;
-            transition: all .15s ease;
+            border: 1px solid var(--border, #cbd5e1);
+            background: #ffffff;
+            color: var(--text-2, #374151);
+            transition: background .15s ease, border-color .15s ease;
             white-space: nowrap;
         }
-        .sns-btn i { font-size: 0.82rem; }
-        .sns-btn--slip {
-            background: #ffffff;
-            border-color: #cbd5e1;
-            color: #334155;
-            box-shadow: 0 1px 2px rgba(15,23,42,0.04);
-        }
-        .sns-btn--slip:hover {
+        .sns-btn i { font-size: 0.78rem; color: #64748b; }
+        .sns-btn:hover {
             background: #f8fafc;
             border-color: #94a3b8;
-            color: #0f172a;
-            transform: translateY(-1px);
-        }
-        .sns-btn--whatsapp {
-            background: linear-gradient(135deg, #1faa53 0%, #25D366 100%);
-            color: #ffffff !important;
-            border-color: #1faa53;
-            box-shadow: 0 4px 12px -3px rgba(37,211,102,.5);
-        }
-        .sns-btn--whatsapp:hover {
-            background: linear-gradient(135deg, #198743 0%, #20bd5a 100%);
-            box-shadow: 0 6px 16px -3px rgba(37,211,102,.65);
-            transform: translateY(-1px);
-        }
-        .sns-btn--add {
-            background: linear-gradient(135deg, #c9a227, #e0be53);
-            color: #3a2a04;
-            font-weight: 800;
-            border-color: transparent;
-            box-shadow: 0 4px 12px -3px rgba(201,162,39,.5);
-        }
-        .sns-btn--add:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 6px 16px -3px rgba(201,162,39,.65);
+            color: var(--text, #1f2937);
         }
         .sns-btn--delete {
             background: #fff5f5;
             border-color: #fecaca;
             color: #dc2626;
         }
+        .sns-btn--delete i { color: #dc2626; }
         .sns-btn--delete:hover {
-            background: #dc2626;
-            color: #ffffff;
-            border-color: #dc2626;
-            transform: translateY(-1px);
+            background: #fef2f2;
+            border-color: #f87171;
         }
 
-        @media (max-width: 1200px) {
-            .student-nav-strip {
-                flex-direction: column;
-                align-items: stretch;
-                gap: 14px;
-            }
-            .sns-current {
-                width: 100%;
-            }
-            .sns-name-text {
-                max-width: 100%;
-            }
-            .sns-controls {
-                width: 100%;
-                justify-content: space-between;
-            }
-            .sns-select-wrap {
-                flex: 1 1 240px;
-            }
-            .sns-select {
-                max-width: 100%;
-                width: 100%;
-            }
-            .sns-actions {
-                width: 100%;
-                justify-content: flex-start;
-                margin-left: 0;
-                padding-top: 8px;
-                border-top: 1px dashed #e2e8f0;
-            }
-        }
         @media (max-width: 640px) {
-            .sns-controls {
-                flex-direction: column;
-                align-items: stretch;
-            }
-            .sns-stepper {
-                width: 100%;
-                justify-content: space-between;
-            }
-            .sns-step-btn {
-                flex: 1;
-                justify-content: center;
-            }
-            .sns-actions {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 8px;
-            }
-            .sns-btn {
-                justify-content: center;
-            }
+            .student-nav-strip { flex-direction: column; align-items: stretch; }
+            .sns-controls { width: 100%; }
+            .sns-select { flex: 1 1 100%; max-width: 100%; }
+            .sns-stepper { width: 100%; }
+            .sns-step-btn { flex: 1; justify-content: center; }
+            .sns-actions { width: 100%; }
         }
 
         /* ── Form Cards & Grid ── */
@@ -1279,7 +1153,7 @@ $pageTitle = ($edit ? 'Edit Student Entry' : 'Add New Student Entry') . ' — ' 
             <?php endif; ?>
 
             <!-- 1. TOP CLASS & TEST TYPE SELECTOR BAR -->
-<div class="entry-top-bar">
+            <div class="entry-top-bar">
                 <form method="GET" class="class-picker-wrap" id="classFilterForm">
                     <label class="tp-field">
                         <span><i class="fa-solid fa-calendar-days"></i> Year</span>
@@ -1347,124 +1221,82 @@ $pageTitle = ($edit ? 'Edit Student Entry' : 'Add New Student Entry') . ' — ' 
             <!-- 2. STUDENT NAVIGATION & SWITCHER STRIP -->
             <?php
             $uteCurrentName = ($edit && $report) ? $report['student_name'] : 'New Student';
-            $uteInitials = strtoupper(implode('', array_map(
-                function ($p) { return mb_substr($p, 0, 1); },
-                array_slice(array_filter(preg_split('/\s+/', trim($uteCurrentName))), 0, 2)
-            ))) ?: 'ST';
             $utePosText = ($currentRollIndex >= 0) ? ($currentRollIndex + 1) . ' of ' . count($roster) : '—';
             ?>
             <div class="student-nav-strip <?= $edit ? 'is-editing' : 'is-new' ?>">
-                <!-- Left: Active Student Identity & Avatar Card -->
                 <div class="sns-current">
-                    <div class="sns-avatar" title="<?= e_attr($uteCurrentName) ?>">
-                        <?php if ($edit): ?>
-                            <span><?= sanitize($uteInitials) ?></span>
-                        <?php else: ?>
-                            <i class="fa-solid fa-user-plus"></i>
-                        <?php endif; ?>
-                    </div>
-                    <div class="sns-meta">
-                        <div class="sns-meta-badges">
-                            <?php if ($edit && $report): ?>
-                                <span class="sns-badge sns-badge--edit"><span class="sns-dot"></span> Active Student</span>
-                                <span class="sns-pos-pill" title="Current roster position"><i class="fa-solid fa-list-ol"></i> <?= sanitize($utePosText) ?></span>
-                            <?php else: ?>
-                                <span class="sns-badge sns-badge--new"><span class="sns-dot"></span> New Entry</span>
-                                <span class="sns-pos-pill"><i class="fa-solid fa-users"></i> <?= count($roster) ?> enrolled</span>
-                            <?php endif; ?>
-                        </div>
-                        <div class="sns-name-row">
-                            <?php if ($edit && $report): ?>
-                                <span class="sns-roll-pill">Roll <?= sanitize($report['roll_no']) ?></span>
-                                <span class="sns-name-text" title="<?= e_attr($report['student_name']) ?>"><?= sanitize($report['student_name']) ?></span>
-                            <?php else: ?>
-                                <span class="sns-roll-pill sns-roll-pill--suggested">Suggested Roll #<?= sanitize($nextAvailableRoll) ?></span>
-                                <span class="sns-name-text">Add New Student</span>
-                            <?php endif; ?>
-                        </div>
-                    </div>
+                    <span class="sns-dot" aria-hidden="true"></span>
+                    <?php if ($edit && $report): ?>
+                        <span class="sns-title" title="<?= e_attr($report['student_name']) ?>">Roll <?= sanitize($report['roll_no']) ?> &mdash; <?= sanitize($report['student_name']) ?></span>
+                        <span class="sns-sub"><?= sanitize($utePosText) ?></span>
+                    <?php else: ?>
+                        <span class="sns-title">New Student</span>
+                        <span class="sns-sub">Roll #<?= sanitize($nextAvailableRoll) ?> &middot; <?= count($roster) ?> enrolled</span>
+                    <?php endif; ?>
                 </div>
 
-                <!-- Center: Quick Switcher Dropdown & Prev/Next Stepper -->
+                <?php if (!empty($roster)): ?>
                 <div class="sns-controls">
-                    <div class="sns-select-wrap">
-                        <label class="sns-select-label" for="studentPicker"><i class="fa-solid fa-address-book"></i> Switch Student</label>
-                        <div class="sns-select-box">
-                            <i class="fa-solid fa-magnifying-glass sns-select-ico"></i>
-                            <select id="studentPicker" class="sns-select" aria-label="Select student from roster"
-                                onchange="location.href='unit_test_entry.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>&roll=' + encodeURIComponent(this.value)">
-                                <?php if ($mode === 'new' || !$edit): ?>
-                                    <option value="" selected>&plus; Add New Student (Roll <?= $nextAvailableRoll ?>)</option>
-                                <?php endif; ?>
-                                <?php foreach ($roster as $st): 
-                                    $isSel = ($edit && (string)$st['roll_no'] === (string)$targetRoll) ? 'selected' : '';
-                                ?>
-                                <option value="<?= e_attr($st['roll_no']) ?>" <?= $isSel ?>>
-                                    Roll <?= sanitize($st['roll_no']) ?> &mdash; <?= sanitize($st['student_name']) ?>
-                                </option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                    </div>
+                    <select id="studentPicker" class="sns-select" aria-label="Switch student"
+                        onchange="location.href='unit_test_entry.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>&roll=' + encodeURIComponent(this.value)">
+                        <?php if ($mode === 'new' || !$edit): ?>
+                            <option value="" selected>&plus; Add New Student</option>
+                        <?php endif; ?>
+                        <?php foreach ($roster as $st):
+                            $isSel = ($edit && (string)$st['roll_no'] === (string)$targetRoll) ? 'selected' : '';
+                        ?>
+                        <option value="<?= e_attr($st['roll_no']) ?>" <?= $isSel ?>>
+                            Roll <?= sanitize($st['roll_no']) ?> &mdash; <?= sanitize($st['student_name']) ?>
+                        </option>
+                        <?php endforeach; ?>
+                    </select>
 
                     <div class="sns-stepper" role="group" aria-label="Student Navigation">
                         <?php if ($prevStudentRoll !== null): ?>
-                        <a href="unit_test_entry.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>&roll=<?= urlencode($prevStudentRoll) ?>" class="sns-step-btn" title="Previous Student (Roll <?= sanitize($prevStudentRoll) ?>) [Alt+←]" id="btnPrevStudent">
-                            <i class="fa-solid fa-chevron-left"></i>
-                            <span>Prev</span>
+                        <a href="unit_test_entry.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>&roll=<?= urlencode($prevStudentRoll) ?>" class="sns-step-btn" title="Previous Student [Alt+←]" id="btnPrevStudent">
+                            <i class="fa-solid fa-chevron-left"></i> Prev
                         </a>
                         <?php else: ?>
-                        <button type="button" class="sns-step-btn is-disabled" disabled aria-disabled="true" title="No previous student">
-                            <i class="fa-solid fa-chevron-left"></i>
-                            <span>Prev</span>
+                        <button type="button" class="sns-step-btn is-disabled" disabled>
+                            <i class="fa-solid fa-chevron-left"></i> Prev
                         </button>
                         <?php endif; ?>
 
-                        <span class="sns-stepper-divider" aria-hidden="true"></span>
-
                         <?php if ($nextStudentRoll !== null): ?>
-                        <a href="unit_test_entry.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>&roll=<?= urlencode($nextStudentRoll) ?>" class="sns-step-btn" title="Next Student (Roll <?= sanitize($nextStudentRoll) ?>) [Alt+→]" id="btnNextStudent">
-                            <span>Next</span>
-                            <i class="fa-solid fa-chevron-right"></i>
+                        <a href="unit_test_entry.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>&roll=<?= urlencode($nextStudentRoll) ?>" class="sns-step-btn" title="Next Student [Alt+→]" id="btnNextStudent">
+                            Next <i class="fa-solid fa-chevron-right"></i>
                         </a>
                         <?php else: ?>
-                        <button type="button" class="sns-step-btn is-disabled" disabled aria-disabled="true" title="No next student">
-                            <span>Next</span>
-                            <i class="fa-solid fa-chevron-right"></i>
+                        <button type="button" class="sns-step-btn is-disabled" disabled>
+                            Next <i class="fa-solid fa-chevron-right"></i>
                         </button>
                         <?php endif; ?>
                     </div>
                 </div>
+                <?php endif; ?>
 
-                <!-- Right: Quick Student Actions -->
                 <div class="sns-actions">
                     <?php if ($edit && $report): ?>
-                        <a href="unit_test_slips.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>" target="_blank" class="sns-btn sns-btn--slip" title="View &amp; Print Parent Progress Slips">
-                            <i class="fa-solid fa-receipt"></i>
-                            <span>Parent Slips</span>
+                        <a href="unit_test_slips.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>" target="_blank" class="sns-btn" title="View & Print Parent Slips">
+                            <i class="fa-solid fa-receipt"></i> Slips
                         </a>
-                        <a href="whatsapp_share.php?doc_type=unit_test&test_type=<?= urlencode($testType) ?>&class=<?= urlencode($cohortClassKey) ?>&selected_rolls=<?= urlencode($targetRoll) ?>" class="sns-btn sns-btn--whatsapp" title="Share Student Slip via WhatsApp">
-                            <i class="fa-brands fa-whatsapp"></i>
-                            <span>WhatsApp</span>
+                        <a href="whatsapp_share.php?doc_type=unit_test&test_type=<?= urlencode($testType) ?>&class=<?= urlencode($cohortClassKey) ?>&selected_rolls=<?= urlencode($targetRoll) ?>" class="sns-btn" title="Share via WhatsApp">
+                            <i class="fa-brands fa-whatsapp"></i> WhatsApp
                         </a>
-                        <a href="unit_test_entry.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>&mode=new" class="sns-btn sns-btn--add" title="Add another student to this unit test">
-                            <i class="fa-solid fa-user-plus"></i>
-                            <span>+ New Student</span>
+                        <a href="unit_test_entry.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>&mode=new" class="sns-btn" title="Add new student">
+                            <i class="fa-solid fa-user-plus"></i> New
                         </a>
-                        <button type="button" class="sns-btn sns-btn--delete" onclick="document.getElementById('deleteConfirmModal').hidden = false" title="Remove this student record from this unit test">
-                            <i class="fa-solid fa-trash-can"></i>
-                            <span>Delete</span>
+                        <button type="button" class="sns-btn sns-btn--delete" onclick="document.getElementById('deleteConfirmModal').hidden = false" title="Delete this student">
+                            <i class="fa-solid fa-trash-can"></i> Delete
                         </button>
                     <?php else: ?>
                         <?php if (!empty($roster)): ?>
-                        <a href="unit_test_entry.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>&roll=<?= urlencode($roster[0]['roll_no']) ?>" class="sns-btn sns-btn--slip" title="Go back to first student in roster">
-                            <i class="fa-solid fa-arrow-left"></i>
-                            <span>First Student (Roll <?= sanitize($roster[0]['roll_no']) ?>)</span>
+                        <a href="unit_test_entry.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>&roll=<?= urlencode($roster[0]['roll_no']) ?>" class="sns-btn" title="First student">
+                            <i class="fa-solid fa-arrow-left"></i> First Student
                         </a>
                         <?php endif; ?>
-                        <a href="unit_tests.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>" class="sns-btn sns-btn--slip" title="Open Class Unit Test Matrix">
-                            <i class="fa-solid fa-table"></i>
-                            <span>View Matrix</span>
+                        <a href="unit_tests.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>" class="sns-btn" title="View Matrix">
+                            <i class="fa-solid fa-table"></i> Matrix
                         </a>
                     <?php endif; ?>
                 </div>

@@ -47,6 +47,10 @@ t('P14', 'systemd Restart=', /Restart=/.test(unit));
 
 const bat = fs.readFileSync(path.join(root, 'start-bridge.bat'), 'utf8');
 t('P15', 'windows bat mentions node', /node/i.test(bat));
+t('P20', 'windows bat keeps the supervisor running', /start-bridge\.ps1/i.test(bat) && /stop-bridge\.bat/i.test(bat));
+const bridgeSrc = fs.readFileSync(path.join(root, 'whatsapp-bridge.js'), 'utf8');
+const ipcFn = (bridgeSrc.split('function getBridgeTempDir()')[1] || '').split('class WhatsAppBridge')[0];
+t('P21', 'windows bridge IPC is storage/whatsapp/ipc', ipcFn.includes('win32') && ipcFn.includes("'storage'") && ipcFn.includes("'whatsapp'") && ipcFn.includes("'ipc'"));
 
 // plutil lint if available
 const { execSync } = require('child_process');

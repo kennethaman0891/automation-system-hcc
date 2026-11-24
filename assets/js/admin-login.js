@@ -23,6 +23,7 @@
             input.type = show ? 'text' : 'password';
             if (icon) icon.className = show ? 'fa-solid fa-eye-slash' : 'fa-solid fa-eye';
             toggle.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+            toggle.setAttribute('aria-pressed', show ? 'true' : 'false');
             input.focus();
         });
     }

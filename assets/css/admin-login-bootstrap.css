@@ -1,5 +1,4 @@
-/* Login page only. Bootstrap 5 components, school maroon as primary.
-   Forgot-password and reset-password keep assets/css/admin-login.css. */
+/* Login page only — Bootstrap 5.3 theme & subtle brand surfaces. */
 :root {
     --bs-primary: #7a2238;
     --bs-primary-rgb: 122, 34, 56;
@@ -7,8 +6,17 @@
     --bs-primary-bg-subtle: #f8eef1;
     --bs-primary-border-subtle: #e7cfd6;
     --bs-link-color: #7a2238;
+    --bs-link-color-rgb: 122, 34, 56;
     --bs-link-hover-color: #5a1a2a;
+    --bs-link-hover-color-rgb: 90, 26, 42;
+    --bs-focus-ring-color: rgba(122, 34, 56, 0.25);
     --bs-body-font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* Bootstrap has no min-width:0 utility — needed so flex children can shrink/wrap. */
+.login-min-w-0 {
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .btn-primary {
@@ -29,31 +37,20 @@
 
 .form-control:focus {
     border-color: #c9a0ad;
-    box-shadow: 0 0 0 0.25rem rgba(122, 34, 56, 0.25);
+    box-shadow: 0 0 0 0.25rem rgba(122, 34, 56, 0.18);
 }
 
-.login-page,
-.login-shell {
-    min-height: 100svh;
-}
-
-.login-aside,
-.login-main {
-    min-height: 100svh;
-}
-
+/* ── Left Brand Panel ── */
 .login-aside {
     position: relative;
     isolation: isolate;
     overflow: hidden;
-    padding: clamp(1rem, 3vh, 2.75rem) clamp(1.25rem, 2.2vw, 3rem);
     background:
         radial-gradient(115% 85% at 0% 0%, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0) 58%),
-        radial-gradient(85% 60% at 108% 112%, rgba(201, 162, 39, 0.13), rgba(201, 162, 39, 0) 70%),
+        radial-gradient(85% 60% at 108% 112%, rgba(201, 162, 39, 0.14), rgba(201, 162, 39, 0) 70%),
         linear-gradient(158deg, #2b0a14 0%, #4a1222 42%, #7a2238 100%);
 }
 
-/* Fine dot grid: reads as texture, keeps the large panel from feeling empty */
 .login-aside::before {
     content: "";
     position: absolute;
@@ -66,7 +63,6 @@
     pointer-events: none;
 }
 
-/* Gold hairline where the brand panel meets the form side */
 .login-aside::after {
     content: "";
     position: absolute;
@@ -80,12 +76,31 @@
     pointer-events: none;
 }
 
-/* Feature rows as glass cards — gives the panel structure and weight */
+.login-mark {
+    width: 3rem;
+    height: 3rem;
+    object-fit: cover;
+}
+
+.login-heading {
+    font-size: clamp(1.45rem, 2.5vw, 2rem);
+    line-height: 1.22;
+    letter-spacing: -0.015em;
+}
+
+.login-accent {
+    color: #f0d98c;
+}
+
+.login-lead {
+    max-width: 42ch;
+}
+
 .login-features li {
-    padding: clamp(0.5rem, 1.3vh, 0.75rem) clamp(0.7rem, 1.2vh, 0.9rem);
-    border: 1px solid rgba(255, 255, 255, 0.13);
+    padding: 0.75rem 0.9rem;
+    border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 0.85rem;
-    background: rgba(255, 255, 255, 0.055);
+    background: rgba(255, 255, 255, 0.06);
     transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
 }
 
@@ -95,439 +110,184 @@
     transform: translateX(3px);
 }
 
-/* Gold-tinted icon chips instead of the flat 10%-white block */
-.login-aside .login-icon {
+.login-icon {
+    width: 2.5rem;
+    height: 2.5rem;
+    font-size: 0.95rem;
     background: rgba(201, 162, 39, 0.18);
     color: #f0d98c;
     box-shadow: inset 0 0 0 1px rgba(201, 162, 39, 0.28);
 }
 
-.login-pitch {
-    padding-block: clamp(0.35rem, 1.6vh, 1.25rem);
-}
-
-.login-heading {
-    font-size: clamp(1.35rem, 2.9vh, 1.9rem);
-    line-height: 1.22;
-    letter-spacing: -0.015em;
-    margin-bottom: clamp(0.4rem, 1.2vh, 0.85rem);
-}
-
-.login-lead {
-    font-size: clamp(0.82rem, 1.6vh, 0.95rem);
-    line-height: 1.45;
-    max-width: 42ch;
-    margin-bottom: clamp(0.55rem, 1.6vh, 1rem);
-}
-
-.login-features {
-    gap: clamp(0.4rem, 1.2vh, 0.85rem);
-}
-
+/* ── Right Sign-In Panel ── */
 .login-main {
-    align-items: center;
-    padding: clamp(0.65rem, 2vh, 1.5rem) 1rem;
-}
-
-@supports (align-items: safe center) {
-    .login-main {
-        align-items: safe center;
-    }
-}
-
-@media (max-height: 740px) {
-    .login-main {
-        padding: 0.25rem 0.75rem 0.15rem;
-    }
-
-    .login-card .card-body {
-        padding: 1rem 1.15rem;
-    }
-
-    .login-head { margin-bottom: 0.7rem; }
-    .login-title { font-size: 1.65rem; }
-    .login-intro { font-size: 0.85rem; margin-top: 0.25rem; }
-
-    .login-intro,
-    .login-divider,
-    .login-field,
-    .login-alert {
-        margin-bottom: 0.7rem;
-    }
-
-    .login-card .form-label,
-    .login-field-head {
-        margin-bottom: 0.35rem;
-    }
-
-    .login-card #loginBtn {
-        margin-top: 0.85rem;
-    }
-
-    .login-divider {
-        margin-top: 0.55rem;
-    }
-
-    .login-card .form-control,
-    .login-card #googleSignInBtn,
-    .login-card .btn-primary {
-        height: 2.9rem;
-        padding-top: 0;
-        padding-bottom: 0;
-    }
-}
-
-.login-wrap {
-    width: min(100%, 32rem);
-}
-
-.login-mobile-brand {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    margin-bottom: clamp(0.45rem, 1.4vh, 0.85rem);
-}
-
-/* On phones the card is the whole page: turn the brand row into a branded header bar */
-@media (max-width: 991.98px) {
-    .login-mobile-brand {
-        padding: 0.85rem 1rem;
-        margin-bottom: 1rem;
-        border-radius: 1rem;
-        background: linear-gradient(135deg, #3d0f1c 0%, #5a1a2a 45%, #7a2238 100%);
-        box-shadow: 0 10px 24px -16px rgba(61, 15, 28, 0.65);
-    }
-    .login-mobile-brand .login-mark {
-        width: 2.75rem;
-        height: 2.75rem;
-        border-radius: 0.6rem;
-        border: 2px solid rgba(255, 255, 255, 0.85);
-        background: #fff;
-        box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
-    }
-    .login-mobile-brand p {
-        color: #fff !important;
-        font-size: 0.95rem;
-        line-height: 1.25;
-    }
-    .login-mobile-brand p.small {
-        color: rgba(255, 255, 255, 0.72) !important;
-        font-size: 0.75rem;
-        letter-spacing: 0.02em;
-    }
-}
-
-.login-mobile-brand .login-mark {
-    width: 2.4rem;
-    height: 2.4rem;
-}
-
-.login-mark {
-    width: clamp(2.4rem, 5vh, 3.25rem);
-    height: clamp(2.4rem, 5vh, 3.25rem);
-    object-fit: cover;
-}
-
-.login-icon {
-    width: clamp(2rem, 4.2vh, 2.5rem);
-    height: clamp(2rem, 4.2vh, 2.5rem);
-    font-size: 0.9rem;
-}
-
-.login-accent {
-    color: #f0d98c;
-}
-
-.login-card {
-    border: 1px solid #eadfe3;
-    border-top: 4px solid #c9a227;
-    border-radius: 1.15rem;
-    box-shadow:
-        0 1px 2px rgba(61, 15, 28, 0.06),
-        0 18px 36px -22px rgba(61, 15, 28, 0.35),
-        0 42px 80px -46px rgba(61, 15, 28, 0.45);
-    overflow: hidden;
-}
-
-.login-card .card-body {
     position: relative;
-    padding: clamp(1.5rem, 3.6vh, 2.4rem) clamp(1.4rem, 3.2vh, 2.5rem);
+    isolation: isolate;
+    background-color: #efe9ec;
+    background-image:
+        radial-gradient(640px 420px at 96% 4%, rgba(201, 162, 39, 0.16), rgba(201, 162, 39, 0) 68%),
+        radial-gradient(620px 440px at 4% 96%, rgba(122, 34, 56, 0.12), rgba(122, 34, 56, 0) 68%),
+        linear-gradient(160deg, #f8f5f6 0%, #eee7ea 100%);
 }
 
-/* Soft brand wash behind the card header — gives the card presence without noise */
-.login-card .card-body::before {
+.login-main::before {
     content: "";
     position: absolute;
-    inset: 0 0 auto;
-    height: 150px;
-    background:
-        radial-gradient(90% 100% at 0% 0%, rgba(122, 34, 56, 0.055), rgba(122, 34, 56, 0) 68%),
-        radial-gradient(55% 85% at 104% -12%, rgba(201, 162, 39, 0.055), rgba(201, 162, 39, 0) 72%);
+    inset: 0;
+    z-index: -1;
+    background-image:
+        linear-gradient(to right, rgba(122, 34, 56, 0.04) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(122, 34, 56, 0.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+    -webkit-mask-image: radial-gradient(95% 85% at 50% 50%, #000 35%, transparent 90%);
+    mask-image: radial-gradient(95% 85% at 50% 50%, #000 35%, transparent 90%);
     pointer-events: none;
 }
 
-.login-card .card-body > * {
-    position: relative;
+.login-wrap {
+    max-width: 33rem;
 }
 
-.login-head {
-    margin-bottom: clamp(1rem, 2.4vh, 1.5rem);
+.login-mobile-brand {
+    background: linear-gradient(135deg, #3d0f1c 0%, #5a1a2a 45%, #7a2238 100%);
+    box-shadow: 0 10px 24px -16px rgba(61, 15, 28, 0.65);
+}
+
+.login-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #16a34a;
+    box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.2);
+}
+
+.login-card {
+    position: relative;
+    border-color: #e6dce0;
+    border-radius: 1.15rem;
+    box-shadow:
+        0 1px 2px rgba(61, 15, 28, 0.05),
+        0 18px 36px -22px rgba(61, 15, 28, 0.25);
+    overflow: hidden;
+}
+
+.login-card::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto;
+    height: 4px;
+    background: linear-gradient(90deg, #3d0f1c 0%, #7a2238 50%, #c9a227 100%);
 }
 
 .login-kicker {
-    display: inline-flex;
-    align-items: center;
-    margin: 0 0 0.55rem;
-    padding: 0.28rem 0.7rem;
+    padding: 0.35rem 0.75rem;
     font-size: 0.7rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
     color: #7a2238;
-    background: #f8eef1;
+    background: #f9eef1;
     border: 1px solid #e7cfd6;
-    border-radius: 999px;
+}
+
+.login-portal-tag {
+    padding: 0.3rem 0.65rem;
+    font-size: 0.7rem;
+    color: #7c5e10;
+    background: #fef9e8;
+    border: 1px solid rgba(201, 162, 39, 0.35);
+}
+
+.login-head-seal {
+    width: 3rem;
+    height: 3rem;
+    padding: 0.25rem;
+    border-radius: 0.75rem;
+    background: #fff;
+    border: 1px solid #ead8de;
+}
+
+.login-head-seal img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 0.5rem;
 }
 
 .login-title {
-    margin: 0;
-    font-size: clamp(1.9rem, 4.2vh, 2.35rem);
-    font-weight: 700;
-    letter-spacing: -0.035em;
-    line-height: 1.1;
     color: #1c1216;
-}
-
-.login-intro {
-    margin: 0.45rem 0 0;
-    font-size: 0.93rem;
-    line-height: 1.5;
-    color: #6d5c63;
+    letter-spacing: -0.02em;
 }
 
 .login-alert {
-    padding: 0.65rem 0.85rem;
-    margin-bottom: clamp(0.6rem, 1.6vh, 0.95rem);
-    font-size: 0.84rem;
-    line-height: 1.45;
-    border: 1px solid transparent;
     border-left-width: 3px;
-    border-radius: 0.7rem;
 }
 
-/* Semantic colour on the left edge only — keeps the card calm while staying readable */
-.login-alert.alert-info { border-left-color: #0284c7; }
-.login-alert.alert-success { border-left-color: #15803d; }
-.login-alert.alert-warning { border-left-color: #b45309; }
-.login-alert.alert-danger { border-left-color: #b91c1c; }
-
-.login-alert > i {
-    margin-top: 0.15rem;
-    line-height: 1;
+.login-input-group .input-group-text {
+    background-color: #faf7f8;
+    color: #7d6b72;
 }
 
-.login-divider {
-    margin-block: clamp(0.85rem, 2.2vh, 1.25rem);
-    color: #9a8b90;
+/* Password show/hide: a regular Bootstrap input-group addon (no absolute positioning). */
+.login-pw-toggle {
+    --bs-btn-color: #75636a;
+    --bs-btn-bg: #faf7f8;
+    --bs-btn-border-color: var(--bs-border-color);
+    --bs-btn-hover-color: #7a2238;
+    --bs-btn-hover-bg: #f3e9ec;
+    --bs-btn-hover-border-color: var(--bs-border-color);
+    --bs-btn-active-color: #7a2238;
+    --bs-btn-active-bg: #ecdde2;
+    --bs-btn-active-border-color: var(--bs-border-color);
+    --bs-btn-disabled-color: #a99aa0;
+    --bs-btn-disabled-bg: #faf7f8;
+    --bs-btn-disabled-border-color: var(--bs-border-color);
+    --bs-btn-focus-shadow-rgb: 122, 34, 56;
+    min-width: 3.25rem;
 }
 
-.login-divider span {
-    padding-inline: 0.75rem;
-    font-size: 0.68rem;
-    font-weight: 700;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
+/* Google button: neutral, readable text (Bootstrap btn-light + border). */
+.login-google {
+    --bs-btn-color: #1c1216;
+    --bs-btn-bg: #fff;
+    --bs-btn-hover-color: #1c1216;
+    --bs-btn-hover-bg: #f8f5f6;
+    --bs-btn-active-bg: #f1ecee;
+    --bs-btn-focus-shadow-rgb: 122, 34, 56;
 }
 
-#googleSignInBtn {
-    height: 3.25rem;
-    font-size: 0.95rem;
-    font-weight: 600;
-    color: #3c4043;
-    background: #fff;
-    border-color: #dadce0;
-    border-radius: 0.65rem;
-    box-shadow: 0 1px 2px rgba(60, 64, 67, 0.06);
-    transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+/* Extra-small phones (≤ 399px): keep large touch targets, trim font so labels stay on one line. */
+@media (max-width: 399.98px) {
+    .login-card .btn-lg {
+        --bs-btn-font-size: 1.0625rem;
+    }
+    .login-card .input-group-lg > .form-control,
+    .login-card .input-group-lg > .input-group-text,
+    .login-card .input-group-lg > .btn {
+        font-size: 1.0625rem;
+    }
+    .login-card .login-title {
+        font-size: 1.375rem;
+    }
 }
 
-#googleSignInBtn:hover {
-    color: #202124;
-    background: #f8f9fa;
-    border-color: #d2d5d9;
-    box-shadow: 0 4px 12px -6px rgba(60, 64, 67, 0.28);
-}
-
-.login-field {
-    margin-bottom: clamp(1.15rem, 2.8vh, 1.6rem);
-}
-
-/* The "Password … Forgot password?" row needs the same gap to its input as a
-   plain label does — Bootstrap's .mb-0 on the label otherwise leaves it flush. */
-.login-field-head {
-    margin-bottom: 0.5rem;
-}
-
-.login-card .form-label {
-    margin-bottom: 0.5rem;
-    font-size: 0.78rem;
-    font-weight: 650;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: #4a3940;
-}
-
-/* Caps-lock hint should not butt up against the password field */
-.login-card #capsNote {
-    margin-top: 0.45rem;
-}
-
-.login-card .input-group-text {
-    width: 3.1rem;
-    justify-content: center;
-    font-size: 0.95rem;
-    color: #8d7b82;
-    background: #faf7f8;
-    border-color: #e6dce0;
-}
-
-/* Bigger, calmer fields — the card is now a comfortable 512px wide */
-.login-card .form-control {
-    height: 3.25rem;
-    font-size: 1rem;
-}
-
-/* Password visibility toggle lives inside the .input-group on the sign-in card —
-   make it borderless + flush with the field (Bootstrap default .btn-outline-secondary
-   leaves a visible outline that breaks the single-control look). */
-.login-card .input-group > .btn-outline-secondary {
-    position: absolute;
-    right: 6px;
-    top: 50%;
-    transform: translateY(-50%);
-    /* Bootstrap raises a focused .form-control to z-index:5 — the toggle must stay
-       above it, otherwise typing the password makes the input swallow the click. */
-    z-index: 6;
-    width: 38px;
-    height: 38px;
-    padding: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 0;
-    border-radius: 8px;
-    background: transparent;
-    color: #8d7b82;
-}
-
-/* Keep typed passwords clear of the eye button */
-.login-card #password {
-    padding-right: 3.1rem;
-}
-.login-card .input-group > .btn-outline-secondary:hover,
-.login-card .input-group > .btn-outline-secondary:focus-visible {
-    background: rgba(122, 34, 56, 0.06);
-    color: #7a2238;
-    border: 0;
-    box-shadow: none;
-}
-.login-card .input-group > .btn-outline-secondary:focus-visible {
-    outline: 2px solid rgba(122, 34, 56, 0.45);
-    outline-offset: 1px;
-}
-
-.login-card .form-control,
-.login-card .btn-outline-secondary {
-    border-color: #e6dce0;
-}
-
-.login-card .form-control {
-    color: #1c1216;
-}
-
-.login-card .form-control::placeholder {
-    color: #a39499;
-}
-
-.login-forgot {
-    font-size: 0.78rem;
-    font-weight: 600;
-    color: #7a2238;
-    text-decoration: none;
-}
-
-.login-forgot:hover {
-    color: #5a1a2a;
-    text-decoration: underline;
-}
-
-.login-forgot:focus-visible {
-    outline: 2px solid rgba(122, 34, 56, 0.5);
-    outline-offset: 2px;
-    border-radius: 4px;
-}
-
-/* Chrome/Safari autofill repaints fields pale yellow and breaks the card look */
-.login-card .form-control:-webkit-autofill,
-.login-card .form-control:-webkit-autofill:hover,
-.login-card .form-control:-webkit-autofill:focus {
+.login-card .form-control:is(:autofill, :-webkit-autofill),
+.login-card .form-control:is(:autofill, :-webkit-autofill):hover,
+.login-card .form-control:is(:autofill, :-webkit-autofill):focus {
     -webkit-text-fill-color: #1c1216;
-    -webkit-box-shadow: 0 0 0 1000px #fff inset;
+    box-shadow:
+        inset 0 0 0 2px rgba(122, 34, 56, 0.28),
+        inset 0 0 0 100vmax #fdf9fa;
     caret-color: #1c1216;
     transition: background-color 9999s ease-out;
 }
 
-.login-page ::selection {
-    background: rgba(122, 34, 56, 0.16);
-    color: #1c1216;
-}
+#loginBtn .btn-spin { display: none; }
+#loginBtn.loading .btn-spin { display: inline-block; }
+#loginBtn.loading .btn-ico { display: none; }
 
-.login-card .btn-primary {
-    height: 3.4rem;
-    font-size: 1rem;
-    font-weight: 650;
-    letter-spacing: 0.01em;
-    border-radius: 0.7rem;
-    box-shadow: 0 8px 18px -10px rgba(122, 34, 56, 0.55);
-    transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
-}
-
-/* Primary action gets its own breathing room instead of reusing the field gap */
-.login-card .login-field:last-of-type {
-    margin-bottom: 0;
-}
-
-.login-card #loginBtn {
-    margin-top: clamp(1.25rem, 3vh, 1.75rem);
-}
-
-.login-card .btn-primary:hover:not(:disabled) {
-    transform: translateY(-1px);
-    box-shadow: 0 12px 22px -10px rgba(122, 34, 56, 0.6);
-}
-
-#loginBtn .btn-spin {
-    display: none;
-}
-
-#loginBtn.loading .btn-spin {
-    display: inline-block;
-}
-
-#loginBtn.loading .btn-ico {
-    display: none;
-}
-
-/* ── Motion & focus hygiene ── */
 @media (prefers-reduced-motion: reduce) {
-    .login-card .btn-primary:hover:not(:disabled),
-    .login-features li:hover {
-        transform: none;
-    }
-
-    .login-card .btn-primary,
-    .login-features li,
-    #googleSignInBtn {
+    .login-features li {
         transition: none;
+        transform: none;
     }
 }

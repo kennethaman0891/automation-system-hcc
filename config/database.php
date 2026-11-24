@@ -73,8 +73,14 @@ define('DB_USER', $_env['DB_USER']);
 define('DB_PASS', $_env['DB_PASS']);
 define('DB_CHARSET', $_env['DB_CHARSET'] ?? 'utf8mb4');
 $isWindows = (PHP_OS_FAMILY === 'Windows');
-$defaultSocket = $isWindows ? '' : '/Applications/XAMPP/xamppfiles/var/mysql/mysql.sock';
-$dbSocket = $_env['DB_SOCKET'] ?? $defaultSocket;
+// Windows has no Unix socket. A copied macOS env.php often still contains
+// DB_SOCKET=/Applications/XAMPP/.../mysql.sock. Ignore it and use TCP.
+if ($isWindows) {
+    $dbSocket = '';
+} else {
+    $defaultSocket = '/Applications/XAMPP/xamppfiles/var/mysql/mysql.sock';
+    $dbSocket = $_env['DB_SOCKET'] ?? $defaultSocket;
+}
 define('DB_SOCKET', $dbSocket);
 define('JWT_SECRET', $_env['JWT_SECRET']);
 // Optional. Ingest 401s when this is absent; do not die the app and do not log the value.

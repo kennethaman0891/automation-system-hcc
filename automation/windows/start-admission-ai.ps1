@@ -4,6 +4,8 @@
 
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "hcc-pe.ps1")
+
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $RepoRoot
 
@@ -68,9 +70,17 @@ $candidates = @(
     (Join-Path $RepoRoot "automation\admission-ai-service\target\release\admission-ai-service.exe"),
     (Join-Path $RepoRoot "automation\admission-ai-service\target\release\admission-ai-service")
 )
-$binary = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+$binary = $null
+foreach ($cand in $candidates) {
+    if (Test-HccWindowsExecutable $cand) {
+        $binary = $cand
+        break
+    }
+}
 if (-not $binary) {
-    Write-Host "Release binary not found. Build it on this Windows PC:"
+    Write-Host "No Windows build of admission-ai-service was found."
+    Write-Host "A file copied from macOS is a Mach-O binary and will not run here."
+    Write-Host "Build it on this Windows PC:"
     Write-Host "  cd automation\admission-ai-service"
     Write-Host "  cargo build --release"
     exit 1

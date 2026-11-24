@@ -275,8 +275,9 @@ switch ($action) {
 
     case 'ensure':
         // The page asks for this when the heartbeat is stale. The bridge
-        // process exits and launchd starts it again. Apache must not spawn
-        // Chrome itself (it runs as a different user than the LaunchAgent).
+        // process exits and its supervisor starts it again (launchd on macOS,
+        // the Windows start-bridge supervisor, or systemd). Apache must not
+        // spawn Chrome itself.
         if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
             waJsonResponse(['success' => false, 'error' => 'Method not allowed'], 405);
         }
@@ -288,11 +289,7 @@ switch ($action) {
         if ($ensureRunning) {
             waJsonResponse(['success' => true, 'restarting' => false, 'bridge_running' => true]);
         }
-        $ensureTmp = getenv('WHATSAPP_IPC_DIR');
-        if (!$ensureTmp || !is_dir($ensureTmp)) {
-            $ensureTmp = (DIRECTORY_SEPARATOR !== '\\' && is_dir('/tmp')) ? '/tmp' : sys_get_temp_dir();
-        }
-        $ensureFlag = rtrim($ensureTmp, '/\\') . DIRECTORY_SEPARATOR . 'whatsapp_bridge_restart_default';
+        $ensureFlag = waBridgeIpcDir() . DIRECTORY_SEPARATOR . 'whatsapp_bridge_restart_default';
         if (!is_file($ensureFlag) || (time() - (int)@filemtime($ensureFlag)) >= 45) {
             @file_put_contents($ensureFlag, (string)time());
         }
@@ -305,10 +302,7 @@ switch ($action) {
         break;
 
     case 'refresh_qr':
-        $tmpDir = getenv('WHATSAPP_IPC_DIR');
-        if (!$tmpDir || !is_dir($tmpDir)) {
-            $tmpDir = (DIRECTORY_SEPARATOR !== '\\' && is_dir('/tmp')) ? '/tmp' : sys_get_temp_dir();
-        }
+        $tmpDir = waBridgeIpcDir();
         $sep = DIRECTORY_SEPARATOR;
         // Bridge watches whatsapp_qr_refresh_default (and sessionName). PHP session_id flags were never read.
         @file_put_contents(rtrim($tmpDir, '/\\') . $sep . 'whatsapp_qr_refresh_default', time());
@@ -321,10 +315,7 @@ switch ($action) {
         
     case 'logout':
         // Signal bridge to logout
-        $tmpDir = getenv('WHATSAPP_IPC_DIR');
-        if (!$tmpDir || !is_dir($tmpDir)) {
-            $tmpDir = (DIRECTORY_SEPARATOR !== '\\' && is_dir('/tmp')) ? '/tmp' : sys_get_temp_dir();
-        }
+        $tmpDir = waBridgeIpcDir();
         $sep = DIRECTORY_SEPARATOR;
         // Bridge watches whatsapp_logout_default (and sessionName). Do not write PHP session_id orphans.
         @file_put_contents(rtrim($tmpDir, '/\\') . $sep . 'whatsapp_logout_default', time());

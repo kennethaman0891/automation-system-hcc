@@ -1003,19 +1003,6 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
         .ut-confirm-card p { margin: 0 0 20px; font-size: 0.87rem; color: #64748b; line-height: 1.55; }
         .ut-confirm-actions { display: flex; gap: 10px; justify-content: center; }
 
-        /* Notification Bell */
-        .notif-container { position:relative; display:inline-block; margin-right:16px; }
-        .notif-trigger { background:transparent; border:1px solid var(--border); border-radius:8px; width:38px; height:38px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--text); position:relative; transition:all 0.15s ease; }
-        .notif-trigger:hover { background:var(--bg); border-color:var(--accent); color:var(--accent); }
-        .notif-badge { position:absolute; top:-5px; right:-5px; background:#dc2626; color:#fff; font-size:0.65rem; font-weight:700; border-radius:10px; padding:2px 6px; border:2px solid #fff; min-width:18px; text-align:center; }
-        .notif-dropdown { display:none; position:absolute; right:0; top:44px; width:360px; background:var(--paper); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-lg); z-index:1000; overflow:hidden; }
-        .notif-dropdown.show { display:block; }
-        .notif-dropdown-header { padding:12px 16px; border-bottom:1px solid var(--border); background:var(--bg); display:flex; align-items:center; justify-content:space-between; font-size:0.85rem; font-weight:700; }
-        .notif-dropdown-list { max-height:380px; overflow-y:auto; }
-        .notif-item { padding:12px 16px; border-bottom:1px solid var(--border); display:flex; gap:12px; font-size:0.82rem; line-height:1.4; text-decoration:none; color:inherit; }
-        .notif-item:hover { background:#fafaf9; }
-        .notif-item-icon { width:32px; height:32px; border-radius:8px; background:#fee2e2; color:#991b1b; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:0.85rem; }
-
         /* Dashboard Modal */
         .modal { position:fixed; inset:0; z-index:1000; display:flex; align-items:center; justify-content:center; padding:20px; }
         .modal-backdrop { position:absolute; inset:0; background:rgba(42,16,24,0.55); backdrop-filter:blur(2px); }
@@ -1087,36 +1074,7 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
 
                 <div class="header-actions" style="display:flex;align-items:center;">
                     <!-- Notification Bell -->
-                    <div class="notif-container" id="notifContainer">
-                        <button type="button" class="notif-trigger" id="notifTrigger" title="Recent Activity Notifications" aria-label="Notifications">
-                            <i class="fas fa-bell"></i>
-                            <?php if ($notifData['unread'] > 0): ?>
-                                <span class="notif-badge" id="notifBadge"><?= (int)$notifData['unread'] ?></span>
-                            <?php endif; ?>
-                        </button>
-                        <div class="notif-dropdown" id="notifDropdown">
-                            <div class="notif-dropdown-header">
-                                <span><i class="fas fa-bell"></i> Recent Alerts & Activity</span>
-                                <span style="font-size:0.75rem;color:var(--muted);"><?= count($notifData['items']) ?> events</span>
-                            </div>
-                            <div class="notif-dropdown-list">
-                                <?php if (empty($notifData['items'])): ?>
-                                    <div style="padding:24px;text-align:center;color:var(--muted);font-size:0.82rem;">No recent notifications.</div>
-                                <?php else: ?>
-                                    <?php foreach ($notifData['items'] as $nt): ?>
-                                        <a href="<?= !empty($nt['link']) ? sanitize($nt['link']) : '#' ?>" class="notif-item">
-                                            <div class="notif-item-icon"><i class="fas fa-pen-to-square"></i></div>
-                                            <div style="flex:1;">
-                                                <div style="font-weight:700;color:var(--text);margin-bottom:2px;"><?= sanitize($nt['title']) ?></div>
-                                                <div style="color:var(--muted);font-size:0.78rem;"><?= sanitize($nt['message']) ?></div>
-                                                <div style="color:#94a3b8;font-size:0.72rem;margin-top:2px;"><i class="far fa-clock"></i> <?= date('M d, Y • h:i A', strtotime($nt['created_at'])) ?></div>
-                                            </div>
-                                        </a>
-                                    <?php endforeach; ?>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                    </div>
+                    <?php require __DIR__ . '/includes/notif_bell.php'; ?>
 
                     <div class="admin-user">
                         <i class="fas fa-user-circle"></i>

@@ -796,36 +796,7 @@ $notifData = rcGetRecentNotifications(8);
 
                 <div class="header-actions">
                     <!-- Notification Bell -->
-                    <div class="notif-container" id="notifContainer">
-                        <button type="button" class="notif-trigger" id="notifTrigger" title="Recent Activity Notifications" aria-label="Notifications">
-                            <i class="fas fa-bell"></i>
-                            <?php if ($notifData['unread'] > 0): ?>
-                                <span class="notif-badge" id="notifBadge"><?= (int)$notifData['unread'] ?></span>
-                            <?php endif; ?>
-                        </button>
-                        <div class="notif-dropdown" id="notifDropdown">
-                            <div class="notif-dropdown-header">
-                                <span><i class="fas fa-bell"></i> Promotion &amp; System Alerts</span>
-                                <span class="notif-count"><?= count($notifData['items']) ?> events</span>
-                            </div>
-                            <div class="notif-dropdown-list">
-                                <?php if (empty($notifData['items'])): ?>
-                                    <div class="notif-empty"><i class="fas fa-bell-slash"></i>No recent notifications.</div>
-                                <?php else: ?>
-                                    <?php foreach ($notifData['items'] as $nt): ?>
-                                        <a href="<?= !empty($nt['link']) ? sanitize($nt['link']) : '#' ?>" class="notif-item">
-                                            <div class="notif-item-icon"><i class="fas fa-file-excel"></i></div>
-                                            <div class="notif-item-body">
-                                                <div class="notif-item-title"><?= sanitize($nt['title']) ?></div>
-                                                <div class="notif-item-desc"><?= sanitize($nt['message']) ?></div>
-                                                <div class="notif-item-time"><i class="far fa-clock"></i> <?= date('M d, Y • h:i A', strtotime($nt['created_at'])) ?></div>
-                                            </div>
-                                        </a>
-                                    <?php endforeach; ?>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                    </div>
+                    <?php require __DIR__ . '/includes/notif_bell.php'; ?>
 
                     <div class="admin-user">
                         <span class="user-avatar"><?= sanitize($adminInitials) ?></span>

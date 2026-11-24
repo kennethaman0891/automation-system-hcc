@@ -554,28 +554,6 @@ if ($selectedRollsParam !== '') {
         @media (max-width: 768px) {
             .wa-hub-stats { grid-template-columns: repeat(2, 1fr); }
         }
-
-        /* Notification Dropdown */
-        .notif-container { position: relative; display: inline-block; }
-        .notif-trigger { background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius-sm); width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-2); font-size: 0.95rem; position: relative; transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease; }
-        .notif-trigger:hover { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
-        .notif-badge { position: absolute; top: -6px; right: -6px; background: var(--danger); color: #fff; font-size: 0.65rem; font-weight: 700; border-radius: 999px; padding: 2px 6px; border: 2px solid var(--paper); min-width: 18px; text-align: center; font-variant-numeric: tabular-nums; }
-        .notif-dropdown { display: none; position: absolute; right: 0; top: 48px; width: 360px; max-width: calc(100vw - 32px); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg); z-index: 1000; overflow: hidden; }
-        .notif-dropdown.show { display: block; }
-        .notif-dropdown-header { padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface); display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem; font-weight: 700; color: var(--ink); }
-        .notif-dropdown-header > span:first-child i { color: var(--gold-ink); margin-right: 6px; }
-        .notif-count { font-size: 0.75rem; font-weight: 600; color: var(--text-3); }
-        .notif-dropdown-list { max-height: 380px; overflow-y: auto; }
-        .notif-empty { padding: 26px 20px; text-align: center; color: var(--text-3); font-size: 0.84rem; }
-        .notif-empty i { font-size: 1.5rem; display: block; margin-bottom: 8px; opacity: 0.5; }
-        .notif-item { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; gap: 12px; font-size: 0.82rem; line-height: 1.45; text-decoration: none; color: inherit; transition: background 0.15s ease; }
-        .notif-item:hover { background: var(--surface); }
-        .notif-item:last-child { border-bottom: none; }
-        .notif-item-icon { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 8px; background: var(--gold-glow); color: var(--gold-ink); display: flex; align-items: center; justify-content: center; font-size: 0.85rem; }
-        .notif-item-body { flex: 1; min-width: 0; }
-        .notif-item-title { font-weight: 700; color: var(--ink); margin-bottom: 2px; }
-        .notif-item-desc { color: var(--text-2); font-size: 0.78rem; margin-bottom: 4px; }
-        .notif-item-time { color: var(--text-3); font-size: 0.72rem; }
     </style>
 </head>
 <body>
@@ -604,36 +582,7 @@ if ($selectedRollsParam !== '') {
                     </button>
 
                     <!-- Activity Alerts / Notification Bell -->
-                    <div class="notif-container" id="notifContainer">
-                        <button type="button" class="notif-trigger" id="notifTrigger" title="Recent Activity Notifications" aria-label="Notifications">
-                            <i class="fas fa-bell"></i>
-                            <?php if ($notifData['unread'] > 0): ?>
-                                <span class="notif-badge" id="notifBadge"><?= (int)$notifData['unread'] ?></span>
-                            <?php endif; ?>
-                        </button>
-                        <div class="notif-dropdown" id="notifDropdown">
-                            <div class="notif-dropdown-header">
-                                <span><i class="fas fa-bell"></i> Activity Notifications</span>
-                                <span class="notif-count"><?= count($notifData['items']) ?> events</span>
-                            </div>
-                            <div class="notif-dropdown-list">
-                                <?php if (empty($notifData['items'])): ?>
-                                    <div class="notif-empty"><i class="fas fa-bell-slash"></i>No recent notifications.</div>
-                                <?php else: ?>
-                                    <?php foreach ($notifData['items'] as $nt): ?>
-                                        <a href="<?= !empty($nt['link']) ? sanitize($nt['link']) : '#' ?>" class="notif-item">
-                                            <div class="notif-item-icon"><i class="fas fa-graduation-cap"></i></div>
-                                            <div class="notif-item-body">
-                                                <div class="notif-item-title"><?= sanitize($nt['title']) ?></div>
-                                                <div class="notif-item-desc"><?= sanitize($nt['message']) ?></div>
-                                                <div class="notif-item-time"><i class="far fa-clock"></i> <?= date('M d, Y • h:i A', strtotime($nt['created_at'])) ?></div>
-                                            </div>
-                                        </a>
-                                    <?php endforeach; ?>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                    </div>
+                    <?php require __DIR__ . '/includes/notif_bell.php'; ?>
 
                     <div class="admin-user">
                         <span class="user-avatar"><?= sanitize($adminInitials) ?></span>
@@ -1060,6 +1009,18 @@ if ($selectedRollsParam !== '') {
                         return window.getComputedStyle(box).display !== 'none';
                     }
 
+                    // Always ask the Mac bridge to stay up. The LaunchAgent restarts
+                    // it; this page must not skip the request when the replica is open.
+                    function keepBridgeOn() {
+                        if (Date.now() - ensureAt < 20000) return;
+                        ensureAt = Date.now();
+                        fetch('api_whatsapp_session.php?action=ensure', {
+                            method: 'POST',
+                            headers: { 'X-CSRF-Token': waCsrfToken() },
+                            cache: 'no-store'
+                        }).catch(function () {});
+                    }
+
                     async function tick() {
                         try {
                             var s = await fetch('api_whatsapp_session.php?action=status', { cache: 'no-store' }).then(function (r) { return r.json(); });
@@ -1077,6 +1038,12 @@ if ($selectedRollsParam !== '') {
                             }
                             if (!sess || !sess.is_connected) logoutPending = false;
                             chip.style.display = 'none';
+
+                            var q = await fetch('api_whatsapp_session.php?action=qr', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return null; });
+                            var bridgeAlive = !!((s && (s.bridge_running || (sess && sess.bridge_running))) || (q && q.bridge_running));
+                            var isSyncing = !!((s && s.is_syncing) || (sess && sess.is_syncing) || (q && q.is_syncing));
+                            if (!bridgeAlive) keepBridgeOn();
+
                             // Web Replica has its own QR dialog. Showing this overlay
                             // at the same time puts two codes on the screen.
                             if (replicaSurfaceOpen()) {
@@ -1085,10 +1052,6 @@ if ($selectedRollsParam !== '') {
                                 return;
                             }
                             if (!dismissed) overlay.style.display = 'flex';
-
-                            var q = await fetch('api_whatsapp_session.php?action=qr', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return null; });
-                            var bridgeAlive = !!((s && (s.bridge_running || (sess && sess.bridge_running))) || (q && q.bridge_running));
-                            var isSyncing = !!((s && s.is_syncing) || (sess && sess.is_syncing) || (q && q.is_syncing));
 
                             if (q && q.success && q.qr_code) {
                                 if (q.qr_code !== lastQr) {
@@ -1102,14 +1065,6 @@ if ($selectedRollsParam !== '') {
                                 img.style.display = 'none';
                                 spin.style.display = 'inline';
                                 if (!bridgeAlive) {
-                                    if (Date.now() - ensureAt > 60000) {
-                                        ensureAt = Date.now();
-                                        fetch('api_whatsapp_session.php?action=ensure', {
-                                            method: 'POST',
-                                            headers: { 'X-CSRF-Token': waCsrfToken() },
-                                            cache: 'no-store'
-                                        }).catch(function () {});
-                                    }
                                     spin.innerHTML = '<span style="color:#0284c7;font-size:0.85rem;"><i class="fa-solid fa-circle-notch fa-spin"></i> Starting bridge…</span>';
                                     statusEl.innerHTML = '<span style="color:#0284c7;font-weight:600;">Starting the WhatsApp bridge</span><br><span style="color:#64748b;font-size:0.75rem;">It starts on its own on this Mac. The QR will show here. You do not need to run a command.</span>';
                                 } else if (isSyncing) {

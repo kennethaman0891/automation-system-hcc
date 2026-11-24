@@ -76,14 +76,13 @@ if (!empty($nameParts[0])) {
                             <span class="sep"><i class="fa-solid fa-chevron-right"></i></span>
                             <span>Academic Schedule</span>
                             <span class="sep"><i class="fa-solid fa-chevron-right"></i></span>
-                            <span class="current">Timetable Studio</span>
+                            <span class="current">Timetable Builder</span>
                         </nav>
                     </div>
                     <h1 class="page-title">
-                        <span class="page-title-icon"><i class="fa-solid fa-calendar-days"></i></span>
-                        Exam Timetable Builder Studio
+                        Exam Timetable Builder
                     </h1>
-                    <p class="page-sub">Design, configure and publish multi-standard examination schedules with instant mathematical rowspan precision</p>
+                    <p class="page-sub">Design, configure and publish examination schedules</p>
                 </div>
 
                 <div class="header-actions">

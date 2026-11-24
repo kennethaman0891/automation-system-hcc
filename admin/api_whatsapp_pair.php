@@ -6,8 +6,8 @@
  * GET  action=get                          → returns the generated 8-character code
  * POST action=cancel                       → clears the request/result
  *
- * The bridge (node whatsapp-bridge.js) watches /tmp/whatsapp_pair_request and
- * writes the resulting code to /tmp/whatsapp_pair_code.txt.
+ * The bridge (node whatsapp-bridge.js) watches whatsapp_pair_request in the
+ * shared IPC directory and writes the code to whatsapp_pair_code.txt there.
  */
 
 require_once __DIR__ . '/../includes/functions.php';
@@ -17,15 +17,8 @@ require_once __DIR__ . '/auth_check.php';
 waRequireAuth();
 header('Content-Type: application/json; charset=utf-8');
 
-// Cross-platform IPC temp directory matching Node.js bridge getBridgeTempDir()
-$tmpDir = getenv('WHATSAPP_IPC_DIR');
-if (!$tmpDir || !is_dir($tmpDir)) {
-    if (DIRECTORY_SEPARATOR !== '\\' && is_dir('/tmp')) {
-        $tmpDir = '/tmp';
-    } else {
-        $tmpDir = sys_get_temp_dir();
-    }
-}
+// Same directory whatsapp-bridge.js getBridgeTempDir() watches.
+$tmpDir = waBridgeIpcDir();
 $reqFile  = rtrim($tmpDir, '/\\') . DIRECTORY_SEPARATOR . 'whatsapp_pair_request';
 $codeFile = rtrim($tmpDir, '/\\') . DIRECTORY_SEPARATOR . 'whatsapp_pair_code.txt';
 

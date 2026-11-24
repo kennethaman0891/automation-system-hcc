@@ -10,6 +10,75 @@ if (!function_exists('waGetDB')) {
     }
 }
 
+if (!function_exists('waBridgeIpcDir')) {
+    /**
+     * Directory the PHP app and whatsapp-bridge.js both use for QR, restart,
+     * logout, and pairing flags. On Windows Apache and the bridge often run as
+     * different users, so each user's temp folder is a different place. A
+     * folder inside this project is visible to both. macOS and Linux keep
+     * using /tmp, which is already shared.
+     */
+    function waBridgeIpcDir(): string {
+        $fromEnv = getenv('WHATSAPP_IPC_DIR');
+        if (is_string($fromEnv) && $fromEnv !== '' && is_dir($fromEnv)) {
+            return rtrim($fromEnv, "/\\");
+        }
+        if (DIRECTORY_SEPARATOR === '\\') {
+            $dir = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'whatsapp' . DIRECTORY_SEPARATOR . 'ipc';
+            if (!is_dir($dir)) {
+                @mkdir($dir, 0777, true);
+            }
+            if (is_dir($dir)) {
+                return $dir;
+            }
+            return rtrim(sys_get_temp_dir(), "/\\");
+        }
+        if (is_dir('/tmp')) {
+            return '/tmp';
+        }
+        return rtrim(sys_get_temp_dir(), "/\\");
+    }
+}
+
+if (!function_exists('hccEnsureColumn')) {
+    /**
+     * Add a column on both MariaDB and MySQL. MariaDB accepts
+     * ADD COLUMN IF NOT EXISTS; MySQL 8 rejects that statement.
+     */
+    function hccEnsureColumn(PDO $db, string $table, string $column, string $definition): void {
+        if (!preg_match('/^[A-Za-z0-9_]+$/', $table) || !preg_match('/^[A-Za-z0-9_]+$/', $column)) {
+            throw new InvalidArgumentException('Invalid SQL identifier');
+        }
+        $stmt = $db->prepare(
+            'SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?'
+        );
+        $stmt->execute([$table, $column]);
+        if ((int)$stmt->fetchColumn() > 0) {
+            return;
+        }
+        $db->exec('ALTER TABLE `' . $table . '` ADD COLUMN `' . $column . '` ' . $definition);
+    }
+}
+
+if (!function_exists('hccEnsureIndex')) {
+    function hccEnsureIndex(PDO $db, string $table, string $index, string $columnList): void {
+        if (!preg_match('/^[A-Za-z0-9_]+$/', $table) || !preg_match('/^[A-Za-z0-9_]+$/', $index)) {
+            throw new InvalidArgumentException('Invalid SQL identifier');
+        }
+        if (!preg_match('/^[A-Za-z0-9_,` ]+$/', $columnList)) {
+            throw new InvalidArgumentException('Invalid index column list');
+        }
+        $stmt = $db->prepare(
+            'SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME = ? AND TABLE_NAME = ?'
+        );
+        $stmt->execute([$index, $table]);
+        if ((int)$stmt->fetchColumn() > 0) {
+            return;
+        }
+        $db->exec('ALTER TABLE `' . $table . '` ADD INDEX `' . $index . '` (' . $columnList . ')');
+    }
+}
+
 if (!function_exists('waRequireAuth')) {
     function waRequireAuth(): array {
         if (session_status() === PHP_SESSION_NONE) session_start();
@@ -227,8 +296,8 @@ if (!function_exists('waSyncRosterToChats')) {
     function waSyncRosterToChats(PDO $db, string $academicYear, string $std, string $division, string $semester): array {
         // Ensure whatsapp_chats has the linked columns
         try {
-            $db->exec("ALTER TABLE whatsapp_chats ADD COLUMN IF NOT EXISTS linked_student_roll VARCHAR(20) DEFAULT NULL");
-            $db->exec("ALTER TABLE whatsapp_chats ADD COLUMN IF NOT EXISTS linked_class_key VARCHAR(100) DEFAULT NULL");
+            hccEnsureColumn($db, 'whatsapp_chats', 'linked_student_roll', 'VARCHAR(20) DEFAULT NULL');
+            hccEnsureColumn($db, 'whatsapp_chats', 'linked_class_key', 'VARCHAR(100) DEFAULT NULL');
         } catch (Throwable $e) {
             // Ignore if already exists or permission issues
         }

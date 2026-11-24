@@ -88,15 +88,23 @@ function findChrome(explicitPath) {
 }
 
 /**
- * Cross-platform resolution of IPC temporary directory.
- * On POSIX systems, /tmp is standard and shared across webserver and CLI users.
- * On Windows, /tmp does NOT exist, so os.tmpdir() is used.
+ * Cross-platform resolution of the bridge IPC directory.
+ * On POSIX, /tmp is shared by Apache and the bridge user.
+ * On Windows those two processes often have different temp folders, so flags
+ * live in storage/whatsapp/ipc inside this project. PHP waBridgeIpcDir() uses
+ * the same folder. WHATSAPP_IPC_DIR overrides both sides.
  */
 function getBridgeTempDir() {
   if (process.env.WHATSAPP_IPC_DIR && fs.existsSync(process.env.WHATSAPP_IPC_DIR)) {
     return process.env.WHATSAPP_IPC_DIR;
   }
-  if (process.platform !== 'win32' && fs.existsSync('/tmp')) {
+  if (process.platform === 'win32') {
+    const dir = path.join(__dirname, '..', 'storage', 'whatsapp', 'ipc');
+    try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+    if (fs.existsSync(dir)) return dir;
+    return os.tmpdir();
+  }
+  if (fs.existsSync('/tmp')) {
     return '/tmp';
   }
   return os.tmpdir();
@@ -3018,7 +3026,11 @@ this.browser = null;
   // waits forever for a WebSocket URL because this profile is still locked.
   killProfileBrowsers() {
     const marker = this.config.userDataDir;
-    if (!marker || process.platform === 'win32') return;
+    if (!marker) return;
+    if (process.platform === 'win32') {
+      this.killProfileBrowsersWin32(marker);
+      return;
+    }
     let out = '';
     try {
       out = require('child_process').execFileSync('ps', ['-ax', '-o', 'pid=,command='], {
@@ -3043,13 +3055,53 @@ this.browser = null;
     }
   }
 
+  // Windows has no `ps`. List process command lines and stop only Chrome or
+  // Edge that was started with this bridge profile. The path is matched in
+  // Node so it is never interpolated into the PowerShell command.
+  killProfileBrowsersWin32(marker) {
+    const needle = String(marker).toLowerCase();
+    let out = '';
+    try {
+      out = require('child_process').execFileSync('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine } | ForEach-Object { $_.ProcessId.ToString() + [char]9 + $_.CommandLine }"
+      ], { encoding: 'utf8', timeout: 15000, windowsHide: true });
+    } catch (e) {
+      return;
+    }
+    const pids = [];
+    for (const line of String(out).split(/\r?\n/)) {
+      const tab = line.indexOf('\t');
+      if (tab < 1) continue;
+      const pid = parseInt(line.slice(0, tab), 10);
+      const cmd = line.slice(tab + 1);
+      if (!(pid > 0) || pid === process.pid) continue;
+      if (!cmd.toLowerCase().includes(needle)) continue;
+      if (!/chrome|msedge|chromium/i.test(cmd)) continue;
+      pids.push(pid);
+    }
+    for (const pid of pids) {
+      try {
+        require('child_process').execFileSync('taskkill', ['/F', '/T', '/PID', String(pid)], {
+          stdio: 'ignore',
+          windowsHide: true
+        });
+      } catch (e) {}
+    }
+    if (pids.length) {
+      this.log('warn', `Stopped ${pids.length} leftover browser process(es) for this WhatsApp profile`);
+    }
+  }
+
   giveUp(reason) {
     if (this.shuttingDown || waSafety.isTestMode()) return;
     this.shuttingDown = true;
     this.log('error', reason);
     try { this.killProfileBrowsers(); } catch (e) {}
-    // LaunchAgent KeepAlive starts start-bridge.sh again. That script refuses a
-    // second copy and clears this profile, so the admin never runs a command.
+    // The supervisor starts this process again: launchd on macOS, systemd on
+    // Linux, and automation/windows/start-bridge.ps1 on Windows.
     process.exit(1);
   }
 

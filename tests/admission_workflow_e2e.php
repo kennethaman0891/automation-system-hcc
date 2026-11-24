@@ -36,6 +36,22 @@ function record(string $id, string $name, string $status, string $detail = ''): 
     }
 }
 
+function e2eEngineIsRunnable(string $path): bool {
+    if (!is_file($path)) {
+        return false;
+    }
+    if (PHP_OS_FAMILY !== 'Windows') {
+        return is_executable($path);
+    }
+    $fh = @fopen($path, 'rb');
+    if ($fh === false) {
+        return false;
+    }
+    $magic = fread($fh, 2);
+    fclose($fh);
+    return $magic === 'MZ';
+}
+
 function httpJson(string $url, string $method, ?array $body, string $cookie, array $headers = []): array {
     $ch = curl_init($url);
     $hdr = array_merge(['Accept: application/json'], $headers);
@@ -371,11 +387,11 @@ record('16', 'Verify audit history', $audit >= 3 && $timeline >= 4 ? 'PASS' : 'F
 // 17 recover a stuck job
 $exeSuffix = (PHP_OS_FAMILY === 'Windows') ? '.exe' : '';
 $engine = $root . '/automation/rust_engine/target/release/hcc-automation-engine' . $exeSuffix;
-if (!is_file($engine) && PHP_OS_FAMILY === 'Windows') {
+if (!e2eEngineIsRunnable($engine) && PHP_OS_FAMILY === 'Windows') {
     $engine = $root . '/automation/rust_engine/target/release/hcc-automation-engine';
 }
-if (!is_file($engine) || !$hasJobs) {
-    record('17', 'Restart recovery of a pending job', 'SKIP', is_file($engine) ? 'automation_jobs table missing' : 'Release binary not built');
+if (!e2eEngineIsRunnable($engine) || !$hasJobs) {
+    record('17', 'Restart recovery of a pending job', 'SKIP', e2eEngineIsRunnable($engine) ? 'automation_jobs table missing' : 'Release binary not built for this operating system');
 } else {
     $dedup = 'e2e_recover_' . $enquiryId . '_' . time();
     $db->prepare("
@@ -388,8 +404,9 @@ if (!is_file($engine) || !$hasJobs) {
         . ' --db-user ' . escapeshellarg((string)$env['DB_USER'])
         . ' --db-pass ' . escapeshellarg((string)$env['DB_PASS'])
         . ' --db-name ' . escapeshellarg((string)$env['DB_NAME']);
-    if (!empty($env['DB_SOCKET'])) {
-        $cmd .= ' --db-socket ' . escapeshellarg((string)$env['DB_SOCKET']);
+    $socketPath = (string)($env['DB_SOCKET'] ?? '');
+    if (PHP_OS_FAMILY !== 'Windows' && $socketPath !== '' && is_file($socketPath)) {
+        $cmd .= ' --db-socket ' . escapeshellarg($socketPath);
     }
     $out = [];
     $code = 0;

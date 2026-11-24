@@ -523,26 +523,51 @@ document.addEventListener('DOMContentLoaded', () => {
   const notifTrigger = document.getElementById('notifTrigger');
   const notifDropdown = document.getElementById('notifDropdown');
   const notifBadge = document.getElementById('notifBadge');
-  if (notifTrigger && notifDropdown) {
-    notifTrigger.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const isOpen = notifDropdown.classList.contains('show');
-      notifDropdown.classList.toggle('show');
-      if (!isOpen && notifBadge && notifBadge.style.display !== 'none') {
-        const csrfEl = document.querySelector('input[name="csrf_token"]') || document.getElementById('csrfToken');
-        const csrfToken = csrfEl ? csrfEl.value : '';
-        const fd = new FormData();
-        fd.append('action', 'mark_notifs_read');
-        if (csrfToken) fd.append('csrf_token', csrfToken);
-        fetch(window.location.pathname, { method: 'POST', body: fd })
-          .then(() => { notifBadge.style.display = 'none'; })
-          .catch(() => {});
-      }
-    });
+  if (notifTrigger && notifDropdown && !notifTrigger.dataset.notifBound) {
+    notifTrigger.dataset.notifBound = '1'; // guard against double binding
+    let markedRead = false;
+    const setOpen = (open) => {
+      notifDropdown.classList.toggle('show', open);
+      notifTrigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    const markRead = () => {
+      if (markedRead || !notifBadge) return;
+      markedRead = true;
+      const meta = document.querySelector('meta[name="csrf-token"]');
+      const csrfEl = document.querySelector('input[name="csrf_token"]') || document.getElementById('csrfToken');
+      const csrfToken = (meta && meta.content) || (csrfEl ? csrfEl.value : '');
+      const fd = new FormData();
+      if (csrfToken) fd.append('csrf_token', csrfToken);
+      const base = (window.location.pathname.match(/^(.*\/admin\/)/) || [, ''])[1];
+      fetch(base + 'api_notifications_read.php', {
+        method: 'POST', body: fd, credentials: 'same-origin',
+        headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {}
+      })
+        .then((r) => r.json())
+        .then((d) => {
+          if (!d || !d.ok) { markedRead = false; return; }
+          notifBadge.style.display = 'none';
+          notifTrigger.classList.remove('has-unread');
+          notifTrigger.setAttribute('aria-label', 'Notifications');
+          notifDropdown.querySelectorAll('.notif-item.is-unread').forEach((el) => el.classList.remove('is-unread'));
+        })
+        .catch(() => { markedRead = false; });
+    };
 
+    notifTrigger.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const willOpen = !notifDropdown.classList.contains('show');
+      setOpen(willOpen);
+      if (willOpen) markRead();
+    });
     document.addEventListener('click', (e) => {
-      if (!notifDropdown.contains(e.target) && e.target !== notifTrigger) {
-        notifDropdown.classList.remove('show');
+      if (!notifDropdown.contains(e.target) && !notifTrigger.contains(e.target)) setOpen(false);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && notifDropdown.classList.contains('show')) {
+        setOpen(false);
+        notifTrigger.focus();
       }
     });
   }

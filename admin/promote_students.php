@@ -250,103 +250,6 @@ $notifData = rcGetRecentNotifications(8);
         .promo-stat-val { font-size: 1.35rem; font-weight: 800; color: var(--text); line-height: 1.1; }
         .promo-stat-lbl { font-size: 0.78rem; color: var(--muted); font-weight: 500; margin-top: 4px; }
 
-        /* Notification bell styling */
-        .notif-container {
-            position: relative;
-            display: inline-block;
-            margin-right: 16px;
-        }
-        .notif-trigger {
-            background: transparent;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            width: 38px;
-            height: 38px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            color: var(--text);
-            position: relative;
-            transition: all 0.15s ease;
-        }
-        .notif-trigger:hover {
-            background: var(--bg);
-            border-color: var(--accent);
-            color: var(--accent);
-        }
-        .notif-badge {
-            position: absolute;
-            top: -5px;
-            right: -5px;
-            background: #dc2626;
-            color: #fff;
-            font-size: 0.65rem;
-            font-weight: 700;
-            border-radius: 10px;
-            padding: 2px 6px;
-            border: 2px solid #fff;
-            min-width: 18px;
-            text-align: center;
-        }
-        .notif-dropdown {
-            display: none;
-            position: absolute;
-            right: 0;
-            top: 44px;
-            width: 360px;
-            background: var(--paper);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            box-shadow: var(--shadow-lg);
-            z-index: 1000;
-            overflow: hidden;
-            animation: fadeIn 0.15s ease;
-        }
-        .notif-dropdown.show { display: block; }
-        .notif-dropdown-header {
-            padding: 12px 16px;
-            border-bottom: 1px solid var(--border);
-            background: var(--bg);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            font-size: 0.85rem;
-            font-weight: 700;
-        }
-        .notif-dropdown-list {
-            max-height: 380px;
-            overflow-y: auto;
-        }
-        .notif-item {
-            padding: 12px 16px;
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            gap: 12px;
-            font-size: 0.82rem;
-            line-height: 1.4;
-            transition: background 0.15s ease;
-            text-decoration: none;
-            color: inherit;
-        }
-        .notif-item:hover { background: #fafaf9; }
-        .notif-item:last-child { border-bottom: none; }
-        .notif-item-icon {
-            width: 32px;
-            height: 32px;
-            border-radius: 8px;
-            background: #fee2e2;
-            color: #991b1b;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-            font-size: 0.85rem;
-        }
-        .notif-item-title { font-weight: 700; color: var(--text); margin-bottom: 2px; }
-        .notif-item-desc { color: var(--muted); font-size: 0.78rem; margin-bottom: 4px; }
-        .notif-item-time { color: #94a3b8; font-size: 0.72rem; }
-
         /* Overview Table */
         .classes-card {
             background: var(--paper);
@@ -520,43 +423,7 @@ $notifData = rcGetRecentNotifications(8);
 
                 <div class="header-actions" style="display:flex;align-items:center;">
                     <!-- Notification Bell -->
-                    <div class="notif-container" id="notifContainer">
-                        <button type="button" class="notif-trigger" id="notifTrigger" title="Recent Activity Notifications" aria-label="Notifications">
-                            <i class="fas fa-bell"></i>
-                            <?php if ($notifData['unread'] > 0): ?>
-                                <span class="notif-badge" id="notifBadge"><?= (int)$notifData['unread'] ?></span>
-                            <?php endif; ?>
-                        </button>
-                        <div class="notif-dropdown" id="notifDropdown">
-                            <div class="notif-dropdown-header">
-                                <span><i class="fas fa-bell"></i> Promotion & System Alerts</span>
-                                <span style="font-size:0.75rem;color:var(--muted);"><?= count($notifData['items']) ?> events</span>
-                            </div>
-                            <div class="notif-dropdown-list">
-                                <?php if (empty($notifData['items'])): ?>
-                                    <div style="padding:24px;text-align:center;color:var(--muted);font-size:0.82rem;">
-                                        <i class="fas fa-bell-slash" style="font-size:1.5rem;display:block;margin-bottom:8px;opacity:0.5;"></i>
-                                        No recent promotion notifications.
-                                    </div>
-                                <?php else: ?>
-                                    <?php foreach ($notifData['items'] as $nt): ?>
-                                        <a href="<?= !empty($nt['link']) ? sanitize($nt['link']) : '#' ?>" class="notif-item">
-                                            <div class="notif-item-icon">
-                                                <i class="fas <?= $nt['type']==='promotion' ? 'fa-graduation-cap' : 'fa-info-circle' ?>"></i>
-                                            </div>
-                                            <div style="flex:1;">
-                                                <div class="notif-item-title"><?= sanitize($nt['title']) ?></div>
-                                                <div class="notif-item-desc"><?= sanitize($nt['message']) ?></div>
-                                                <div class="notif-item-time">
-                                                    <i class="far fa-clock"></i> <?= date('M d, Y • h:i A', strtotime($nt['created_at'])) ?>
-                                                </div>
-                                            </div>
-                                        </a>
-                                    <?php endforeach; ?>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                    </div>
+                    <?php require __DIR__ . '/includes/notif_bell.php'; ?>
 
                     <!-- User Chip -->
                     <div class="admin-user">

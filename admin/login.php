@@ -288,8 +288,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </head>
 <body class="bg-body-tertiary login-page">
     <div class="container-fluid px-0">
-        <div class="row g-0 login-shell">
-            <aside class="login-aside col-lg-5 d-none d-lg-flex flex-column justify-content-between text-bg-primary">
+        <div class="row g-0 min-vh-100 login-shell">
+            <aside class="login-aside col-lg-6 d-none d-lg-flex flex-column justify-content-between p-4 p-xl-5 text-white">
                 <header class="d-flex align-items-center gap-3">
                     <img class="login-mark rounded-3 bg-white p-1" src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="">
                     <div>
@@ -298,40 +298,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </div>
                 </header>
 
-                <div class="login-pitch">
+                <div class="login-pitch my-auto py-4">
                     <p class="mb-2">
                         <span class="badge rounded-pill text-bg-light text-primary">
                             <i class="fa-solid fa-graduation-cap me-1" aria-hidden="true"></i>Administrative portal
                         </span>
                     </p>
-                    <h2 class="login-heading fw-semibold">Campus automation and <span class="login-accent text-nowrap">academic records</span></h2>
-                    <p class="login-lead opacity-75">Streamlined management of student marks, automated progress reports, instant WhatsApp communication, and administration.</p>
-                    <ul class="login-features list-unstyled d-grid mb-0">
+                    <p class="login-heading h2 fw-semibold">Academic records &amp; <span class="login-accent">exam timetables</span></p>
+                    <p class="login-lead opacity-75">Manage student marks, unit tests, report cards, and examination schedules in one place.</p>
+                    <ul class="login-features list-unstyled d-grid gap-3 mb-0">
                         <li class="d-flex align-items-start gap-3">
-                            <span class="login-icon rounded-3 bg-white bg-opacity-10 d-inline-flex align-items-center justify-content-center flex-shrink-0">
+                            <span class="login-icon rounded-3 d-inline-flex align-items-center justify-content-center flex-shrink-0">
                                 <i class="fa-solid fa-file-invoice" aria-hidden="true"></i>
                             </span>
                             <span>
-                                <span class="fw-semibold d-block">Automated progress reports</span>
-                                <span class="small opacity-75">Instant marksheets, grading calculations and unit tests</span>
+                                <span class="fw-semibold d-block">Results &amp; Report Cards</span>
+                                <span class="small opacity-75">Semester marksheets, unit tests, and automated grade calculations</span>
                             </span>
                         </li>
                         <li class="d-flex align-items-start gap-3">
-                            <span class="login-icon rounded-3 bg-white bg-opacity-10 d-inline-flex align-items-center justify-content-center flex-shrink-0">
-                                <i class="fa-brands fa-whatsapp" aria-hidden="true"></i>
+                            <span class="login-icon rounded-3 d-inline-flex align-items-center justify-content-center flex-shrink-0">
+                                <i class="fa-solid fa-calendar-days" aria-hidden="true"></i>
                             </span>
                             <span>
-                                <span class="fw-semibold d-block">Direct parent WhatsApp dispatch</span>
-                                <span class="small opacity-75">One-click delivery of PDF report cards and official notices</span>
+                                <span class="fw-semibold d-block">Exam Timetable &amp; Seating</span>
+                                <span class="small opacity-75">Class schedules, subject time slots, and exam seating plans</span>
                             </span>
                         </li>
                         <li class="d-flex align-items-start gap-3">
-                            <span class="login-icon rounded-3 bg-white bg-opacity-10 d-inline-flex align-items-center justify-content-center flex-shrink-0">
-                                <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
+                            <span class="login-icon rounded-3 d-inline-flex align-items-center justify-content-center flex-shrink-0">
+                                <i class="fa-solid fa-user-graduate" aria-hidden="true"></i>
                             </span>
                             <span>
-                                <span class="fw-semibold d-block">Secure role-based access</span>
-                                <span class="small opacity-75">Protected sessions, audit trails, and multi-tier admin control</span>
+                                <span class="fw-semibold d-block">Student Records &amp; Promotion</span>
+                                <span class="small opacity-75">Class promotions, bonafide certificates, and archived records</span>
                             </span>
                         </li>
                     </ul>
@@ -343,28 +343,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </footer>
             </aside>
 
-            <main class="login-main col-lg-7 d-flex justify-content-center" aria-label="Admin login">
-                <div class="login-wrap">
-                    <div class="login-mobile-brand d-lg-none">
-                        <img class="login-mark rounded-3 border bg-white" src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="">
-                        <div>
+            <main class="login-main col-12 col-lg-6 d-flex flex-column align-items-center justify-content-center px-3 py-4 p-sm-4 p-xl-5" aria-label="Admin login">
+                <div class="login-wrap w-100 mx-auto">
+                    <div class="login-mobile-brand d-flex d-lg-none align-items-center gap-3 p-3 mb-3 rounded-4 text-white">
+                        <img class="login-mark rounded-3 border bg-white p-1 flex-shrink-0" src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="Hindustani Covenant Church High School logo">
+                        <div class="login-min-w-0">
                             <p class="fw-semibold mb-0 lh-sm">Hindustani Covenant Church High School</p>
-                            <p class="small text-secondary mb-0">Admin portal &middot; Solapur</p>
+                            <p class="small mb-0 opacity-75">Admin portal &middot; Solapur</p>
                         </div>
                     </div>
 
-                    <div class="card shadow-sm login-card">
-                        <div class="card-body">
-                            <header class="login-head">
-                                <p class="login-kicker">Administrator access</p>
-                                <h1 class="login-title">Sign in</h1>
-                                <p class="login-intro">Use your school account to open the admin panel.</p>
+                    <div class="d-none d-lg-flex align-items-center justify-content-between mb-3 px-1 small text-body-secondary">
+                        <span class="d-inline-flex align-items-center gap-2 fw-semibold">
+                            <i class="fa-solid fa-building-columns text-primary" aria-hidden="true"></i>
+                            <span>HCC High School &middot; Solapur Campus</span>
+                        </span>
+                        <span class="badge rounded-pill text-bg-light border text-body-emphasis d-inline-flex align-items-center gap-2 px-3 py-2 fw-semibold">
+                            <span class="login-status-dot" aria-hidden="true"></span>
+                            <span>Encrypted session</span>
+                        </span>
+                    </div>
+
+                    <div class="card border shadow-sm login-card">
+                        <div class="card-body p-3 p-sm-4 p-md-5 p-lg-4 p-xl-5">
+                            <header class="pb-3 mb-4 border-bottom">
+                                <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+                                    <span class="badge rounded-pill login-kicker d-inline-flex align-items-center gap-1">
+                                        <i class="fa-solid fa-user-shield" aria-hidden="true"></i>
+                                        <span>Administrator access</span>
+                                    </span>
+                                    <span class="badge rounded-pill login-portal-tag">Staff Portal</span>
+                                </div>
+                                <div class="d-flex align-items-center gap-3">
+                                    <span class="login-head-seal d-none d-sm-inline-flex flex-shrink-0" aria-hidden="true">
+                                        <img src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="">
+                                    </span>
+                                    <div class="login-min-w-0">
+                                        <h1 class="h3 fw-bold mb-1 login-title" id="loginFormHeading">Sign in to your account</h1>
+                                        <p class="small text-body-secondary mb-0">Enter your administrator credentials or continue with your verified school Google account.</p>
+                                    </div>
+                                </div>
                             </header>
 
                             <?php if ($success !== ''): ?>
-                                <div class="alert alert-success login-alert d-flex gap-2" role="status">
-                                    <i class="fa-solid <?= htmlspecialchars($successIcon, ENT_QUOTES, 'UTF-8') ?> mt-1" aria-hidden="true"></i>
-                                    <div>
+                                <div class="alert alert-success login-alert d-flex align-items-start gap-2 mb-3" role="status">
+                                    <i class="fa-solid <?= htmlspecialchars($successIcon, ENT_QUOTES, 'UTF-8') ?> mt-1 flex-shrink-0" aria-hidden="true"></i>
+                                    <div class="login-min-w-0">
                                         <div class="fw-semibold"><?= htmlspecialchars($successTitle, ENT_QUOTES, 'UTF-8') ?></div>
                                         <div><?= htmlspecialchars($success, ENT_QUOTES, 'UTF-8') ?></div>
                                     </div>
@@ -372,9 +396,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <?php endif; ?>
 
                             <?php if ($error): ?>
-                                <div class="alert alert-<?= htmlspecialchars($errorTone, ENT_QUOTES, 'UTF-8') ?> login-alert d-flex gap-2" role="alert">
-                                    <i class="fa-solid <?= htmlspecialchars($errorIcon, ENT_QUOTES, 'UTF-8') ?> mt-1" aria-hidden="true"></i>
-                                    <div>
+                                <div class="alert alert-<?= htmlspecialchars($errorTone, ENT_QUOTES, 'UTF-8') ?> login-alert d-flex align-items-start gap-2 mb-3" role="alert">
+                                    <i class="fa-solid <?= htmlspecialchars($errorIcon, ENT_QUOTES, 'UTF-8') ?> mt-1 flex-shrink-0" aria-hidden="true"></i>
+                                    <div class="login-min-w-0">
                                         <?php if ($errorTitle !== ''): ?>
                                             <div class="fw-semibold"><?= htmlspecialchars($errorTitle, ENT_QUOTES, 'UTF-8') ?></div>
                                         <?php endif; ?>
@@ -387,13 +411,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $attemptsCount = max((int)($_SESSION['login_attempts'] ?? 0), (int)($ipAttempts ?? 0));
                                 if (!$locked && $attemptsCount >= 3):
                             ?>
-                                <div class="alert alert-warning login-alert d-flex align-items-center gap-2" role="alert">
+                                <div class="alert alert-warning login-alert d-flex align-items-center gap-2 mb-3" role="alert">
                                     <i class="fa-solid fa-triangle-exclamation flex-shrink-0" aria-hidden="true"></i>
-                                    <span>Notice: <?= max(0, 5 - $attemptsCount) ?> attempt(s) remaining before a 15-minute lockout.</span>
+                                    <?php $attemptsLeft = max(0, LOGIN_MAX_ATTEMPTS - $attemptsCount); ?>
+                                    <div class="login-min-w-0">
+                                        Notice: <strong><?= $attemptsLeft ?> attempt<?= $attemptsLeft === 1 ? '' : 's' ?></strong> remaining before a <?= (int) (LOGIN_WINDOW_SECONDS / 60) ?>-minute lockout.
+                                    </div>
                                 </div>
                             <?php endif; ?>
 
-                            <a href="<?= htmlspecialchars($googleAuthUrl) ?>" class="btn btn-outline-secondary w-100 d-inline-flex align-items-center justify-content-center gap-2" id="googleSignInBtn" title="Sign in with your Google Account">
+                            <form method="POST" action="login.php" id="loginForm" autocomplete="on" aria-labelledby="loginFormHeading">
+                                <?= csrfField() ?>
+                                <div class="mb-3">
+                                    <label for="username" class="form-label fw-semibold small text-uppercase">Username</label>
+                                    <div class="input-group input-group-lg login-input-group">
+                                        <span class="input-group-text" aria-hidden="true"><i class="fa-solid fa-user"></i></span>
+                                        <input type="text" class="form-control" id="username" name="username" required
+                                            placeholder="Enter username" autofocus autocomplete="username"
+                                            autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="next"
+                                            value="<?= htmlspecialchars($usernameVal, ENT_QUOTES, 'UTF-8') ?>"
+                                            <?= $locked ? 'disabled' : '' ?>>
+                                    </div>
+                                </div>
+
+                                <div class="mb-4">
+                                    <div class="d-flex justify-content-between align-items-baseline gap-2 mb-2">
+                                        <label for="password" class="form-label fw-semibold small text-uppercase mb-0">Password</label>
+                                        <a href="forgot_password.php" class="small fw-semibold text-decoration-none login-forgot">Forgot password?</a>
+                                    </div>
+                                    <div class="input-group input-group-lg login-input-group">
+                                        <span class="input-group-text" aria-hidden="true"><i class="fa-solid fa-lock"></i></span>
+                                        <input type="password" class="form-control" id="password" name="password" required
+                                            placeholder="Enter password" autocomplete="current-password" enterkeyhint="done"
+                                            aria-describedby="capsNote"
+                                            <?= $locked ? 'disabled' : '' ?>>
+                                        <button type="button" class="btn login-pw-toggle" id="pwToggle"
+                                            aria-label="Show password" aria-pressed="false" aria-controls="password"
+                                            title="Show / hide password" <?= $locked ? 'disabled' : '' ?>>
+                                            <i class="fa-solid fa-eye" id="pwIcon" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+                                    <div class="form-text text-warning-emphasis mt-2" id="capsNote" role="status" aria-live="polite" hidden>
+                                        <i class="fa-solid fa-keyboard me-1" aria-hidden="true"></i>Caps Lock is turned on
+                                    </div>
+                                </div>
+
+                                <button type="submit" class="btn btn-primary btn-lg w-100 d-inline-flex align-items-center justify-content-center gap-2 fw-semibold" id="loginBtn" <?= $locked ? 'disabled' : '' ?>>
+                                    <i class="fa-solid fa-arrow-right-to-bracket btn-ico" aria-hidden="true"></i>
+                                    <i class="fa-solid fa-spinner fa-spin btn-spin" aria-hidden="true"></i>
+                                    <span><?= $locked ? 'Temporarily locked' : 'Sign in to Dashboard' ?></span>
+                                </button>
+                            </form>
+
+                            <div class="login-divider d-flex align-items-center my-4" role="separator" aria-label="or continue with">
+                                <hr class="flex-grow-1 m-0">
+                                <span class="px-3 small fw-bold text-uppercase text-body-tertiary">or continue with</span>
+                                <hr class="flex-grow-1 m-0">
+                            </div>
+
+                            <a href="<?= htmlspecialchars($googleAuthUrl, ENT_QUOTES, 'UTF-8') ?>" class="btn btn-light border btn-lg w-100 d-inline-flex align-items-center justify-content-center gap-2 fw-semibold login-google" id="googleSignInBtn" title="Sign in with your Google Account">
                                 <svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true">
                                     <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
                                     <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
@@ -403,53 +479,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 <span>Sign in with Google</span>
                             </a>
 
-                            <div class="login-divider d-flex align-items-center">
-                                <hr class="flex-grow-1 m-0">
-                                <span>or</span>
-                                <hr class="flex-grow-1 m-0">
-                            </div>
-
-                            <form method="POST" action="login.php" id="loginForm" autocomplete="on">
-                                <?= csrfField() ?>
-                                <div class="login-field">
-                                    <label for="username" class="form-label">Username</label>
-                                    <div class="input-group">
-                                        <span class="input-group-text"><i class="fa-solid fa-user" aria-hidden="true"></i></span>
-                                        <input type="text" class="form-control" id="username" name="username" required
-                                            placeholder="Enter your username" autofocus autocomplete="username"
-                                            autocapitalize="none" spellcheck="false"
-                                            value="<?= htmlspecialchars($usernameVal, ENT_QUOTES, 'UTF-8') ?>"
-                                            <?= $locked ? 'disabled' : '' ?>>
-                                    </div>
-                                </div>
-
-                                <div class="login-field">
-                                    <div class="login-field-head d-flex justify-content-between align-items-baseline gap-2">
-                                        <label for="password" class="form-label mb-0">Password</label>
-                                        <a href="forgot_password.php" class="login-forgot">Forgot password?</a>
-                                    </div>
-                                    <div class="input-group">
-                                        <span class="input-group-text"><i class="fa-solid fa-lock" aria-hidden="true"></i></span>
-                                        <input type="password" class="form-control" id="password" name="password" required
-                                            placeholder="Enter your password" autocomplete="current-password"
-                                            <?= $locked ? 'disabled' : '' ?>>
-                                        <button type="button" class="btn btn-outline-secondary" id="pwToggle" aria-label="Show password" title="Show / hide password">
-                                            <i class="fa-solid fa-eye" id="pwIcon" aria-hidden="true"></i>
-                                        </button>
-                                    </div>
-                                    <div class="form-text text-warning-emphasis" id="capsNote" hidden>
-                                        <i class="fa-solid fa-circle-info" aria-hidden="true"></i> Caps Lock is on
-                                    </div>
-                                </div>
-
-                                <button type="submit" class="btn btn-primary w-100 d-inline-flex align-items-center justify-content-center gap-2" id="loginBtn" <?= $locked ? 'disabled' : '' ?>>
-                                    <i class="fa-solid fa-arrow-right-to-bracket btn-ico" aria-hidden="true"></i>
-                                    <i class="fa-solid fa-spinner fa-spin btn-spin" aria-hidden="true"></i>
-                                    <span><?= $locked ? 'Temporarily locked' : 'Sign in' ?></span>
-                                </button>
-                            </form>
+                            <footer class="d-flex flex-column flex-sm-row align-items-start align-items-sm-center justify-content-between gap-2 pt-3 mt-4 border-top small text-body-secondary">
+                                <span class="d-inline-flex align-items-center gap-2">
+                                    <i class="fa-solid fa-shield-halved text-primary" aria-hidden="true"></i>
+                                    <span>CSRF &amp; brute-force protected</span>
+                                </span>
+                                <span class="d-inline-flex align-items-center gap-2">
+                                    <i class="fa-regular fa-clock text-primary" aria-hidden="true"></i>
+                                    <span>30-min idle auto-logout</span>
+                                </span>
+                            </footer>
                         </div>
                     </div>
+
+                    <p class="text-center small text-body-secondary mt-3 mb-0">
+                        Authorized school personnel only &bull; Activity is logged for security auditing
+                    </p>
                 </div>
             </main>
         </div>

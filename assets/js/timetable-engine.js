@@ -387,53 +387,43 @@
       const input = e.target;
       if (!input || !input.matches('.cell-subject-input')) return;
 
-      const td = input.closest('.td-matrix-cell');
-      if (!td) return;
+      const cell = input.closest('.td-matrix-cell');
+      if (!cell) return;
 
-      const tr = td.closest('tr');
-      if (!tr) return;
+      const slotRow = cell.closest('tr');
+      if (!slotRow) return;
 
-      const colId = td.dataset.colId;
-      const allRows = Array.from(this.container.querySelectorAll('#timetableMatrixTable tbody tr'));
-      const currentRowIdx = allRows.indexOf(tr);
+      const colId = cell.dataset.colId;
+      const allRows = Array.from(this.container.querySelectorAll('#timetableMatrixTable tbody tr[data-slot-id]'));
+      const currentRowIdx = allRows.indexOf(slotRow);
+
+      const focusInput = (nextInput) => {
+        if (!nextInput) return;
+        nextInput.focus();
+        nextInput.select();
+      };
 
       if (e.key === 'ArrowDown' || (e.key === 'Enter' && !e.shiftKey)) {
         e.preventDefault();
         const nextRow = allRows[currentRowIdx + 1];
         if (nextRow) {
-          const nextInput = nextRow.querySelector(`.td-matrix-cell[data-col-id="${colId}"] .cell-subject-input`);
-          if (nextInput) {
-            nextInput.focus();
-            nextInput.select();
-          }
+          focusInput(nextRow.querySelector(`.td-matrix-cell[data-col-id="${colId}"] .cell-subject-input`));
         }
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         const prevRow = allRows[currentRowIdx - 1];
         if (prevRow) {
-          const prevInput = prevRow.querySelector(`.td-matrix-cell[data-col-id="${colId}"] .cell-subject-input`);
-          if (prevInput) {
-            prevInput.focus();
-            prevInput.select();
-          }
+          focusInput(prevRow.querySelector(`.td-matrix-cell[data-col-id="${colId}"] .cell-subject-input`));
         }
       } else if (e.key === 'ArrowRight' && input.selectionEnd === input.value.length) {
-        const nextCell = td.nextElementSibling;
+        const nextCell = cell.nextElementSibling;
         if (nextCell && nextCell.matches('.td-matrix-cell')) {
-          const nextInput = nextCell.querySelector('.cell-subject-input');
-          if (nextInput) {
-            nextInput.focus();
-            nextInput.select();
-          }
+          focusInput(nextCell.querySelector('.cell-subject-input'));
         }
       } else if (e.key === 'ArrowLeft' && input.selectionStart === 0) {
-        const prevCell = td.previousElementSibling;
+        const prevCell = cell.previousElementSibling;
         if (prevCell && prevCell.matches('.td-matrix-cell')) {
-          const prevInput = prevCell.querySelector('.cell-subject-input');
-          if (prevInput) {
-            prevInput.focus();
-            prevInput.select();
-          }
+          focusInput(prevCell.querySelector('.cell-subject-input'));
         }
       }
     }
@@ -848,10 +838,9 @@
       this.setDirty(true);
       this.render();
 
-      // Scroll matrix to bottom
-      const matrixWrap = this.container.querySelector('.timetable-matrix-container');
-      if (matrixWrap) {
-        matrixWrap.scrollTop = matrixWrap.scrollHeight;
+      const newRow = this.container.querySelector(`#timetableMatrixTable tr[data-date-id="${newDateId}"]`);
+      if (newRow) {
+        newRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
 
       this.showToast(`Added date ${nextDateStr} (${dayName})`, 'success');
@@ -1499,7 +1488,7 @@
               <span class="tt-metric-label">Active Examination</span>
               <span class="tt-metric-value" title="${this.escapeHtml(title)}">${this.escapeHtml(title)}</span>
               <span class="tt-metric-sub">
-                <span class="badge-status ${this.escapeHtml(status)}" style="padding:2px 8px;font-size:0.68rem;">
+                <span class="badge-status ${this.escapeHtml(status)}">
                   <span class="beacon-dot"></span> ${this.escapeHtml(status.toUpperCase())}
                 </span>
                 <span>• AY ${this.escapeHtml(year)}</span>
@@ -1514,7 +1503,7 @@
             <div class="tt-metric-body">
               <span class="tt-metric-label">Schedule Span</span>
               <span class="tt-metric-value">${Number(daysCount) || 0} Exam Days</span>
-              <span class="tt-metric-sub"><i class="fa-regular fa-calendar-check" style="color:#0284c7;"></i> ${this.escapeHtml(dateRangeStr)}</span>
+              <span class="tt-metric-sub"><i class="fa-regular fa-calendar-check"></i> ${this.escapeHtml(dateRangeStr)}</span>
             </div>
           </div>
 
@@ -1525,7 +1514,7 @@
             <div class="tt-metric-body">
               <span class="tt-metric-label">Standards Covered</span>
               <span class="tt-metric-value">${Number(classCount) || 0} Classes</span>
-              <span class="tt-metric-sub"><i class="fa-solid fa-layer-group" style="color:#8a6d0f;"></i> ${this.state.columns.slice(0, 3).map((c) => this.escapeHtml(c.label)).join(', ')}${classCount > 3 ? '...' : ''}</span>
+              <span class="tt-metric-sub"><i class="fa-solid fa-layer-group"></i> ${this.state.columns.slice(0, 3).map((c) => this.escapeHtml(c.label)).join(', ')}${classCount > 3 ? '...' : ''}</span>
             </div>
           </div>
 
@@ -1536,7 +1525,7 @@
             <div class="tt-metric-body">
               <span class="tt-metric-label">Sessions &amp; Slots</span>
               <span class="tt-metric-value">${slotsCount} Slots</span>
-              <span class="tt-metric-sub"><i class="fa-solid fa-check-double" style="color:#059669;"></i> Math Rowspan Invariant Active</span>
+              <span class="tt-metric-sub"><i class="fa-solid fa-check-double"></i> Active Schedule Grid</span>
             </div>
           </div>
         </div>
@@ -2168,7 +2157,8 @@
                     )
                     .join('')}
                   <button type="button" class="preset-chip chip-add" data-action="show-add-preset" data-type="subject">
-                    <i class="fa-solid fa-plus"></i> Add Subject
+                    <i class="fa-solid fa-plus"></i>
+                    <span>Add Subject</span>
                   </button>
                   <div class="quick-add-form" data-type="subject" style="display:none;">
                     <input type="text" class="quick-add-input" placeholder="Subject name...">
@@ -2196,7 +2186,8 @@
                     )
                     .join('')}
                   <button type="button" class="preset-chip chip-add" data-action="show-add-preset" data-type="time">
-                    <i class="fa-solid fa-plus"></i> Add Slot
+                    <i class="fa-solid fa-plus"></i>
+                    <span>Add Slot</span>
                   </button>
                   <div class="quick-add-form" data-type="time" style="display:none;">
                     <input type="text" class="quick-add-input" placeholder="e.g. 09:00 AM - 12:00 PM">
@@ -2549,11 +2540,11 @@
                 <span>Save Schedule</span>
               </button>
               <button type="button" class="btn-timetable btn-secondary" data-action="add-date">
-                <i class="fa-solid fa-calendar-plus" style="color:var(--tt-brand);"></i>
+                <i class="fa-solid fa-calendar-plus"></i>
                 <span>+ Add Date</span>
               </button>
               <button type="button" class="btn-timetable btn-secondary" data-action="add-column">
-                <i class="fa-solid fa-chalkboard-user" style="color:var(--tt-gold-dark);"></i>
+                <i class="fa-solid fa-chalkboard-user"></i>
                 <span>+ Add Class</span>
               </button>
               <button type="button" class="btn-timetable btn-secondary" data-action="print-preview">
@@ -2579,27 +2570,22 @@
           <!-- 3. Priority #2: Advanced Manual Controls & Presets Collapsible Drawer -->
           ${this.renderSecondaryToolsHtml()}
 
-          <!-- 4. Dynamic Matrix Table Container -->
+          <!-- 4. Dynamic Matrix — fits the page, classes wrap instead of scrolling -->
           <div class="timetable-matrix-container">
-            <table class="timetable-matrix density-${this.matrixDensity || 'comfortable'}" id="timetableMatrixTable">
+            ${this.renderClassBarHtml()}
+            <table class="timetable-matrix density-${this.matrixDensity || 'comfortable'}" id="timetableMatrixTable" data-class-count="${this.state.columns.length}" aria-label="Examination timetable">
+              <colgroup>
+                <col class="tt-col-day">
+                <col class="tt-col-date">
+                <col class="tt-col-schedule">
+                <col class="tt-col-actions">
+              </colgroup>
               <thead>
                 <tr>
-                  <th class="th-sticky-day"><i class="fa-regular fa-calendar" style="margin-right:4px;"></i> DAY</th>
-                  <th class="th-sticky-date"><i class="fa-solid fa-calendar-day" style="margin-right:4px;"></i> DATE</th>
-                  <th class="th-sticky-time"><i class="fa-regular fa-clock" style="margin-right:4px;"></i> TIME / SLOT</th>
-                  ${this.state.columns
-                    .map(
-                      (col) => `
-                    <th class="th-class-col" data-col-id="${this.escapeHtml(col.id)}">
-                      <div class="th-class-content">
-                        <span class="th-class-label">${this.escapeHtml(col.label)}</span>
-                        <button type="button" class="btn-remove-col" data-action="remove-column" data-col-id="${this.escapeHtml(col.id)}" title="Remove Column">&times;</button>
-                      </div>
-                    </th>
-                  `
-                    )
-                    .join('')}
-                  <th class="th-actions"><i class="fa-solid fa-sliders" style="margin-right:4px;"></i> ACTIONS</th>
+                  <th class="th-sticky-day" scope="col"><span class="th-label"><i class="fa-regular fa-calendar" aria-hidden="true"></i> Day</span></th>
+                  <th class="th-sticky-date" scope="col"><span class="th-label"><i class="fa-solid fa-calendar-day" aria-hidden="true"></i> Date</span></th>
+                  <th class="th-schedule" scope="col"><span class="th-label"><i class="fa-regular fa-clock" aria-hidden="true"></i> Time and subjects</span></th>
+                  <th class="th-actions" scope="col"><span class="th-label"><i class="fa-solid fa-sliders" aria-hidden="true"></i> Actions</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -2633,24 +2619,50 @@
     }
 
     /**
-     * Mathematical Rowspan Invariant HTML Generator
+     * Class chips above the matrix. Removing a class lives here so the
+     * schedule grid can wrap instead of growing a sideways scrollbar.
+     */
+    renderClassBarHtml() {
+      const columns = this.state.columns || [];
+      if (!columns.length) return '';
+
+      return `
+        <div class="matrix-class-bar">
+          <span class="matrix-class-caption">Classes</span>
+          <div class="matrix-class-list">
+            ${columns
+              .map(
+                (col) => `
+              <span class="matrix-class-chip">
+                <span>${this.escapeHtml(col.label)}</span>
+                <button type="button" class="btn-remove-col" data-action="remove-column" data-col-id="${this.escapeHtml(col.id)}" aria-label="Remove ${this.escapeHtml(col.label)}">&times;</button>
+              </span>
+            `
+              )
+              .join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    /**
+     * One table row per time slot.
      *
-     * Rule:
-     * For any date row with N slots:
-     * - Slot 0 renders <td rowspan="N"> for Day and Date, and <td rowspan="N"> for Actions.
-     * - Slots 1..N-1 omit Day and Date cells and Actions cell!
-     * - Every slot renders Time cell and all Class column cells.
+     * For a date with N slots:
+     * - Slot 0 renders rowspan Day, Date, and Actions.
+     * - Later slots omit those cells.
+     * - Every slot renders one schedule cell: the time, then a wrapping grid of class subjects.
      */
     renderMatrixRowsHtml() {
       if (!this.state.rows || this.state.rows.length === 0) {
         return `
-          <tr>
-            <td colspan="${this.state.columns.length + 4}" style="text-align:center;padding:48px 20px;color:var(--tt-text-muted);">
-              <i class="fa-regular fa-calendar-xmark" style="font-size:2.4rem;color:#cbd5e1;display:block;margin-bottom:12px;"></i>
-              <strong>No examination dates scheduled yet.</strong>
-              <div style="margin-top:8px;">
+          <tr class="matrix-empty-row">
+            <td colspan="4">
+              <div class="matrix-empty">
+                <i class="fa-regular fa-calendar-xmark" aria-hidden="true"></i>
+                <strong>No examination dates scheduled yet.</strong>
                 <button type="button" class="btn-timetable btn-primary" data-action="add-date">
-                  <i class="fa-solid fa-plus"></i> Add First Exam Date
+                  <i class="fa-solid fa-plus" aria-hidden="true"></i> Add first exam date
                 </button>
               </div>
             </td>
@@ -2660,78 +2672,80 @@
 
       let html = '';
 
-      this.state.rows.forEach((dateObj) => {
+      this.state.rows.forEach((dateObj, dayIndex) => {
         const slots = dateObj.slots || [];
         const N = slots.length;
+        const band = dayIndex % 2 === 0 ? 'day-band' : 'day-band-alt';
 
         slots.forEach((slotObj, sIdx) => {
           const safeDateId = this.escapeHtml(dateObj.dateId);
           const safeSlotId = this.escapeHtml(slotObj.slotId);
-          html += `<tr data-date-id="${safeDateId}" data-slot-id="${safeSlotId}">`;
+          const rowClass = `${band} ${sIdx === 0 ? 'day-start' : 'day-continue'}`;
+          html += `<tr class="${rowClass}" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}">`;
 
-          // Slot 0: Renders the spanned Day and Date cells
           if (sIdx === 0) {
             html += `
               <td class="td-sticky-day" rowspan="${N}">
                 <span class="day-badge" data-date-id="${safeDateId}">${this.escapeHtml(dateObj.day)}</span>
               </td>
               <td class="td-sticky-date" rowspan="${N}">
-                <input type="date" class="date-picker-input" data-date-id="${safeDateId}" value="${this.escapeHtml(dateObj.date)}">
+                <input type="date" class="date-picker-input" data-date-id="${safeDateId}" value="${this.escapeHtml(dateObj.date)}" aria-label="Exam date for ${this.escapeHtml(dateObj.day)}">
               </td>
             `;
           }
-          // Slots 1..N-1: Omit Day and Date cells!
 
-          // Every Slot: Render Time cell
           html += `
-            <td class="td-sticky-time">
-              <div class="time-slot-wrapper">
-                <input type="text" class="time-slot-input" list="timeSlotsList" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}" value="${this.escapeHtml(slotObj.time)}" placeholder="Time slot...">
-                <button type="button" class="btn-slot-fill" data-action="fill-row" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}" title="Quick fill all classes for this time slot">
-                  <i class="fa-solid fa-wand-magic-sparkles"></i>
-                </button>
-                <button type="button" class="btn-slot-delete" data-action="delete-slot" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}" title="Delete time slot">
-                  <i class="fa-solid fa-xmark"></i>
-                </button>
+            <td class="td-slot-panel">
+              <div class="slot-block">
+                <div class="time-slot-wrapper">
+                  <input type="text" class="time-slot-input" list="timeSlotsList" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}" value="${this.escapeHtml(slotObj.time)}" placeholder="Time slot" aria-label="Time slot for ${this.escapeHtml(dateObj.day)}">
+                  <button type="button" class="btn-slot-fill" data-action="fill-row" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}" title="Fill this time slot" aria-label="Fill this time slot">
+                    <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
+                  </button>
+                  <button type="button" class="btn-slot-delete" data-action="delete-slot" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}" title="Delete this time slot" aria-label="Delete this time slot">
+                    <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                  </button>
+                </div>
+                <div class="class-grid">
+                  ${this.state.columns
+                    .map((col) => {
+                      const safeColId = this.escapeHtml(col.id);
+                      const cellValue = (slotObj.cells && slotObj.cells[col.id]) || '';
+                      const cat = this.escapeHtml(this.getSubjectCategory(cellValue));
+                      const isMatch = this.searchQuery && cellValue.toLowerCase().includes(this.searchQuery);
+                      return `
+                        <div class="td-matrix-cell" data-cat="${cat}" data-col-id="${safeColId}">
+                          <span class="cell-kicker">${this.escapeHtml(col.label)}</span>
+                          <input type="text" class="cell-subject-input ${isMatch ? 'cell-search-match' : ''}" list="subjectsList" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}" data-col-id="${safeColId}" value="${this.escapeHtml(cellValue)}" placeholder="Subject" aria-label="${this.escapeHtml(col.label)} subject">
+                        </div>
+                      `;
+                    })
+                    .join('')}
+                </div>
               </div>
             </td>
           `;
 
-          // Every Slot: Render Subject Cells for all columns with category accent
-          this.state.columns.forEach((col) => {
-            const safeColId = this.escapeHtml(col.id);
-            const cellValue = (slotObj.cells && slotObj.cells[col.id]) || '';
-            const cat = this.escapeHtml(this.getSubjectCategory(cellValue));
-            const isMatch = this.searchQuery && cellValue.toLowerCase().includes(this.searchQuery);
-            html += `
-              <td class="td-matrix-cell" data-cat="${cat}" data-col-id="${safeColId}">
-                <input type="text" class="cell-subject-input ${isMatch ? 'cell-search-match' : ''}" list="subjectsList" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}" data-col-id="${safeColId}" value="${this.escapeHtml(cellValue)}" placeholder="—">
-              </td>
-            `;
-          });
-
-          // Slot 0: Renders the spanned Row Actions cell
           if (sIdx === 0) {
             html += `
               <td class="td-row-actions" rowspan="${N}">
-                <div class="row-actions-pod" role="group" aria-label="Date actions">
+                <div class="row-actions-pod" role="group" aria-label="Actions for ${this.escapeHtml(dateObj.day)}">
                   <button type="button" class="row-pod-btn btn-add-slot-row" data-action="add-slot" data-date-id="${safeDateId}" title="Add another exam slot to this date">
-                    <i class="fa-solid fa-plus"></i>
+                    <i class="fa-solid fa-plus" aria-hidden="true"></i>
                     <span>Slot</span>
                   </button>
-                  <button type="button" class="row-pod-btn btn-fill-row" data-action="fill-row" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}" title="Quick fill all classes for this date with a subject">
-                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                  <button type="button" class="row-pod-btn btn-fill-row" data-action="fill-row" data-date-id="${safeDateId}" data-slot-id="${safeSlotId}" title="Fill every class on this date">
+                    <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
                     <span>Fill</span>
                   </button>
-                  <button type="button" class="row-pod-btn btn-delete-date-row" data-action="delete-date" data-date-id="${safeDateId}" title="Delete entire exam date">
-                    <i class="fa-regular fa-trash-can"></i>
-                    <span>Del</span>
+                  <button type="button" class="row-pod-btn btn-delete-date-row" data-action="delete-date" data-date-id="${safeDateId}" title="Delete this exam date">
+                    <i class="fa-regular fa-trash-can" aria-hidden="true"></i>
+                    <span>Delete</span>
                   </button>
                 </div>
               </td>
             `;
           }
-          // Slots 1..N-1: Omit Actions cell!
 
           html += `</tr>`;
         });

@@ -62,6 +62,24 @@ function verifyApiCSRF(): void {
     sendJson(['success' => false, 'error' => 'Security token invalid or expired. Please refresh the page.'], 403);
 }
 
+function afEngineFileIsRunnable(string $path, bool $isWin): bool {
+    if (!is_file($path)) {
+        return false;
+    }
+    if (!$isWin) {
+        return is_executable($path);
+    }
+    // A copied macOS checkout contains a Mach-O binary with no .exe suffix.
+    // Windows cannot run it. Accept only a PE executable (MZ header).
+    $fh = @fopen($path, 'rb');
+    if ($fh === false) {
+        return false;
+    }
+    $magic = fread($fh, 2);
+    fclose($fh);
+    return $magic === 'MZ';
+}
+
 function afFindEngineBinary(): string {
     $isWin = (PHP_OS_FAMILY === 'Windows');
     $exeSuffix = $isWin ? '.exe' : '';
@@ -74,7 +92,7 @@ function afFindEngineBinary(): string {
         $binaryCandidates[] = __DIR__ . '/../automation/rust_engine/target/release/hcc-automation-engine';
     }
     foreach ($binaryCandidates as $cand) {
-        if (file_exists($cand) && ($isWin || is_executable($cand))) {
+        if (afEngineFileIsRunnable($cand, $isWin)) {
             return $cand;
         }
     }

@@ -158,6 +158,7 @@ $adminNav = [
                 </div>
 
                 <div class="header-actions">
+                    <?php require __DIR__ . '/notif_bell.php'; ?>
                     <div class="admin-user" title="<?= htmlspecialchars($adminName, ENT_QUOTES, 'UTF-8') ?> — <?= htmlspecialchars($adminRole, ENT_QUOTES, 'UTF-8') ?>">
                         <span class="user-avatar" aria-hidden="true"><?= htmlspecialchars($adminInitials, ENT_QUOTES, 'UTF-8') ?></span>
                         <span class="user-meta">

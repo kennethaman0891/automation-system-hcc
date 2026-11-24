@@ -392,6 +392,59 @@ $notifData = rcGetRecentNotifications(8);
             font-size: 0.72rem; font-weight: 800; padding: 1px 6px; margin-left: 4px;
         }
         #utBulkDeleteBtn:disabled { opacity: 0.55; cursor: not-allowed; }
+        /* Quick actions: row 1 filters + primary actions, row 2 secondary + bulk actions, all neutral */
+        .ut-filter-bar { flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 14px; }
+        .ut-filter-top {
+            display: flex; align-items: flex-end; justify-content: space-between;
+            flex-wrap: wrap; gap: 12px 16px;
+        }
+        .ut-filter-inputs { align-items: flex-end; }
+        .ut-actions-primary {
+            display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+            margin-left: auto;
+        }
+        .ut-actions {
+            display: flex; align-items: center; justify-content: flex-start;
+            flex-wrap: wrap; gap: 8px;
+            padding-top: 14px; border-top: 1px solid var(--border, #e5e7eb);
+        }
+        .ut-actions-sep { width: 1px; align-self: stretch; min-height: 24px; background: var(--border, #e5e7eb); margin: 0 4px; }
+        .ut-autosave { font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
+        .ut-autosave:empty { display: none; }
+        .ut-filter-bar .btn,
+        .ut-filter-bar .btn.btn-whatsapp {
+            display: inline-flex; align-items: center; justify-content: center;
+            height: 36px; box-sizing: border-box; white-space: nowrap; vertical-align: middle;
+            background: var(--paper, #fff);
+            color: var(--text, #1f2937) !important;
+            border: 1px solid var(--border, #e5e7eb);
+            box-shadow: none;
+            font-weight: 600;
+            gap: 6px;
+            padding: 6px 14px;
+            font-size: 0.8rem;
+            border-radius: var(--radius-sm, 8px);
+            line-height: 1.5;
+            transform: none;
+            filter: none;
+        }
+        .ut-filter-bar .btn i { color: var(--text-2, #4b5563); width: 1em; text-align: center; flex-shrink: 0; }
+        .ut-filter-bar .btn:hover:not(:disabled),
+        .ut-filter-bar .btn.btn-whatsapp:hover:not(:disabled) {
+            background: var(--bg, #f3f4f6);
+            border-color: #cfc5c9;
+            color: var(--text, #1f2937) !important;
+            box-shadow: none;
+            transform: none;
+            filter: none;
+        }
+        .ut-filter-bar .btn:focus-visible { outline: 2px solid var(--text-2, #4b5563); outline-offset: 2px; }
+        .ut-filter-bar .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+        .ut-filter-bar .ut-bulk-count { background: var(--bg, #f3f4f6); color: var(--text, #1f2937); }
+        @media (max-width: 640px) {
+            .ut-actions-primary { width: 100%; margin-left: 0; justify-content: flex-start; }
+            .ut-actions-sep { display: none; }
+        }
         /* Bulk-delete confirm modal */
         .ut-confirm-modal { position: fixed; inset: 0; z-index: 1050; display: flex; align-items: center; justify-content: center; padding: 20px; }
         .ut-confirm-modal[hidden] { display: none; }
@@ -484,19 +537,6 @@ $notifData = rcGetRecentNotifications(8);
         .ut-cell-total { font-weight: 800; color: var(--brand-deep); background: rgba(201,162,39,0.10) !important; font-variant-numeric: tabular-nums; }
         .ut-cell-pct { font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
 
-        /* Notification Bell */
-        .notif-container { position:relative; display:inline-block; margin-right:16px; }
-        .notif-trigger { background:transparent; border:1px solid var(--border); border-radius:8px; width:38px; height:38px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--text); position:relative; transition:all 0.15s ease; }
-        .notif-trigger:hover { background:var(--bg); border-color:var(--accent); color:var(--accent); }
-        .notif-badge { position:absolute; top:-5px; right:-5px; background:#dc2626; color:#fff; font-size:0.65rem; font-weight:700; border-radius:10px; padding:2px 6px; border:2px solid #fff; min-width:18px; text-align:center; }
-        .notif-dropdown { display:none; position:absolute; right:0; top:44px; width:360px; background:var(--paper); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-lg); z-index:1000; overflow:hidden; }
-        .notif-dropdown.show { display:block; }
-        .notif-dropdown-header { padding:12px 16px; border-bottom:1px solid var(--border); background:var(--bg); display:flex; align-items:center; justify-content:space-between; font-size:0.85rem; font-weight:700; }
-        .notif-dropdown-list { max-height:380px; overflow-y:auto; }
-        .notif-item { padding:12px 16px; border-bottom:1px solid var(--border); display:flex; gap:12px; font-size:0.82rem; line-height:1.4; text-decoration:none; color:inherit; }
-        .notif-item:hover { background:#fafaf9; }
-        .notif-item-icon { width:32px; height:32px; border-radius:8px; background:#fee2e2; color:#991b1b; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:0.85rem; }
-
         /* Interactive Parent Signature Toggle */
         .ut-sign-toggle {
             width: 30px;
@@ -546,36 +586,7 @@ $notifData = rcGetRecentNotifications(8);
 
                 <div class="header-actions" style="display:flex;align-items:center;">
                     <!-- Notification Bell -->
-                    <div class="notif-container" id="notifContainer">
-                        <button type="button" class="notif-trigger" id="notifTrigger" title="Recent Activity Notifications" aria-label="Notifications">
-                            <i class="fas fa-bell"></i>
-                            <?php if ($notifData['unread'] > 0): ?>
-                                <span class="notif-badge" id="notifBadge"><?= (int)$notifData['unread'] ?></span>
-                            <?php endif; ?>
-                        </button>
-                        <div class="notif-dropdown" id="notifDropdown">
-                            <div class="notif-dropdown-header">
-                                <span><i class="fas fa-bell"></i> Recent Alerts & Activity</span>
-                                <span style="font-size:0.75rem;color:var(--muted);"><?= count($notifData['items']) ?> events</span>
-                            </div>
-                            <div class="notif-dropdown-list">
-                                <?php if (empty($notifData['items'])): ?>
-                                    <div style="padding:24px;text-align:center;color:var(--muted);font-size:0.82rem;">No recent notifications.</div>
-                                <?php else: ?>
-                                    <?php foreach ($notifData['items'] as $nt): ?>
-                                        <a href="<?= !empty($nt['link']) ? sanitize($nt['link']) : '#' ?>" class="notif-item">
-                                            <div class="notif-item-icon"><i class="fas fa-pen-to-square"></i></div>
-                                            <div style="flex:1;">
-                                                <div style="font-weight:700;color:var(--text);margin-bottom:2px;"><?= sanitize($nt['title']) ?></div>
-                                                <div style="color:var(--muted);font-size:0.78rem;"><?= sanitize($nt['message']) ?></div>
-                                                <div style="color:#94a3b8;font-size:0.72rem;margin-top:2px;"><i class="far fa-clock"></i> <?= date('M d, Y • h:i A', strtotime($nt['created_at'])) ?></div>
-                                            </div>
-                                        </a>
-                                    <?php endforeach; ?>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                    </div>
+                    <?php require __DIR__ . '/includes/notif_bell.php'; ?>
 
                     <div class="admin-user">
                         <i class="fas fa-user-circle"></i>
@@ -601,78 +612,77 @@ $notifData = rcGetRecentNotifications(8);
 
                 <!-- Filter & Class Selector Bar -->
                 <div class="ut-filter-bar">
-                    <form method="GET" class="ut-filter-inputs">
-                        <div>
-                            <label style="font-size:0.75rem;font-weight:700;color:var(--muted);display:block;margin-bottom:4px;">Academic Year</label>
-                            <select class="ut-select" name="year" onchange="this.form.submit()">
-                                <?php foreach ($yearOptions as $yOpt): ?>
-                                    <option value="<?= sanitize($yOpt) ?>" <?= $year === $yOpt ? 'selected' : '' ?>><?= sanitize($yOpt) ?></option>
-                                <?php endforeach; ?>
-                            </select>
+                    <!-- Row 1: class filters (left) + primary record actions (right) -->
+                    <div class="ut-filter-top">
+                        <form method="GET" class="ut-filter-inputs">
+                            <div>
+                                <label style="font-size:0.75rem;font-weight:700;color:var(--muted);display:block;margin-bottom:4px;">Academic Year</label>
+                                <select class="ut-select" name="year" onchange="this.form.submit()">
+                                    <?php foreach ($yearOptions as $yOpt): ?>
+                                        <option value="<?= sanitize($yOpt) ?>" <?= $year === $yOpt ? 'selected' : '' ?>><?= sanitize($yOpt) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label style="font-size:0.75rem;font-weight:700;color:var(--muted);display:block;margin-bottom:4px;">Standard</label>
+                                <select class="ut-select" name="std" onchange="this.form.submit()">
+                                    <?php for ($s = 1; $s <= 10; $s++): ?>
+                                        <option value="<?= $s ?>" <?= (string)$std === (string)$s ? 'selected' : '' ?>>STD <?= $s ?></option>
+                                    <?php endfor; ?>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label style="font-size:0.75rem;font-weight:700;color:var(--muted);display:block;margin-bottom:4px;">Division</label>
+                                <select class="ut-select" name="division" onchange="this.form.submit()">
+                                    <option value="A" <?= $division === 'A' ? 'selected' : '' ?>>Div A</option>
+                                    <option value="B" <?= $division === 'B' ? 'selected' : '' ?>>Div B</option>
+                                    <option value="C" <?= $division === 'C' ? 'selected' : '' ?>>Div C</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label style="font-size:0.75rem;font-weight:700;color:var(--muted);display:block;margin-bottom:4px;">Exam / Test Type</label>
+                                <select class="ut-select" name="test_type" onchange="this.form.submit()">
+                                    <option value="Unit Test 1" <?= $testType === 'Unit Test 1' ? 'selected' : '' ?>>Unit Test 1 (I)</option>
+                                    <option value="Unit Test 2" <?= $testType === 'Unit Test 2' ? 'selected' : '' ?>>Unit Test 2 (II)</option>
+                                    <option value="Unit Test 3" <?= $testType === 'Unit Test 3' ? 'selected' : '' ?>>Unit Test 3 (III)</option>
+                                    <option value="Unit Test 4" <?= $testType === 'Unit Test 4' ? 'selected' : '' ?>>Unit Test 4 (IV)</option>
+                                </select>
+                            </div>
+                        </form>
+
+                        <div class="ut-actions-primary">
+                            <span id="autoSaveStatus" class="ut-autosave"></span>
+                            <a href="unit_test_entry.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>&mode=new" class="btn btn-sm btn-primary" title="Add new student in dedicated entry page">
+                                <i class="fas fa-user-plus"></i> Add Student Entry
+                            </a>
+                            <button type="button" class="btn btn-sm btn-primary" onclick="document.getElementById('unitTestMatrixForm').submit();">
+                                <i class="fas fa-save"></i> Save Changes
+                            </button>
                         </div>
+                    </div>
 
-                        <div>
-                            <label style="font-size:0.75rem;font-weight:700;color:var(--muted);display:block;margin-bottom:4px;">Standard</label>
-                            <select class="ut-select" name="std" onchange="this.form.submit()">
-                                <?php for ($s = 1; $s <= 10; $s++): ?>
-                                    <option value="<?= $s ?>" <?= (string)$std === (string)$s ? 'selected' : '' ?>>STD <?= $s ?></option>
-                                <?php endfor; ?>
-                            </select>
-                        </div>
-
-                        <div>
-                            <label style="font-size:0.75rem;font-weight:700;color:var(--muted);display:block;margin-bottom:4px;">Division</label>
-                            <select class="ut-select" name="division" onchange="this.form.submit()">
-                                <option value="A" <?= $division === 'A' ? 'selected' : '' ?>>Div A</option>
-                                <option value="B" <?= $division === 'B' ? 'selected' : '' ?>>Div B</option>
-                                <option value="C" <?= $division === 'C' ? 'selected' : '' ?>>Div C</option>
-                            </select>
-                        </div>
-
-                        <div>
-                            <label style="font-size:0.75rem;font-weight:700;color:var(--muted);display:block;margin-bottom:4px;">Exam / Test Type</label>
-                            <select class="ut-select" name="test_type" onchange="this.form.submit()">
-                                <option value="Unit Test 1" <?= $testType === 'Unit Test 1' ? 'selected' : '' ?>>Unit Test 1 (I)</option>
-                                <option value="Unit Test 2" <?= $testType === 'Unit Test 2' ? 'selected' : '' ?>>Unit Test 2 (II)</option>
-                                <option value="Unit Test 3" <?= $testType === 'Unit Test 3' ? 'selected' : '' ?>>Unit Test 3 (III)</option>
-                                <option value="Unit Test 4" <?= $testType === 'Unit Test 4' ? 'selected' : '' ?>>Unit Test 4 (IV)</option>
-                            </select>
-                        </div>
-                    </form>
-
-                    <!-- Quick Actions -->
-                    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                        <span id="autoSaveStatus" style="font-size:0.8rem;font-weight:600;"></span>
-
+                    <!-- Row 2: documents & sharing, then selection (bulk) actions — all left-aligned -->
+                    <div class="ut-actions">
                         <a href="import_unit_tests.php" class="btn btn-sm btn-secondary" title="Upload spreadsheet">
                             <i class="fas fa-file-excel"></i> Import Excel
                         </a>
-
                         <a href="unit_tests.php?action=export_excel&year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>" class="btn btn-sm btn-secondary" title="Download Excel template">
                             <i class="fas fa-download"></i> Export Excel
                         </a>
-
                         <a href="unit_tests_print.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>" target="_blank" class="btn btn-sm btn-secondary">
                             <i class="fas fa-print"></i> Print Marksheet
                         </a>
-
                         <a href="unit_test_slips.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>" target="_blank" class="btn btn-sm btn-secondary" title="Print 4-per-A4 parent progress slips">
                             <i class="fas fa-receipt"></i> Parent Slips
                         </a>
-
                         <a href="whatsapp_share.php?doc_type=unit_test&test_type=<?= urlencode($testType) ?>&class=<?= urlencode($cohortClassKey) ?>" class="btn btn-sm btn-whatsapp" title="Open WhatsApp Dispatcher for this Unit Test">
                             <i class="fa-brands fa-whatsapp"></i> WhatsApp Hub
                         </a>
-
-                        <a href="unit_test_entry.php?year=<?= urlencode($year) ?>&std=<?= urlencode($std) ?>&division=<?= urlencode($division) ?>&test_type=<?= urlencode($testType) ?>&mode=new" class="btn btn-sm btn-primary" title="Add new student in dedicated entry page">
-                            <i class="fas fa-user-plus"></i> + Add Student Entry
-                        </a>
-
-                        <button type="button" class="btn btn-sm btn-primary" onclick="document.getElementById('unitTestMatrixForm').submit();">
-                            <i class="fas fa-save"></i> Save Changes
-                        </button>
-
                         <?php if (!empty($students)): ?>
+                        <span class="ut-actions-sep" aria-hidden="true"></span>
                         <button type="button" class="btn btn-sm btn-whatsapp" id="utBulkWaBtn" title="Share selected students via WhatsApp" disabled>
                             <i class="fa-brands fa-whatsapp"></i> WhatsApp <span class="ut-bulk-count" id="utBulkWaCount">0</span>
                         </button>

@@ -32,7 +32,7 @@ No other key is a substitute for those two.
 | `DB_USER` | `hcc_app` | MySQL account used by PHP. The key must be present and non-empty. |
 | `DB_PASS` | empty in the template | Password for `DB_USER`. The key must exist. An empty string is allowed by the loader and is not acceptable on a shared machine. |
 | `DB_CHARSET` | `utf8mb4` | PDO charset. Leave `utf8mb4` unless the database was created with another charset on purpose. |
-| `DB_SOCKET` | empty string | Unix socket path. On Windows set it to `''`. If the key is omitted, PHP falls back to a macOS XAMPP socket path that does not exist here, then tries TCP. Empty is the setting you want. Do not point it at a socket from another computer. |
+| `DB_SOCKET` | empty string | Unix socket path. On Windows PHP ignores this value, including a macOS socket copied in `env.php`, and connects with TCP to `127.0.0.1`. On macOS, an omitted key uses the XAMPP socket when that file exists. |
 | `JWT_SECRET` | placeholder starting with `CHANGE_ME` | Secret for signed links and session-related HMAC. Replace it. See above. |
 | `CORS_ORIGIN` | `http://localhost` | Present in the template. `config/database.php` does not read it. It is not an access-control switch. Leave `http://localhost` unless you are changing code that starts using it. |
 

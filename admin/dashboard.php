@@ -128,6 +128,7 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
     <meta name="csrf-token" content="<?= htmlspecialchars(generateCSRFToken(), ENT_QUOTES) ?>">
     <link rel="stylesheet" href="<?= BASE_URL ?>assets/css/admin.css?v=<?= (is_file(__DIR__ . '/../assets/css/admin.css') ? filemtime(__DIR__ . '/../assets/css/admin.css') : 0) ?>">
     <link rel="stylesheet" href="<?= BASE_URL ?>assets/css/admin-dash.css?v=<?= (is_file(__DIR__ . '/../assets/css/admin-dash.css') ? filemtime(__DIR__ . '/../assets/css/admin-dash.css') : 0) ?>">
+    <link rel="stylesheet" href="<?= BASE_URL ?>assets/css/hcc-assistant.css?v=<?= (is_file(__DIR__ . '/../assets/css/hcc-assistant.css') ? filemtime(__DIR__ . '/../assets/css/hcc-assistant.css') : 0) ?>">
 </head>
 <body>
     <div class="admin-layout">
@@ -139,44 +140,8 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
                     <h1 class="page-title">Dashboard</h1>
                     <p class="page-sub">At-a-glance results, classes and performance for <?= sanitize($schoolName) ?>.</p>
                 </div>
-                <div class="notif-container" id="notifContainer">
-                    <?= csrfField() ?>
-                    <button type="button" class="notif-trigger<?= ($notifData['unread'] ?? 0) > 0 ? ' has-unread' : '' ?>" id="notifTrigger" title="Recent Activity Notifications" aria-label="Notifications">
-                        <i class="fas fa-bell"></i>
-                        <?php if ($notifData['unread'] > 0): ?>
-                            <span class="notif-badge" id="notifBadge"><?= (int)$notifData['unread'] ?></span>
-                        <?php endif; ?>
-                    </button>
-                    <div class="notif-dropdown" id="notifDropdown">
-                        <div class="notif-dropdown-header">
-                            <span><i class="fas fa-bell"></i> Promotion &amp; System Alerts</span>
-                            <span class="notif-count"><?= count($notifData['items']) ?> events</span>
-                        </div>
-                        <div class="notif-dropdown-list">
-                            <?php if (empty($notifData['items'])): ?>
-                                <div class="notif-empty">
-                                    <i class="fas fa-bell-slash"></i>
-                                    No recent promotion notifications.
-                                </div>
-                            <?php else: ?>
-                                <?php foreach ($notifData['items'] as $nt): ?>
-                                    <a href="<?= !empty($nt['link']) ? sanitize($nt['link']) : '#' ?>" class="notif-item">
-                                        <div class="notif-item-icon">
-                                            <i class="fas <?= ($nt['type'] ?? '') === 'promotion' ? 'fa-graduation-cap' : 'fa-info-circle' ?>"></i>
-                                        </div>
-                                        <div class="notif-item-body">
-                                            <div class="notif-item-title"><?= sanitize($nt['title']) ?></div>
-                                            <div class="notif-item-desc"><?= sanitize($nt['message']) ?></div>
-                                            <div class="notif-item-time">
-                                                <i class="far fa-clock"></i> <?= date('M d, Y • h:i A', strtotime($nt['created_at'])) ?>
-                                            </div>
-                                        </div>
-                                    </a>
-                                <?php endforeach; ?>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                </div>
+                <?= csrfField() ?>
+                <?php require __DIR__ . '/includes/notif_bell.php'; ?>
                 <a href="whatsapp_share.php" class="wa-quick-btn" id="waQuickBtn" title="Open WhatsApp Share Hub" aria-label="Open WhatsApp Share Hub">
                     <i class="fa-brands fa-whatsapp"></i>
                 </a>
@@ -923,5 +888,32 @@ $hasPerf = !empty($topPerformer) || !empty($lowestPerformer);
         ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>
     </script>
     <script src="<?= BASE_URL ?>assets/js/admin.js?v=<?= (is_file(__DIR__ . '/../assets/js/admin.js') ? filemtime(__DIR__ . '/../assets/js/admin.js') : 0) ?>"></script>
+
+    <!-- HCC Assistant: dashboard help chatbot -->
+    <button type="button" class="hcc-bot-launcher" id="hccBotLauncher" aria-label="Open HCC Assistant" aria-expanded="false" aria-controls="hccBotPanel" title="HCC Assistant">
+        <i class="fa-solid fa-comments hcc-bot-ico-open" aria-hidden="true"></i>
+        <i class="fa-solid fa-xmark hcc-bot-ico-close" aria-hidden="true"></i>
+        <span class="hcc-bot-dot" aria-hidden="true"></span>
+    </button>
+    <section class="hcc-bot-panel" id="hccBotPanel" role="dialog" aria-modal="false" aria-labelledby="hccBotTitle" aria-hidden="true"
+             data-endpoint="api_assistant_chat.php" data-admin="<?= htmlspecialchars(explode(' ', trim($_SESSION['admin_name'] ?? ''))[0], ENT_QUOTES, 'UTF-8') ?>">
+        <header class="hcc-bot-head">
+            <span class="hcc-bot-avatar" aria-hidden="true"><img src="<?= BASE_URL ?>assets/images/hcclogo.jpg" alt="HCC logo"></span>
+            <div class="hcc-bot-head-text">
+                <strong id="hccBotTitle">HCC Assistant</strong>
+                <span>Online · System help</span>
+            </div>
+            <button type="button" id="hccBotReset" title="New conversation" aria-label="Start a new conversation"><i class="fa-solid fa-rotate-right" aria-hidden="true"></i></button>
+            <button type="button" id="hccBotClose" title="Close" aria-label="Close assistant"><i class="fa-solid fa-minus" aria-hidden="true"></i></button>
+        </header>
+        <div class="hcc-bot-body" id="hccBotBody" role="log" aria-live="polite" aria-relevant="additions"></div>
+        <form class="hcc-bot-form" id="hccBotForm" autocomplete="off">
+            <label for="hccBotInput" class="hcc-bot-sr">Ask the assistant a question</label>
+            <input type="text" id="hccBotInput" maxlength="500" placeholder="Ask how the system works…">
+            <button type="submit" id="hccBotSend" aria-label="Send message" disabled><i class="fa-solid fa-paper-plane" aria-hidden="true"></i></button>
+        </form>
+        <div class="hcc-bot-foot">Answers are about the HCC system workflow.</div>
+    </section>
+    <script src="<?= BASE_URL ?>assets/js/hcc-assistant.js?v=<?= (is_file(__DIR__ . '/../assets/js/hcc-assistant.js') ? filemtime(__DIR__ . '/../assets/js/hcc-assistant.js') : 0) ?>"></script>
 </body>
 </html>

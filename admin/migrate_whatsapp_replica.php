@@ -7,6 +7,7 @@ if (PHP_SAPI !== 'cli') { http_response_code(403); exit('CLI only'); }
 
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/includes/whatsapp_functions.php';
 
 $db = getDB();
 
@@ -218,11 +219,11 @@ foreach ($tables as $name => $sql) {
 
 // Ensure columns in existing whatsapp_chats table
 try {
-    $db->exec("ALTER TABLE `whatsapp_chats` ADD COLUMN IF NOT EXISTS `linked_student_roll` VARCHAR(20) DEFAULT NULL");
-    $db->exec("ALTER TABLE `whatsapp_chats` ADD COLUMN IF NOT EXISTS `linked_class_key` VARCHAR(100) DEFAULT NULL");
-    $db->exec("ALTER TABLE `whatsapp_chats` ADD INDEX IF NOT EXISTS `idx_chat_linked_student` (`linked_student_roll`, `linked_class_key`)");
+    hccEnsureColumn($db, 'whatsapp_chats', 'linked_student_roll', 'VARCHAR(20) DEFAULT NULL');
+    hccEnsureColumn($db, 'whatsapp_chats', 'linked_class_key', 'VARCHAR(100) DEFAULT NULL');
+    hccEnsureIndex($db, 'whatsapp_chats', 'idx_chat_linked_student', '`linked_student_roll`, `linked_class_key`');
     echo "✅ Ensured student link columns on whatsapp_chats\n";
-} catch (PDOException $e) {
+} catch (Throwable $e) {
     echo "ℹ️  Student link columns info: " . $e->getMessage() . "\n";
 }
 

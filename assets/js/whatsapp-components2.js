@@ -4077,6 +4077,18 @@ class WaQrModal extends HTMLElement {
     try { await this._loadQrInner(forceRefresh); } finally { this._loading = false; }
   }
 
+  keepBridgeOn() {
+    if (this._ensuredAt && Date.now() - this._ensuredAt < 20000) return;
+    this._ensuredAt = Date.now();
+    var tokenEl = document.querySelector('meta[name="csrf-token"]');
+    var token = tokenEl && tokenEl.content ? tokenEl.content : '';
+    fetch('api_whatsapp_session.php?action=ensure', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': token },
+      cache: 'no-store'
+    }).catch(function () {});
+  }
+
   async _loadQrInner(forceRefresh) {
     const store = this.store || window.WhatsAppStore;
     const imgBox = this.shadowRoot?.querySelector('.wa-qr-img');
@@ -4108,6 +4120,7 @@ class WaQrModal extends HTMLElement {
 
       let qr = store ? await store.getQR() : null;
       if (!qr && sessInfo && sessInfo.bridge_running === false) {
+        this.keepBridgeOn();
         this._lastQr = '';
         imgBox.textContent = 'Bridge offline';
         statusEl.textContent = 'WhatsApp bridge is offline. It restarts on its own on this Mac. The QR appears here when it is ready.';

@@ -11,6 +11,7 @@ if (PHP_SAPI !== 'cli') { http_response_code(403); exit('CLI only'); }
 
 require_once __DIR__ . '/../includes/functions.php';
 require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/includes/whatsapp_functions.php';
 
 $db = getDB();
 
@@ -112,10 +113,10 @@ foreach ($tables as $name => $sql) {
 
 // Add metadata column to whatsapp_chats for quick AI draft tracking if not present
 try {
-    $db->exec("ALTER TABLE `whatsapp_chats` ADD COLUMN IF NOT EXISTS `is_admission_enquiry` BOOLEAN NOT NULL DEFAULT FALSE");
-    $db->exec("ALTER TABLE `whatsapp_chats` ADD COLUMN IF NOT EXISTS `latest_ai_draft_id` BIGINT UNSIGNED DEFAULT NULL");
+    hccEnsureColumn($db, 'whatsapp_chats', 'is_admission_enquiry', 'BOOLEAN NOT NULL DEFAULT FALSE');
+    hccEnsureColumn($db, 'whatsapp_chats', 'latest_ai_draft_id', 'BIGINT UNSIGNED DEFAULT NULL');
     echo "✅ Ensured admission AI columns on whatsapp_chats\n";
-} catch (PDOException $e) {
+} catch (Throwable $e) {
     echo "ℹ️  whatsapp_chats columns note: " . $e->getMessage() . "\n";
 }
 

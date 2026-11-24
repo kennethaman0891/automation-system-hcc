@@ -30,6 +30,25 @@ function Write-SupervisorLog {
     } catch {}
 }
 
+# One supervisor per logon session. A second double-click leaves the first one running.
+# Keep this object alive for the whole script so the mutex is not released early.
+$SupervisorMutex = New-Object System.Threading.Mutex($false, "Local\HCCWhatsAppBridgeSupervisor")
+$supervisorOwned = $false
+try {
+    $supervisorOwned = $SupervisorMutex.WaitOne(0, $false)
+} catch {
+    $abandoned = $_.Exception
+    if ($abandoned -is [System.Threading.AbandonedMutexException] -or $abandoned.InnerException -is [System.Threading.AbandonedMutexException]) {
+        $supervisorOwned = $true
+    } else {
+        throw
+    }
+}
+if (-not $supervisorOwned) {
+    Write-SupervisorLog "Another WhatsApp bridge supervisor is already running. Leaving it in place."
+    exit 0
+}
+
 # 1. Verify Node.js is installed
 $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
 if (-not $nodeCmd) {
@@ -76,10 +95,35 @@ function Get-RunningBridgeProcesses {
     }
 }
 
+$IpcDir = Join-Path $RepoRoot "storage\whatsapp\ipc"
+if (-not (Test-Path -LiteralPath $IpcDir)) {
+    New-Item -ItemType Directory -Path $IpcDir | Out-Null
+}
+# PHP waBridgeIpcDir() uses this same folder on Windows. Set it before Node starts
+# so Apache (often a different user) and this process watch the same flag files.
+$env:WHATSAPP_IPC_DIR = $IpcDir
+
 Write-SupervisorLog "Starting HCC WhatsApp Bridge supervisor on Windows"
 Write-SupervisorLog "Repo: $RepoRoot"
 Write-SupervisorLog "Node: $($nodeCmd.Source)"
 Write-SupervisorLog "Logs: $LogFile"
+Write-SupervisorLog "IPC: $IpcDir"
+
+# A node_modules folder copied from macOS can fail to load. Reinstall on this PC.
+Push-Location $AutomationDir
+try {
+    & node -e "require('puppeteer'); require('axios'); require('ws'); require('dotenv');"
+    if ($LASTEXITCODE -ne 0) {
+        Write-SupervisorLog "Node modules failed to load. Running npm install for this Windows PC..."
+        & npm install
+        if ($LASTEXITCODE -ne 0) {
+            Write-SupervisorLog "ERROR: npm install failed with exit code $LASTEXITCODE."
+            exit 1
+        }
+    }
+} finally {
+    Pop-Location
+}
 
 # Clean locks once on boot
 Clear-StaleProfileLocks
@@ -104,6 +148,8 @@ while ($true) {
     $processInfo.RedirectStandardOutput = $false
     $processInfo.RedirectStandardError = $false
     $processInfo.UseShellExecute = $false
+    # Copies the current environment, then pins the shared IPC directory.
+    $processInfo.EnvironmentVariables["WHATSAPP_IPC_DIR"] = $IpcDir
 
     try {
         $proc = [System.Diagnostics.Process]::Start($processInfo)

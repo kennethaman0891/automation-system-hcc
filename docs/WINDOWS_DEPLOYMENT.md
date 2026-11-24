@@ -146,14 +146,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\xampp\htdocs\hcc\automati
 powershell -NoProfile -ExecutionPolicy Bypass -File C:\xampp\htdocs\hcc\automation\windows\start-followup-engine.ps1
 ```
 
-If running the WhatsApp Bridge on Windows, open a third window and run:
+If running the WhatsApp Bridge on Windows, open a window and run this once:
 
 ```
 automation\start-bridge.bat
 ```
-(or via PowerShell: `powershell -NoProfile -ExecutionPolicy Bypass -File C:\xampp\htdocs\hcc\automation\windows\start-bridge.ps1`)
 
-The bridge supervisor automatically checks Node.js on `PATH`, locates Google Chrome (or Microsoft Edge as fallback), cleans stale profile locks (`Singleton*` and `lockfile`), supervises the process with auto-restart, and logs output to `logs\whatsapp-bridge.log`.
+That starts `automation\windows\start-bridge.ps1` minimized and leaves it running. The supervisor restarts the bridge if it exits, so the QR on WhatsApp Share can come back without a second command. A second run sees the supervisor is already up and leaves it alone. Stop it with `automation\stop-bridge.bat`.
+
+You can also start the supervisor directly:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\xampp\htdocs\hcc\automation\windows\start-bridge.ps1
+```
+
+The supervisor checks Node.js on `PATH`, runs `npm install` when `node_modules` is missing or was copied from macOS and will not load, cleans stale profile locks (`Singleton*` and `lockfile`), and logs to `logs\whatsapp-bridge.log`. PHP and the bridge share QR and restart flags in `storage\whatsapp\ipc`. That folder is the same even when Apache and Node run as different Windows users. Do not point those flags at each user's Temp folder.
+
+Google Chrome or Microsoft Edge must be installed. The bridge uses that browser when Puppeteer's own Chrome download is not present. Copying the macOS `automation\node_modules` folder is not enough; let the supervisor run `npm install` on this PC.
 
 Closing a window stops that process. The scripts read settings from the environment. They do not contain a database password.
 

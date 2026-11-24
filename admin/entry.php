@@ -656,32 +656,7 @@ $currentClassLabel = "STD {$rStd} {$ctx['division']} — {$ctx['semester']} ({$c
             </div>
             <div style="display:flex;align-items:center;gap:12px;">
                 <!-- Activity Alerts / Notification Bell (matched with admin.js) -->
-                <div class="notif-container" id="notifContainer" style="position:relative;">
-                    <button type="button" class="btn btn-outline notif-trigger" id="notifTrigger" style="padding:7px 12px;font-size:13px;" title="Recent Activity Notifications" aria-label="Notifications">
-                        <i class="fas fa-bell"></i>
-                        <?php if ($notifData['unread'] > 0): ?>
-                            <span class="notif-badge" id="notifBadge" style="background:#dc2626;color:white;font-size:10px;font-weight:700;padding:1px 5px;border-radius:10px;margin-left:4px;"><?= (int)$notifData['unread'] ?></span>
-                        <?php endif; ?>
-                    </button>
-                    <div id="notifDropdown" class="notif-dropdown" style="position:absolute;right:0;top:40px;width:340px;background:white;border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow-lg);z-index:100;padding:12px;">
-                        <div class="notif-dropdown-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                            <span style="font-size:13px;font-weight:700;"><i class="fas fa-bell"></i> Recent System Activity</span>
-                            <span style="font-size:11px;color:var(--text-3);"><?= count($notifData['items']) ?> events</span>
-                        </div>
-                        <div class="notif-dropdown-list" style="max-height:260px;overflow-y:auto;font-size:12px;">
-                            <?php if (empty($notifData['items'])): ?>
-                                <div style="padding:18px;text-align:center;color:var(--text-3);">No recent notifications.</div>
-                            <?php else: ?>
-                                <?php foreach ($notifData['items'] as $nt): ?>
-                                <a href="<?= !empty($nt['link']) ? sanitize($nt['link']) : '#' ?>" class="notif-item" style="display:block;padding:6px 0;border-bottom:1px solid #f1f5f9;text-decoration:none;color:inherit;">
-                                    <strong><?= sanitize($nt['title']) ?></strong>
-                                    <div style="color:var(--text-2);"><?= sanitize($nt['message']) ?></div>
-                                </a>
-                                <?php endforeach; ?>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                </div>
+                <?php require __DIR__ . '/includes/notif_bell.php'; ?>
 
                 <div class="admin-user">
                     <i class="fas fa-user-circle"></i>
