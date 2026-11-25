@@ -1,0 +1,16 @@
+name: Privacy & Leak Guard
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  privacy-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run privacy & leak guard
+        run: python3 scripts/check_privacy_leaks.py
