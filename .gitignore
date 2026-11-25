@@ -1,35 +1,66 @@
-# --- secrets (never commit) ---
+# --- secrets & credentials (never commit) ---
 config/env.php
+.env
+.env.*
+!.env.example
 automation/.env
+automation/.env.*
+!automation/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
 
-# --- generated / runtime ---
-logs/*.log
-logs/*.json
+# --- WhatsApp sessions, chats, exports & runtime data (never commit) ---
+storage/whatsapp/*
+!storage/whatsapp/ipc/
+!storage/whatsapp/media/
+storage/whatsapp/ipc/*
+!storage/whatsapp/ipc/.gitkeep
+storage/whatsapp/media/*
+!storage/whatsapp/media/.gitkeep
+automation/.whatsapp-session/
+automation/.whatsapp-session-test/
+*WhatsApp Chat*
+*whatsapp_export*
+*chat_export*
+*.vcf
+
+# --- databases, dumps & bulk contact spreadsheets (never commit) ---
+*.db
+*.sqlite
+*.sqlite3
+*.sql
+!data/migrations/*.sql
+*.csv
+*.xlsx
+*.xls
+
+# --- generated / runtime / logs / test outputs ---
+logs/*
+!logs/.htaccess
 data/state.json
+data/private/
 scratch/*
 !scratch/.gitkeep
+tests/e2e_offline/results/*
+!tests/e2e_offline/results/.gitkeep
+tests/last_*_result.json
+*.log
+*.pid
 
-# --- tooling artifacts ---
+# --- tooling & build artifacts ---
 .playwright-mcp/
 automation/node_modules/
 node_modules/
-
-# --- large / session artifacts (never commit) ---
-storage/whatsapp/ipc/*
-!storage/whatsapp/ipc/.gitkeep
-automation/.whatsapp-session/
-automation/.whatsapp-session-test/
-automation/admission-ai-service/
-automation/rust_engine/
+automation/admission-ai-service/target/
+automation/rust_engine/target/
 automation/bin/
-
-# --- private runtime data ---
-data/private/
 
 # --- dependencies (restored via composer install) ---
 vendor/
 
-# --- OS / editor ---
+# --- OS / editor / backups ---
 .DS_Store
 Thumbs.db
 *.swp
