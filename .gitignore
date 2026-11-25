@@ -68,6 +68,10 @@ automation/bin/
 # --- dependencies (restored via composer install) ---
 vendor/
 
+# --- generated debug bundles (never commit archives) ---
+dist/
+*.zip
+
 # --- OS / editor / backups ---
 __pycache__/
 *.pyc
