@@ -78,7 +78,9 @@ FORBIDDEN_PATH_PATTERNS = [
     re.compile(r"^logs/(?!\.htaccess$)"),
     re.compile(r"^tests/e2e_offline/results/(?!\.gitkeep$)"),
     re.compile(r"^tests/last_.*_result\.json$"),
-    re.compile(r"\.(?:db|sqlite|sqlite3|pem|key|p12|pfx|vcf|log|pid)$", re.I),
+    re.compile(r"\.(?:db|sqlite|sqlite3|pem|key|p12|pfx|vcf|log|pid|mp4|mov|webm)$", re.I),
+    re.compile(r"^assets/videos/(?!\.gitkeep$)"),
+    re.compile(r"^assets/images/wa-promo-poster\.jpg$"),
     re.compile(r"whatsapp[\s_-]*chat.*\.(?:txt|zip|json|csv|html)$", re.I),
     re.compile(r"chat[\s_-]*export", re.I),
 ]

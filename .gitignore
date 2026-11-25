@@ -49,6 +49,14 @@ tests/last_*_result.json
 *.log
 *.pid
 
+# --- videos & WhatsApp promo media (never commit) ---
+assets/videos/*
+!assets/videos/.gitkeep
+assets/images/wa-promo-poster.jpg
+*.mp4
+*.mov
+*.webm
+
 # --- tooling & build artifacts ---
 .playwright-mcp/
 automation/node_modules/
@@ -61,6 +69,8 @@ automation/bin/
 vendor/
 
 # --- OS / editor / backups ---
+__pycache__/
+*.pyc
 .DS_Store
 Thumbs.db
 *.swp
