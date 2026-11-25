@@ -21,6 +21,8 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ALLOWED_PHONE_DIGITS = {
     # Standard synthetic placeholders
     "9876543210", "919876543210",
+    # Synthetic landline placeholders (never a real helpline)
+    "2170000000", "912170000000",
     "9812345678", "919812345678",
     "9000000001", "919000000001",
     "9800011111", "919800011111",
@@ -94,6 +96,10 @@ SKIP_CONTENT_FILES = {
 }
 
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?91[\s\-]?)?[6-9]\d{4}[\s\-]?\d{5}(?!\d)")
+# Landline / STD-code formats (+91 217 000 0000, 217 000 0000, +912170000000).
+LANDLINE_RE = re.compile(
+    r"(?<!\d)(?:\+?91[\s\-]?)?(?:[2-5]\d{2}[\s\-]\d{3}[\s\-]\d{4}|[2-5]\d{9})(?!\d)"
+)
 JID_RE = re.compile(r"[0-9A-Za-z._-]+@(?:s\.whatsapp\.net|c\.us|g\.us|lid|broadcast)", re.I)
 WA_EXPORT_RE = re.compile(r"^\[?\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[APap][Mm])?\]?\s*[-–]?\s+[^:\n]{2,40}:\s+\S+")
 SECRET_RE = re.compile(
@@ -152,10 +158,11 @@ def main():
 
         text = raw.decode("utf-8", errors="replace")
         for lineno, line in enumerate(text.splitlines(), 1):
-            for m in PHONE_RE.finditer(line):
-                digits = re.sub(r"\D", "", m.group(0))
-                if digits not in ALLOWED_PHONE_DIGITS:
-                    violations.append((rel, lineno, "UNAPPROVED_PHONE", m.group(0)))
+            for rgx, kind in ((PHONE_RE, "UNAPPROVED_PHONE"), (LANDLINE_RE, "UNAPPROVED_LANDLINE")):
+                for m in rgx.finditer(line):
+                    digits = re.sub(r"\D", "", m.group(0))
+                    if digits not in ALLOWED_PHONE_DIGITS:
+                        violations.append((rel, lineno, kind, m.group(0)))
 
             for m in JID_RE.finditer(line):
                 if not is_allowed_jid(m.group(0)):
