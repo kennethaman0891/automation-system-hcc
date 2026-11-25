@@ -254,7 +254,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 
     // 4. Bulk Save Marks, Remarks & Attendance
     elseif ($act === 'save_marks') {
+        $isAjax = !empty($_POST['is_ajax']);
         if (!verifyCSRFToken()) {
+            if ($isAjax) {
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode(['ok' => false, 'error' => 'Security token expired. Please refresh the page.']);
+                exit;
+            }
             $error = 'Security check failed.';
         } else {
             $ck = trim($_POST['class_key'] ?? $classKey);
@@ -324,12 +330,27 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     $error = trim($rmErr . ' ' . $attErr);
                 }
                 $classKey = $ck;
+                if ($isAjax) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'ok'      => ($error === ''),
+                        'saved'   => $n,
+                        'message' => $success,
+                        'error'   => $error,
+                    ]);
+                    exit;
+                }
             } else {
                 $error = $res['error'] !== '' ? $res['error'] : 'Save failed.';
                 if ($attErr !== '' && stripos($error, 'locked') === false) {
                     $error .= ' ' . $attErr;
                 }
                 if ($ck !== '') $classKey = $ck;
+                if ($isAjax) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode(['ok' => false, 'error' => $error]);
+                    exit;
+                }
             }
         }
     }
@@ -1396,7 +1417,7 @@ $passPct = $totalStudents > 0 ? round(($passCount / $totalStudents) * 100, 1) : 
 
                 <!-- Professional Two-Tier Marksheet Table Matrix -->
                 <div class="ut-table-card">
-                    <form method="POST" id="bulkMarksForm" data-std="<?= e_attr($std) ?>">
+                    <form method="POST" id="bulkMarksForm" data-std="<?= e_attr($std) ?>" data-autosave-mode="direct">
                         <?= csrfField() ?>
                         <input type="hidden" name="action" value="save_marks">
                         <input type="hidden" name="class_key" value="<?= e_attr($classKey) ?>">

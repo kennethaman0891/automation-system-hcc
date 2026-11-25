@@ -54,7 +54,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    $isAjax = !empty($_POST['is_ajax']);
+
     if (!verifyCSRFToken()) {
+        if ($isAjax) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['ok' => false, 'error' => 'Security token expired. Please refresh the page.']);
+            exit;
+        }
         $error = 'Security check failed. Please refresh and try again.';
     } else {
         $act = trim($_POST['action'] ?? '');
@@ -97,10 +104,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             if ($data['std'] === '' || $data['roll_no'] === '' || $data['student_name'] === '') {
                 $error = 'STD, Roll No and Student Name are required.';
+                if ($isAjax) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode(['ok' => false, 'draft_only' => true, 'error' => $error]);
+                    exit;
+                }
             } elseif (empty($data['subjects'])) {
                 $error = 'Please add at least one subject row.';
+                if ($isAjax) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode(['ok' => false, 'draft_only' => true, 'error' => $error]);
+                    exit;
+                }
             } elseif (rcIsVaultLocked($data['academic_year'], $data['semester'])) {
                 $error = "Academic year {$data['academic_year']} is locked in the Records Archive.";
+                if ($isAjax) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode(['ok' => false, 'error' => $error]);
+                    exit;
+                }
             } else {
                 // Safe roll_no change check against duplicate roll numbers in the same cohort
                 $rollCheckOk = true;
@@ -130,6 +152,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $newClassKey = rcClassKey($data['academic_year'], $data['std'], $data['division'], $data['semester']);
                         $savedRoll   = $data['roll_no'];
 
+                        if ($isAjax) {
+                            header('Content-Type: application/json; charset=utf-8');
+                            echo json_encode([
+                                'ok'       => true,
+                                'new_roll' => $savedRoll,
+                                'message'  => 'Student entry auto-saved.',
+                            ]);
+                            exit;
+                        }
+
                         if (isset($_POST['submit_action']) && $_POST['submit_action'] === 'save_and_add_next') {
                             header('Location: entry.php?class=' . urlencode($newClassKey) . '&mode=new&msg=saved');
                             exit;
@@ -139,7 +171,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
                     } else {
                         $error = 'Save failed: ' . $res['error'];
+                        if ($isAjax) {
+                            header('Content-Type: application/json; charset=utf-8');
+                            echo json_encode(['ok' => false, 'error' => $error]);
+                            exit;
+                        }
                     }
+                } elseif ($isAjax) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode(['ok' => false, 'error' => $error]);
+                    exit;
                 }
             }
         } elseif ($act === 'save_subjects') {
@@ -165,15 +206,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $skParsed = rcParseClassKey(urldecode($sk));
             if ($skParsed['std'] === '') {
                 $error = 'A class must be selected before saving subjects.';
+                if ($isAjax) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode(['ok' => false, 'draft_only' => true, 'error' => $error]);
+                    exit;
+                }
             } elseif (empty($subs)) {
                 $error = 'Add at least one subject before saving.';
+                if ($isAjax) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode(['ok' => false, 'draft_only' => true, 'error' => $error]);
+                    exit;
+                }
             } else {
                 try {
                     rcSaveClassSubjects($sk, $subs);
                     $classKey = $sk;
                     $success = 'Class subjects saved successfully.';
+                    if ($isAjax) {
+                        header('Content-Type: application/json; charset=utf-8');
+                        echo json_encode(['ok' => true, 'message' => $success]);
+                        exit;
+                    }
                 } catch (Throwable $e) {
                     $error = 'Could not save subjects: ' . $e->getMessage();
+                    if ($isAjax) {
+                        header('Content-Type: application/json; charset=utf-8');
+                        echo json_encode(['ok' => false, 'error' => $error]);
+                        exit;
+                    }
                 }
             }
         } elseif ($act === 'delete') {
@@ -781,7 +842,7 @@ $currentClassLabel = "STD {$rStd} {$ctx['division']} — {$ctx['semester']} ({$c
             </div>
 
             <!-- 3. MAIN STUDENT ENTRY FORM -->
-            <form method="POST" id="entryForm">
+            <form method="POST" id="entryForm" data-autosave-mode="direct">
                 <?= csrfField() ?>
                 <input type="hidden" name="action" value="save">
                 <input type="hidden" name="renamed_name" value="">
@@ -1010,7 +1071,7 @@ $currentClassLabel = "STD {$rStd} {$ctx['division']} — {$ctx['semester']} ({$c
                     <span><span style="width:32px;height:32px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;color:#fff;background:linear-gradient(135deg,#7a2238,#a33a4f);margin-right:10px;font-size:.8rem;"><i class="fa-solid fa-sliders"></i></span>Manage Class Subjects <span style="font-weight:600;color:var(--text-3);font-size:12px;">— columns configuration</span></span>
                     <span style="font-size:12px;color:var(--text-2);font-weight:600;"><?= sanitize($currentClassLabel) ?></span>
                 </summary>
-                <form method="POST" id="manageSubjectsForm" class="panel-body" style="padding:20px;">
+                <form method="POST" id="manageSubjectsForm" data-autosave-mode="direct" class="panel-body" style="padding:20px;">
                     <?= csrfField() ?>
                     <input type="hidden" name="action" value="save_subjects">
                     <input type="hidden" name="class_key" value="<?= e_attr($effClassKey) ?>">

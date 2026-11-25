@@ -454,10 +454,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                             <footer class="d-flex flex-column flex-sm-row align-items-start align-items-sm-center justify-content-between gap-2 pt-3 mt-4 border-top small text-body-secondary">
                                 <span class="d-inline-flex align-items-center gap-2">
-                                    <i class="fa-solid fa-shield-halved text-primary" aria-hidden="true"></i>
-                                    <span>CSRF &amp; brute-force protected</span>
-                                </span>
-                                <span class="d-inline-flex align-items-center gap-2">
                                     <i class="fa-regular fa-clock text-primary" aria-hidden="true"></i>
                                     <span>30-min idle auto-logout</span>
                                 </span>

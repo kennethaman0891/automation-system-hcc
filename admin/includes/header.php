@@ -68,6 +68,7 @@ $adminNav = [
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <link rel="stylesheet" href="<?= BASE_URL ?>assets/css/admin.css?v=<?= (is_file(__DIR__ . '/../../assets/css/admin.css') ? filemtime(__DIR__ . '/../../assets/css/admin.css') : 0) ?>">
+    <?php require_once __DIR__ . '/admin_autosave.php'; hccRenderAdminAutosaveAssets(); ?>
 </head>
 <body>
     <div class="sidebar-overlay" id="sidebarOverlay"></div>

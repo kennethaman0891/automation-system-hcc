@@ -633,6 +633,16 @@
           saveBtn.classList.remove('pulse-save');
         }
       }
+      if (dirty) {
+        clearTimeout(this._autoSaveTimer);
+        this._autoSaveTimer = setTimeout(() => {
+          if (this.isDirty && !this._autoSaving) {
+            this.saveTimetable({ silent: true });
+          }
+        }, 1200);
+      } else {
+        clearTimeout(this._autoSaveTimer);
+      }
     }
 
     /**
@@ -1103,12 +1113,19 @@
       }
     }
 
-    async saveTimetable() {
+    async saveTimetable(opts = {}) {
+      const silent = !!(opts && opts.silent);
+      if (this._autoSaving) return false;
+      this._autoSaving = true;
+
       const saveBtn = this.container.querySelector('#btnSaveTimetable');
       const originalText = saveBtn ? saveBtn.innerHTML : '';
-      if (saveBtn) {
+      if (saveBtn && !silent) {
         saveBtn.disabled = true;
         saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+      }
+      if (window.HCCAutoSave && typeof window.HCCAutoSave.reportStatus === 'function') {
+        window.HCCAutoSave.reportStatus('saving', 'Saving timetable to DB...');
       }
 
       const payload = {
@@ -1153,23 +1170,39 @@
             localStorage.removeItem('hcc_timetable_recovery_backup');
           } catch (storageErr) {}
           this.setDirty(false);
-          this.showToast('Exam Timetable saved successfully!', 'success');
+          if (!silent) {
+            this.showToast('Exam Timetable saved successfully!', 'success');
+          }
+          if (window.HCCAutoSave && typeof window.HCCAutoSave.reportStatus === 'function') {
+            window.HCCAutoSave.reportStatus('saved', 'Timetable saved to DB', 3500);
+          }
           await this.loadTimetablesList();
           return true;
         } else {
           saveLocalRecoveryBackup();
           this.setDirty(true);
-          this.showToast((res && res.error) ? `${res.error} — recovery backup stored locally. Please retry.` : 'Server save failed — recovery backup stored locally. Please retry.', 'error');
+          if (!silent) {
+            this.showToast((res && res.error) ? `${res.error} — recovery backup stored locally. Please retry.` : 'Server save failed — recovery backup stored locally. Please retry.', 'error');
+          }
+          if (window.HCCAutoSave && typeof window.HCCAutoSave.reportStatus === 'function') {
+            window.HCCAutoSave.reportStatus('warning', 'Timetable saved locally — retrying DB...');
+          }
           return false;
         }
       } catch (err) {
         console.error('Save error:', err);
         saveLocalRecoveryBackup();
         this.setDirty(true);
-        this.showToast('Network/DB save failed — local recovery backup stored. Please check connection and click Save Schedule to retry.', 'error');
+        if (!silent) {
+          this.showToast('Network/DB save failed — local recovery backup stored. Please check connection and click Save Schedule to retry.', 'error');
+        }
+        if (window.HCCAutoSave && typeof window.HCCAutoSave.reportStatus === 'function') {
+          window.HCCAutoSave.reportStatus('warning', 'Offline — timetable backed up locally');
+        }
         return false;
       } finally {
-        if (saveBtn) {
+        this._autoSaving = false;
+        if (saveBtn && !silent) {
           saveBtn.disabled = false;
           saveBtn.innerHTML = originalText;
         }

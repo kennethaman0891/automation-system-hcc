@@ -7,3 +7,5 @@ if (basename($_SERVER['SCRIPT_NAME'] ?? '') === basename(__FILE__)) {
 }
 require_once __DIR__ . '/../../includes/user_account.php';
 hccAccountHead();
+require_once __DIR__ . '/admin_autosave.php';
+hccRenderAdminAutosaveAssets();

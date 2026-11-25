@@ -134,9 +134,13 @@
         }
     }
 
-    // Debounced Auto-Save
+    // Debounced Auto-Save (delegates to common HCCAutoSave engine when loaded)
     let saveTimeout = null;
     function triggerAutoSave() {
+        if (window.HCCAutoSave && typeof window.HCCAutoSave.triggerForm === 'function') {
+            window.HCCAutoSave.triggerForm('unitTestMatrixForm');
+            return;
+        }
         const statusPill = document.getElementById('autoSaveStatus');
         if (statusPill) {
             statusPill.textContent = 'Saving changes...';

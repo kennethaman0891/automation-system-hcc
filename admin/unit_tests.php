@@ -752,7 +752,7 @@ $notifData = rcGetRecentNotifications(8);
 
                 <!-- Two-Tier Marksheet Table Matrix -->
                 <div class="ut-table-card">
-                    <form method="POST" id="unitTestMatrixForm">
+                    <form method="POST" id="unitTestMatrixForm" data-autosave-mode="direct">
                         <?= csrfField() ?>
                         <input type="hidden" name="action" value="save_marks">
                         <input type="hidden" name="year" value="<?= sanitize($year) ?>">

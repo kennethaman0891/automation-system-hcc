@@ -75,7 +75,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         echo json_encode(['ok' => true]);
         exit;
     }
+    $isAjax = !empty($_POST['is_ajax']);
     if (!verifyCSRFToken()) {
+        if ($isAjax) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['ok' => false, 'error' => 'Security token expired. Please refresh the page.']);
+            exit;
+        }
         $error = 'Security check failed. Please refresh and try again.';
     } else {
         $act = trim($_POST['action'] ?? '');
@@ -119,12 +125,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             if ($data['std'] === '' || $data['roll_no'] === '' || $data['student_name'] === '') {
                 $error = 'STD, Roll No and Student Name are required.';
+                if ($isAjax) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode(['ok' => false, 'draft_only' => true, 'error' => $error]);
+                    exit;
+                }
             } elseif (empty($data['subjects'])) {
                 $error = 'Please provide at least one subject row.';
+                if ($isAjax) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode(['ok' => false, 'draft_only' => true, 'error' => $error]);
+                    exit;
+                }
             } else {
                 $res = rcSaveUnitTestEntry($data, $adminUser);
                 if ($res['ok']) {
                     $savedRoll = $data['roll_no'];
+                    if ($isAjax) {
+                        header('Content-Type: application/json; charset=utf-8');
+                        echo json_encode([
+                            'ok'       => true,
+                            'new_roll' => $savedRoll,
+                            'message'  => 'Unit test entry auto-saved.',
+                        ]);
+                        exit;
+                    }
                     $baseRedirect = 'unit_test_entry.php?' . http_build_query([
                         'year'      => $data['academic_year'],
                         'std'       => $data['std'],
@@ -141,6 +166,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 } else {
                     $error = 'Save failed: ' . $res['error'];
+                    if ($isAjax) {
+                        header('Content-Type: application/json; charset=utf-8');
+                        echo json_encode(['ok' => false, 'error' => $error]);
+                        exit;
+                    }
                 }
             }
         }
@@ -1304,7 +1334,7 @@ $pageTitle = ($edit ? 'Edit Student Entry' : 'Add New Student Entry') . ' — ' 
             </div>
 
             <!-- 3. MAIN STUDENT ENTRY FORM -->
-            <form method="POST" id="unitTestEntryForm">
+            <form method="POST" id="unitTestEntryForm" data-autosave-mode="direct">
                 <?= csrfField() ?>
                 <input type="hidden" name="action" value="save">
                 <input type="hidden" name="academic_year" value="<?= e_attr($year) ?>">
