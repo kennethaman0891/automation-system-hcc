@@ -1354,6 +1354,9 @@ function rcRollbackClassPromotion(string $targetYear, string $targetStd, string 
 
 /* Create Unit Test tables if not exists (idempotent). */
 function rcEnsureUnitTestTables(): void {
+    static $ensured = false;
+    if ($ensured) return;
+    $ensured = true;
     $db = getDB();
     $db->exec("CREATE TABLE IF NOT EXISTS unit_test_results (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -1372,12 +1375,22 @@ function rcEnsureUnitTestTables(): void {
         remark VARCHAR(150) NULL,
         attendance VARCHAR(20) NULL,
         parents_sign TINYINT(1) NOT NULL DEFAULT 0,
+        parent_phone VARCHAR(32) NULL,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         UNIQUE KEY uniq_ut_student_subj (academic_year, std, division, test_type, roll_no, subject_name),
         INDEX idx_ut_lookup (academic_year, std, division, test_type),
         INDEX idx_ut_roll (academic_year, std, division, test_type, roll_no)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
+    try {
+        $chkPhone = $db->query("SHOW COLUMNS FROM `unit_test_results` LIKE 'parent_phone'");
+        if ($chkPhone && $chkPhone->rowCount() === 0) {
+            $db->exec("ALTER TABLE `unit_test_results` ADD COLUMN parent_phone VARCHAR(32) NULL AFTER parents_sign");
+        }
+    } catch (\Throwable $e) {
+        error_log('rcEnsureUnitTestTables parent_phone check failed: ' . $e->getMessage());
+    }
 
     $db->exec("CREATE TABLE IF NOT EXISTS unit_test_config (
         id INT AUTO_INCREMENT PRIMARY KEY,

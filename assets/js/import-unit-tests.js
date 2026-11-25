@@ -3,8 +3,9 @@
 (function () {
     'use strict';
 
-    var MAX_BYTES = 5 * 1024 * 1024;
-    var OK_EXT = ['xlsx', 'xls'];
+    var uploadForm = document.getElementById('uploadForm');
+    var MAX_BYTES = parseInt((uploadForm && uploadForm.getAttribute('data-max-bytes')) || '', 10) || (40 * 1024 * 1024);
+    var OK_EXT = ['xlsx', 'xls', 'csv'];
 
     var fileInput = document.getElementById('excelFileInput');
     var parseBtn = document.getElementById('parseBtn');
@@ -66,7 +67,7 @@
         var name = file.name || '';
         var ext = (name.split('.').pop() || '').toLowerCase();
         if (OK_EXT.indexOf(ext) === -1) {
-            renderBanner(false, '', 0, '\u201C' + name + '\u201D is not an Excel file. Choose a .xlsx or .xls file.');
+            renderBanner(false, '', 0, '\u201C' + name + '\u201D is not a supported spreadsheet. Choose a .xlsx, .xls, or .csv file.');
             return false;
         }
         if (file.size === 0) {
@@ -74,7 +75,7 @@
             return false;
         }
         if (file.size > MAX_BYTES) {
-            renderBanner(false, '', 0, 'That file is ' + fmtSize(file.size) + ' — the limit is 5 MB. Split it and try again.');
+            renderBanner(false, '', 0, 'That file is ' + fmtSize(file.size) + ' — the limit is ' + fmtSize(MAX_BYTES) + '. Split it and try again.');
             return false;
         }
         renderBanner(true, name, fmtSize(file.size));

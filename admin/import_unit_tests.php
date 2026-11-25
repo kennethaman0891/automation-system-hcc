@@ -3,28 +3,34 @@
 @ini_set('max_execution_time', '300');
 
 $adminPage = 'import_unit_tests';
-require_once __DIR__ . '/../includes/functions.php';
-require_once __DIR__ . '/auth_check.php';
+if (!defined('HCC_IMPORT_LIB_ONLY')) {
+    require_once __DIR__ . '/../includes/functions.php';
+    require_once __DIR__ . '/auth_check.php';
+}
 require_once __DIR__ . '/../vendor/autoload.php';
+require_once __DIR__ . '/../includes/excel_import_helpers.php';
 
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 
-$db = getDB();
-rcEnsureUnitTestTables();
-$settings = getAllSettings();
-$schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church English Medium School, Solapur';
-$adminUser = sanitize($_SESSION['admin_name'] ?? 'Admin');
-$adminInitials = strtoupper(implode('', array_map(
-    function ($part) { return mb_substr($part, 0, 1); },
-    array_slice(array_filter(preg_split('/\s+/', trim($_SESSION['admin_name'] ?? 'A'))), 0, 2)
-)));
+if (!defined('HCC_IMPORT_LIB_ONLY')) {
+    $db = getDB();
+    rcEnsureUnitTestTables();
+    $settings = getAllSettings();
+    $schoolName = $settings['school_name'] ?? 'Hindustani Covenant Church English Medium School, Solapur';
+    $adminUser = sanitize($_SESSION['admin_name'] ?? 'Admin');
+    $adminInitials = strtoupper(implode('', array_map(
+        function ($part) { return mb_substr($part, 0, 1); },
+        array_slice(array_filter(preg_split('/\s+/', trim($_SESSION['admin_name'] ?? 'A'))), 0, 2)
+    )));
+}
 
 /* ── Upload Limits ── */
 const UT_MAX_ROWS = 3000;
-const UT_MAX_COLS = 50;
-const UT_MAX_FILE_BYTES = 50 * 1024 * 1024;
+const UT_MAX_COLS = 80;
+const UT_MAX_CONSECUTIVE_EMPTY = 40;
+const UT_MAX_FILE_BYTES = 40 * 1024 * 1024;
 
 /* ── 1. Text Normalization & Roman Numeral Helpers ── */
 function utCleanText($v): string {
@@ -207,7 +213,7 @@ function utAnalyzeCohortHealing(PDO $db, array $students, string $year, string $
 function utRomanToDecimal(string $roman): string {
     $r = strtoupper(trim($roman));
     $map = [
-        'X' => '10', 'IX' => '9', 'VIII' => '8', 'VII' => '7',
+        'XII' => '12', 'XI' => '11', 'X' => '10', 'IX' => '9', 'VIII' => '8', 'VII' => '7',
         'VI' => '6', 'V' => '5', 'IV' => '4', 'III' => '3',
         'II' => '2', 'I' => '1'
     ];
@@ -218,28 +224,67 @@ function utDetectMetaFromText(string $text, string $sheetName = ''): array {
     $meta = [
         'academic_year' => rcGetActiveAcademicYear(),
         'std'           => '',
-        'division'      => 'A',
+        'division'      => '',
         'test_type'     => 'Unit Test 2',
     ];
 
-    // 1. Detect Standard & Division: e.g. "STD:- I A", "STD : 1 A", "STD - II B"
-    if (preg_match('/STD\s*[:-]?\s*(X|IX|VIII|VII|VI|V|IV|III|II|I|\d+)\s*([A-Za-z])?/i', $text, $m)) {
-        $meta['std'] = utRomanToDecimal($m[1]);
-        if (!empty($m[2])) $meta['division'] = strtoupper(trim($m[2]));
-    } elseif (preg_match('/(X|IX|VIII|VII|VI|V|IV|III|II|I|\d+)\s*([A-Za-z])/i', $sheetName, $sm)) {
-        $meta['std'] = utRomanToDecimal($sm[1]);
-        if (!empty($sm[2])) $meta['division'] = strtoupper(trim($sm[2]));
+    // 1. Detect Academic Year: e.g. "YEAR :- 2025-26", "2024-25", "2025/2026"
+    if (preg_match('/(?:YEAR\s*[:.\-\s]*)?\b(20\d{2}\s*[-\/_]\s*(?:20)?\d{2})\b/i', $text, $ym)) {
+        $meta['academic_year'] = hccNormalizeAcademicYear($ym[1]);
+    } elseif (preg_match('/\b(20\d{2}\s*[-\/_]\s*(?:20)?\d{2})\b/i', $sheetName, $ym)) {
+        $meta['academic_year'] = hccNormalizeAcademicYear($ym[1]);
     }
 
-    // 2. Detect Unit Test: e.g. "UNIT TEST :- II", "UNIT EXAM II", "UNIT TEST 1"
-    if (preg_match('/UNIT\s*(?:TEST|EXAM)?\s*[:-]?\s*(IV|III|II|I|\d+)/i', $text, $tm)) {
+    // 2. Detect Unit Test: e.g. "UNIT TEST :- II", "UNIT EXAM II", "UNIT TEST 1", "I UNIT EXAM", "UT-1"
+    if (preg_match('/\bUNIT\s*(?:TEST|EXAM)?\s*[:.\-\s]*\b(IV|III|II|I|[1-4])\b/i', $text, $tm)) {
+        $num = utRomanToDecimal($tm[1]);
+        $meta['test_type'] = "Unit Test $num";
+    } elseif (preg_match('/\b(IV|III|II|I|[1-4])(?:st|nd|rd|th)?\s+UNIT\s*(?:TEST|EXAM)\b/i', $text, $tm)) {
+        $num = utRomanToDecimal($tm[1]);
+        $meta['test_type'] = "Unit Test $num";
+    } elseif (preg_match('/\bUT\s*[:.\-\s]*\b(IV|III|II|I|[1-4])\b/i', $text . ' ' . $sheetName, $tm)) {
         $num = utRomanToDecimal($tm[1]);
         $meta['test_type'] = "Unit Test $num";
     }
 
-    // 3. Detect Academic Year: e.g. "YEAR :- 2025-26", "2024-25"
-    if (preg_match('/(?:YEAR\s*[:-]?\s*)?(\d{4}[-\/]\d{2,4})/i', $text, $ym)) {
-        $meta['academic_year'] = str_replace('/', '-', $ym[1]);
+    // Strip year and unit-test tokens before matching Std / Division
+    $cleanText = preg_replace('/\b20\d{2}\s*[-\/_]\s*(?:20)?\d{2}\b/', ' ', $text) ?? $text;
+    $cleanText = preg_replace('/\bUNIT\s*(?:TEST|EXAM)?\s*[:.\-\s]*\b(?:IV|III|II|I|[1-4])\b/i', ' ', $cleanText) ?? $cleanText;
+    $cleanSheet = preg_replace('/\bsheet\s*\d+\b/i', ' ', str_replace('_', ' ', $sheetName)) ?? $sheetName;
+
+    // 3. Detect Standard & Division: e.g. "STD:- I A", "STD : 1 A", "STD - II B", "Class 8th B", "10A"
+    if (preg_match('/\b(?:STD|STANDARD|CLASS)\s*[:.\-\s]*\b(XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)\b(?:\s*[:.\-\s]*\b([A-F])\b)?/i', $cleanText, $m)) {
+        $meta['std'] = utRomanToDecimal($m[1]);
+        if (!empty($m[2])) $meta['division'] = strtoupper($m[2]);
+    } elseif (preg_match('/\b(?:STD|STANDARD|CLASS)\s*[:.\-\s]*(XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)([A-F])\b/i', $cleanText, $m)) {
+        $meta['std'] = utRomanToDecimal($m[1]);
+        $meta['division'] = strtoupper($m[2]);
+    } elseif (preg_match('/\b(?:STD|STANDARD|CLASS)\s*[:.\-\s]*\b(1[0-2]|[1-9])(?:st|nd|rd|th)?\b(?:\s*[:.\-\s]*\b([A-F])\b)?/i', $cleanText, $m)) {
+        $meta['std'] = $m[1];
+        if (!empty($m[2])) $meta['division'] = strtoupper($m[2]);
+    } elseif (preg_match('/\b(?:STD|STANDARD|CLASS)\s*[:.\-\s]*(1[0-2]|[1-9])([A-F])\b/i', $cleanText, $m)) {
+        $meta['std'] = $m[1];
+        $meta['division'] = strtoupper($m[2]);
+    } elseif (preg_match('/\b(XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)\b\s*[:.\-\s]*([A-F])\b/i', $cleanSheet, $sm)) {
+        $meta['std'] = utRomanToDecimal($sm[1]);
+        $meta['division'] = strtoupper($sm[2]);
+    } elseif (preg_match('/\b(XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)([A-F])\b/i', $cleanSheet, $sm)) {
+        $meta['std'] = utRomanToDecimal($sm[1]);
+        $meta['division'] = strtoupper($sm[2]);
+    } elseif (preg_match('/\b(1[0-2]|[1-9])(?:st|nd|rd|th)?\s*[:.\-\s]*([A-F])\b/i', $cleanSheet, $sm)) {
+        $meta['std'] = $sm[1];
+        $meta['division'] = strtoupper($sm[2]);
+    } elseif (preg_match('/\b(1[0-2]|[1-9])([A-F])\b/i', $cleanSheet, $sm)) {
+        $meta['std'] = $sm[1];
+        $meta['division'] = strtoupper($sm[2]);
+    }
+
+    if ($meta['division'] === '') {
+        if (preg_match('/\b(?:DIV|DIVISION|SEC|SECTION)\s*[:.\-\s]*([A-F])\b/i', $cleanText . ' ' . $cleanSheet, $dm)) {
+            $meta['division'] = strtoupper($dm[1]);
+        } else {
+            $meta['division'] = 'A';
+        }
     }
 
     return $meta;
@@ -247,51 +292,77 @@ function utDetectMetaFromText(string $text, string $sheetName = ''): array {
 
 /* ── 2. Specialized Unit Test Worksheet Parser ── */
 function parseUnitTestWorksheet($sheet, string $sheetName): ?array {
-    $highestRow = min((int)$sheet->getHighestRow(), UT_MAX_ROWS);
-    $highestColLetter = $sheet->getHighestColumn();
+    $highestRow = min((int)$sheet->getHighestDataRow(), UT_MAX_ROWS);
+    $highestColLetter = $sheet->getHighestDataColumn();
     $highestCol = min(Coordinate::columnIndexFromString($highestColLetter), UT_MAX_COLS);
+    if ($highestRow <= 0 || $highestCol <= 0) return null;
 
-    // Read sheet cells into memory
-    $rows = [];
-    for ($r = 1; $r <= $highestRow; $r++) {
+    // Read top rows first for metadata + header detection
+    $headerScanLimit = min($highestRow, 25);
+    $topRows = [];
+    for ($r = 1; $r <= $headerScanLimit; $r++) {
         $rowCells = [];
+        $hasData = false;
         for ($c = 1; $c <= $highestCol; $c++) {
-            $val = $sheet->getCell([$c, $r])->getValue();
-            if ($val !== null && is_string($val) && strpos($val, '=') === 0) {
-                try { $val = $sheet->getCell([$c, $r])->getCalculatedValue(); } catch (\Throwable $e) {}
-            }
-            $rowCells[$c] = utCleanText($val);
+            $val = hccExcelCellValue($sheet, $c, $r);
+            $rowCells[$c] = $val;
+            if ($val !== '') $hasData = true;
         }
-        $rows[$r] = $rowCells;
+        if ($hasData) $topRows[$r] = $rowCells;
     }
+    if (empty($topRows)) return null;
 
-    // A. Detect Meta from top rows (1..4)
-    $topText = "";
-    for ($r = 1; $r <= min(5, $highestRow); $r++) {
-        if (isset($rows[$r])) {
-            $topText .= " " . implode(" ", $rows[$r]);
-        }
-    }
-    $meta = utDetectMetaFromText($topText, $sheetName);
-
-    // B. Detect Header Row ("Roll No" / "Name of the Students")
+    // B. Detect Header Row ("Roll No" / "Name of the Students") via scoring
     $headerRowIdx = null;
-    foreach ($rows as $rIdx => $row) {
+    $bestHeaderScore = 0;
+    foreach ($topRows as $rIdx => $row) {
+        $score = 0;
+        $hasNameOrRoll = false;
+        $nonEmpty = 0;
         foreach ($row as $val) {
+            if ($val === '') continue;
+            $nonEmpty++;
             $cleanVal = preg_replace('/[^a-z]/', '', strtolower($val));
-            if (in_array($cleanVal, ['rollno', 'roll', 'srno', 'sno', 'nameofstudents', 'nameofthestudents', 'studentname'])) {
-                $headerRowIdx = $rIdx;
-                break 2;
+            if (in_array($cleanVal, ['nameofstudents', 'nameofthestudents', 'nameofstudent', 'studentname', 'studentsname', 'fullname'], true)) {
+                $score += 5;
+                $hasNameOrRoll = true;
+            } elseif (in_array($cleanVal, ['rollno', 'rollnumber', 'rno'], true)) {
+                $score += 4;
+                $hasNameOrRoll = true;
+            } elseif (in_array($cleanVal, ['roll', 'srno', 'sno', 'name', 'student'], true)) {
+                $score += 2;
+                $hasNameOrRoll = true;
+            } elseif (in_array($cleanVal, ['total', 'tot', 'percentage', 'pct', 'grade', 'remark', 'remarks', 'attn', 'attendance'], true)) {
+                $score += 2;
             }
+        }
+        if ($hasNameOrRoll && $nonEmpty >= 2 && $score > $bestHeaderScore) {
+            $bestHeaderScore = $score;
+            $headerRowIdx = $rIdx;
         }
     }
     if (!$headerRowIdx) return null;
 
-    $headerRow = $rows[$headerRowIdx] ?? [];
-    $subHeaderRow = $rows[$headerRowIdx + 1] ?? [];
+    // A. Detect Meta from all title rows above headerRowIdx
+    $topText = '';
+    for ($r = 1; $r < $headerRowIdx; $r++) {
+        if (isset($topRows[$r])) {
+            $topText .= ' ' . implode(' ', array_filter($topRows[$r], fn($v) => $v !== ''));
+        }
+    }
+    $meta = utDetectMetaFromText($topText, $sheetName);
 
-    // Identify Columns
-    $rollCol = null;
+    $headerRow = $topRows[$headerRowIdx] ?? [];
+    $subHeaderRow = $topRows[$headerRowIdx + 1] ?? [];
+    if (empty($subHeaderRow) && ($headerRowIdx + 1) <= $highestRow) {
+        for ($c = 1; $c <= $highestCol; $c++) {
+            $subHeaderRow[$c] = hccExcelCellValue($sheet, $c, $headerRowIdx + 1);
+        }
+    }
+
+    // Identify Columns (prefer explicit Roll No over Sr No)
+    $rollColExplicit = null;
+    $srNoCol = null;
     $nameCol = null;
     $totalCol = null;
     $pctCol = null;
@@ -302,73 +373,128 @@ function parseUnitTestWorksheet($sheet, string $sheetName): ?array {
     $phoneCol = null;
     $subjectCols = []; // colIndex => subjectName
 
+    $nonSubjectClean = [
+        'rollno', 'roll', 'rollnumber', 'rno', 'srno', 'sno', 'serialno',
+        'nameofthestudents', 'nameofstudents', 'nameofstudent', 'studentname', 'studentsname', 'name', 'student', 'fullname',
+        'total', 'grandtotal', 'totalmarks', 'tot',
+        'pct', 'percentage', 'percent', 'per',
+        'grade', 'grd', 'remark', 'remarks', 'comment', 'comments',
+        'attn', 'attendance', 'dayspresent', 'presentdays',
+        'parentssign', 'parentsign', 'parents', 'sign', 'signature', 'signed',
+        'parentphone', 'phone', 'mobile', 'mobilenumber', 'whatsapp', 'contact', 'contactno',
+        'dob', 'dateofbirth', 'birthdate', 'grno', 'gr', 'grnumber', 'gender', 'sex',
+        'std', 'class', 'standard', 'division', 'div', 'section', 'sec', 'academicyear', 'year',
+        'result', 'status', 'passfail', 'rank', 'position',
+    ];
+
     foreach ($headerRow as $cIdx => $val) {
         $clean = preg_replace('/[^a-z0-9]/', '', strtolower($val));
-        if (in_array($clean, ['rollno', 'roll', 'srno', 'sno', 'rno'])) {
-            $rollCol = $cIdx;
-        } elseif (in_array($clean, ['nameofthestudents', 'nameofstudents', 'studentname', 'name'])) {
-            $nameCol = $cIdx;
-        } elseif (in_array($clean, ['total', 'tot'])) {
-            $totalCol = $cIdx;
-        } elseif (in_array($clean, ['pct', 'percentage', 'per']) || $val === '%') {
+        if (in_array($clean, ['rollno', 'roll', 'rollnumber', 'rno'], true)) {
+            if ($rollColExplicit === null) $rollColExplicit = $cIdx;
+        } elseif (in_array($clean, ['srno', 'sno', 'serialno'], true)) {
+            if ($srNoCol === null) $srNoCol = $cIdx;
+        } elseif (in_array($clean, ['nameofthestudents', 'nameofstudents', 'nameofstudent', 'studentname', 'studentsname', 'name', 'student', 'fullname'], true)) {
+            if ($nameCol === null) $nameCol = $cIdx;
+        } elseif (in_array($clean, ['total', 'grandtotal', 'totalmarks', 'tot'], true)) {
+            if ($totalCol === null) $totalCol = $cIdx;
+        } elseif (in_array($clean, ['pct', 'percentage', 'percent', 'per'], true) || trim($val) === '%') {
             $pctCol = $cIdx;
-        } elseif (in_array($clean, ['grade', 'grd'])) {
+        } elseif (in_array($clean, ['grade', 'grd'], true)) {
             $gradeCol = $cIdx;
-        } elseif (in_array($clean, ['remark', 'remarks'])) {
+        } elseif (in_array($clean, ['remark', 'remarks', 'comment', 'comments'], true)) {
             $remarkCol = $cIdx;
-        } elseif (in_array($clean, ['attn', 'attendance'])) {
+        } elseif (in_array($clean, ['attn', 'attendance', 'dayspresent', 'presentdays'], true)) {
             $attnCol = $cIdx;
-        } elseif (in_array($clean, ['parentssign', 'parentsign', 'sign'])) {
+        } elseif (in_array($clean, ['parentssign', 'parentsign', 'sign', 'signature'], true)) {
             $signCol = $cIdx;
-        } elseif (in_array($clean, ['parentphone', 'phone', 'mobile', 'mobilenumber', 'whatsapp', 'contact', 'contactno'])) {
+        } elseif (in_array($clean, ['parentphone', 'phone', 'mobile', 'mobilenumber', 'whatsapp', 'contact', 'contactno'], true)) {
             $phoneCol = $cIdx;
         }
     }
 
-    if (!$rollCol || !$nameCol) return null;
+    $rollCol = $rollColExplicit ?? $srNoCol;
+    if (!$nameCol) return null;
 
-    // Detect subjects: all non-empty columns between nameCol and totalCol
-    $endCol = $totalCol ? $totalCol : $highestCol;
-    for ($cIdx = $nameCol + 1; $cIdx < $endCol; $cIdx++) {
-        $hName = trim($headerRow[$cIdx] ?? '');
+    // Detect subjects: all non-empty non-meta columns between nameCol and totalCol (or through highestCol inclusive!)
+    $endCol = $totalCol ? ($totalCol - 1) : $highestCol;
+    for ($cIdx = $nameCol + 1; $cIdx <= $endCol; $cIdx++) {
+        $hName = hccCleanSubjectName($headerRow[$cIdx] ?? '');
         $hClean = preg_replace('/[^a-z0-9]/', '', strtolower($hName));
-        if ($hName !== '' && !in_array($hClean, ['total', 'tot', 'pct', 'percentage', 'grade', 'grd', 'remark', 'remarks', 'attn', 'attendance', 'parentssign', 'parentsign', 'sign', 'parentphone', 'phone', 'mobile', 'mobilenumber', 'whatsapp', 'contact', 'contactno'], true)) {
+        if ($hName !== '' && !in_array($hClean, $nonSubjectClean, true) && $hName !== '%') {
             $subjectCols[$cIdx] = $hName;
         }
     }
     if (empty($subjectCols)) return null;
 
-    // Extract Max Marks for each subject from sub-header row (e.g. 20)
-    $subjectMaxMap = [];
-    foreach ($subjectCols as $cIdx => $sName) {
-        $maxVal = (float)($subHeaderRow[$cIdx] ?? 20.0);
-        if ($maxVal <= 0 || $maxVal > 100) $maxVal = 20.0;
-        $subjectMaxMap[$sName] = $maxVal;
-    }
+    // Determine whether ($headerRowIdx + 1) is a sub-header row (max marks like 20) or the first student row!
+    $subNameCell = trim((string)($subHeaderRow[$nameCol] ?? ''));
+    $subNameNorm = preg_replace('/[^a-z]/', '', strtolower($subNameCell));
+    $subNameLooksLikeStudent = ($subNameCell !== '' && !in_array($subNameNorm, ['max', 'maxmarks', 'outof', 'marks', 'total', 'boys', 'girls'], true));
 
-    // Determine data starting row (after subHeader row if numeric, else after header row)
-    $startRow = $headerRowIdx + 1;
-    $subHeaderHasNumeric = false;
-    foreach ($subjectCols as $cIdx => $sName) {
-        if (is_numeric($subHeaderRow[$cIdx] ?? '')) {
-            $subHeaderHasNumeric = true;
-            break;
+    $subHeaderHasMaxMarks = false;
+    if (!$subNameLooksLikeStudent) {
+        foreach ($subjectCols as $cIdx => $sName) {
+            $sh = trim((string)($subHeaderRow[$cIdx] ?? ''));
+            if (is_numeric($sh) || preg_match('/^(?:max|out\s*of)?\s*[:\-]?\s*\(?([0-9]+(?:\.[0-9]+)?)\)?$/i', $sh)) {
+                $subHeaderHasMaxMarks = true;
+                break;
+            }
         }
     }
-    if ($subHeaderHasNumeric) {
-        $startRow = $headerRowIdx + 2;
+
+    // Extract Max Marks for each subject from sub-header row (or embedded in header like "English (20)")
+    $subjectMaxMap = [];
+    $cleanSubjectCols = [];
+    foreach ($subjectCols as $cIdx => $sName) {
+        $maxVal = 20.0;
+        $displayName = $sName;
+        if (preg_match('/^(.+?)\s*\(\s*([0-9]+(?:\.[0-9]+)?)\s*\)$/', $sName, $sm)) {
+            $displayName = trim($sm[1]);
+            $mEmbedded = (float)$sm[2];
+            if ($mEmbedded > 0 && $mEmbedded <= 100) $maxVal = $mEmbedded;
+        }
+        if ($subHeaderHasMaxMarks) {
+            $sh = trim((string)($subHeaderRow[$cIdx] ?? ''));
+            if (preg_match('/([0-9]+(?:\.[0-9]+)?)/', $sh, $mm)) {
+                $mSub = (float)$mm[1];
+                if ($mSub > 0 && $mSub <= 100) $maxVal = $mSub;
+            }
+        }
+        $cleanSubjectCols[$cIdx] = $displayName;
+        $subjectMaxMap[$displayName] = $maxVal;
     }
+    $subjectCols = $cleanSubjectCols;
+
+    $startRow = $subHeaderHasMaxMarks ? ($headerRowIdx + 2) : ($headerRowIdx + 1);
 
     // C. Parse Student Rows
     $students = [];
     $currentGender = '';
+    $autoRoll = 1;
+    $consecutiveEmpty = 0;
 
     for ($rIdx = $startRow; $rIdx <= $highestRow; $rIdx++) {
-        $row = $rows[$rIdx] ?? [];
+        $row = [];
+        $hasData = false;
+        for ($c = 1; $c <= $highestCol; $c++) {
+            $v = hccExcelCellValue($sheet, $c, $rIdx);
+            $row[$c] = $v;
+            if ($v !== '') $hasData = true;
+        }
+        if (!$hasData) {
+            $consecutiveEmpty++;
+            if ($consecutiveEmpty >= UT_MAX_CONSECUTIVE_EMPTY) break;
+            continue;
+        }
+        $consecutiveEmpty = 0;
+
+        $rollVal = $rollCol ? trim((string)($row[$rollCol] ?? '')) : '';
+        if (preg_match('/^([0-9]+)\.0+$/', $rollVal, $rm)) {
+            $rollVal = $rm[1];
+        }
+        $hasNumericRoll = ($rollVal !== '' && preg_match('/^[0-9]+[a-z]?$/i', $rollVal));
 
         // Standalone gender section divider check (only on standalone BOYS/GIRLS label rows, never matching student surnames)
-        $rollVal = trim($row[$rollCol] ?? '');
-        $hasNumericRoll = ($rollVal !== '' && preg_match('/^[0-9]+[a-z]?$/i', $rollVal));
         if (!$hasNumericRoll) {
             $isDivider = false;
             foreach (array_slice($row, 0, 5) as $cellText) {
@@ -382,13 +508,24 @@ function parseUnitTestWorksheet($sheet, string $sheetName): ?array {
             if ($isDivider) continue;
         }
 
-        $nameVal = trim($row[$nameCol] ?? '');
-
-        // Valid roll number check
-        if (!$hasNumericRoll) {
+        $nameVal = trim((string)($row[$nameCol] ?? ''));
+        if ($nameVal === '' || preg_match('/^(BOYS|GIRLS|TOTAL|GRAND TOTAL|AVERAGE|CLASS AVERAGE|RESULT|PASS|FAIL|HIGHEST|LOWEST)(?:\s*[:\-].*)?$/i', strtoupper($nameVal))) {
             continue;
         }
-        if ($nameVal === '') continue;
+
+        // If Roll No column exists and has a non-numeric non-empty label (like "Total"), skip;
+        // if Roll No is empty or missing column, auto-number sequentially.
+        if ($rollCol && $rollVal !== '' && !$hasNumericRoll) {
+            continue;
+        }
+        if ($rollVal === '') {
+            $rollVal = (string)$autoRoll;
+        }
+        if (is_numeric($rollVal)) {
+            $autoRoll = max($autoRoll, (int)$rollVal + 1);
+        } else {
+            $autoRoll++;
+        }
 
         // Clean student name
         $nameVal = preg_replace('/\s+/', ' ', $nameVal);
@@ -408,14 +545,23 @@ function parseUnitTestWorksheet($sheet, string $sheetName): ?array {
             $totMax += $maxM;
             $upperMark = strtoupper($rawMark);
 
-            $isExplicitAb = ($rawMark === '-' || $rawMark === '–' || $upperMark === 'AB' || $upperMark === 'ABSENT');
-            $isBlank = ($rawMark === '');
+            $isExplicitAb = in_array($upperMark, ['-', '--', '–', '—', 'AB', 'A', 'ABSENT'], true);
+            $isBlank = ($rawMark === '' || in_array($upperMark, ['NA', 'N/A', 'NIL', 'NULL', 'NONE', 'EXEMPT'], true));
+
+            $parsedNumeric = null;
+            if (!$isExplicitAb && !$isBlank) {
+                if (is_numeric($rawMark)) {
+                    $parsedNumeric = (float)$rawMark;
+                } elseif (preg_match('/^([0-9]+(?:\.[0-9]+)?)\s*\/\s*[0-9]+(?:\.[0-9]+)?$/', $rawMark, $fm)) {
+                    $parsedNumeric = (float)$fm[1];
+                }
+            }
 
             if ($isExplicitAb) {
                 $obtVal = null;
                 $isAb = true;
                 $anyEntered = true;
-            } elseif ($isBlank || !is_numeric($rawMark)) {
+            } elseif ($parsedNumeric === null) {
                 $obtVal = null;
                 $isAb = false;
                 $allAb = false;
@@ -424,9 +570,8 @@ function parseUnitTestWorksheet($sheet, string $sheetName): ?array {
                 $isAb = false;
                 $allAb = false;
                 $anyEntered = true;
-                $rawNum = (float)$rawMark;
-                $obtVal = round(clampMark($rawNum, $maxM), 1);
-                if ($rawNum > $maxM || $rawNum < 0) {
+                $obtVal = round(clampMark($parsedNumeric, $maxM), 1);
+                if ($parsedNumeric > $maxM || $parsedNumeric < 0) {
                     $clampedSubjects[] = $sName;
                 }
                 $totObt += $obtVal;
@@ -441,8 +586,8 @@ function parseUnitTestWorksheet($sheet, string $sheetName): ?array {
         }
 
         // Attendance, Custom Remark, Optional Parent Phone & Parents Sign
-        $attnVal = $attnCol ? trim($row[$attnCol] ?? '') : '';
-        $customRemark = $remarkCol ? trim($row[$remarkCol] ?? '') : '';
+        $attnVal = $attnCol ? trim((string)($row[$attnCol] ?? '')) : '';
+        $customRemark = $remarkCol ? trim((string)($row[$remarkCol] ?? '')) : '';
         $phoneVal = $phoneCol ? utCleanText($row[$phoneCol] ?? '') : '';
         $signVal = $signCol ? utParseSign($row[$signCol] ?? null) : null;
 
@@ -491,18 +636,16 @@ function parseUnitTestWorksheet($sheet, string $sheetName): ?array {
 }
 
 /* ── 3. Multi-Sheet Scanner for Master Workbooks ── */
-function scanUnitTestWorkbook(string $filePath, string $ext): array {
-    $reader = $ext === 'xlsx' ? new \PhpOffice\PhpSpreadsheet\Reader\Xlsx() : new \PhpOffice\PhpSpreadsheet\Reader\Xls();
-    $reader->setReadDataOnly(true);
-    $sheetNames = $reader->listWorksheetNames($filePath);
+function scanUnitTestWorkbook(string $filePath, string $ext, array &$skippedSheets = []): array {
+    $reader = hccCreateExcelReader($filePath, $ext);
+    $sheetNames = hccListExcelSheetNames($reader, $filePath);
 
     $active = [];
     foreach ($sheetNames as $sn) {
-        if (strpos($sn, 'Sheet') === 0 && preg_match('/^Sheet[0-9]{2,}$/', $sn)) continue;
         try {
-            $reader->setLoadSheetsOnly([$sn]);
-            $ss = $reader->load($filePath);
-            $parsed = parseUnitTestWorksheet($ss->getActiveSheet(), $sn);
+            $ss = hccLoadSingleWorksheet($filePath, $sn, $ext);
+            $sheet = $ss->getSheetByName($sn) ?: $ss->getActiveSheet();
+            $parsed = parseUnitTestWorksheet($sheet, $sn);
             $ss->disconnectWorksheets();
             unset($ss);
 
@@ -518,8 +661,13 @@ function scanUnitTestWorkbook(string $filePath, string $ext): array {
                     'subjects_count' => count($parsed['subjects']),
                     'sub_list'       => array_keys($parsed['subjects']),
                 ];
+            } else {
+                $skippedSheets[] = $sn . ' (no valid Unit Test header/rows found)';
             }
-        } catch (\Throwable $e) {}
+        } catch (\Throwable $e) {
+            error_log("import_unit_tests scan error on sheet '{$sn}': " . $e->getMessage());
+            $skippedSheets[] = $sn . ' (read error: ' . $e->getMessage() . ')';
+        }
     }
     return $active;
 }
@@ -527,15 +675,35 @@ function scanUnitTestWorkbook(string $filePath, string $ext): array {
 /* ─────────────────────────────────────────────────────────────────────────────
    REQUEST HANDLING (GET & POST)
    ───────────────────────────────────────────────────────────────────────────── */
+if (defined('HCC_IMPORT_LIB_ONLY')) {
+    return;
+}
+/* ── Fresh Reset ── */
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET' && !empty($_GET['fresh'])) {
+    if (!empty($_SESSION['ut_file_path']) && file_exists($_SESSION['ut_file_path'])) {
+        @unlink($_SESSION['ut_file_path']);
+    }
+    unset($_SESSION['ut_file_path'], $_SESSION['ut_file_ext'], $_SESSION['ut_filename'],
+          $_SESSION['ut_multi_sheets'], $_SESSION['ut_skipped_sheets'], $_SESSION['ut_preview'],
+          $_SESSION['ut_is_multi'], $_SESSION['ut_confirm_token'], $_SESSION['ut_active_sheet']);
+    header('Location: import_unit_tests.php');
+    exit;
+}
+
 $error = '';
 $success = '';
 $preview = null;
 $multiSheets = [];
+$skippedSheets = $_SESSION['ut_skipped_sheets'] ?? [];
 $isMulti = false;
 $importResult = null;
+$maxUploadBytes = hccImportMaxUploadBytes(UT_MAX_FILE_BYTES);
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (!verifyCSRFToken()) {
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    $postLimitErr = hccImportPostExceededLimit();
+    if ($postLimitErr !== null) {
+        $error = $postLimitErr;
+    } elseif (!verifyCSRFToken()) {
         $error = 'Security check failed. Please refresh the page.';
     } else {
         $action = trim($_POST['action'] ?? '');
@@ -546,55 +714,97 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!$file || $file['error'] === UPLOAD_ERR_NO_FILE) {
                 $error = 'No file uploaded. Please choose an Excel file.';
             } elseif ($file['error'] !== UPLOAD_ERR_OK) {
-                $error = 'File upload failed with error code: ' . (int)$file['error'];
+                $error = hccUploadErrorMessage((int)$file['error']);
             } else {
                 $origName = $file['name'] ?? 'unit_test.xlsx';
                 $ext = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
 
-                if (!in_array($ext, ['xlsx', 'xls'], true)) {
-                    $error = 'Invalid file format. Please upload an Excel (.xlsx or .xls) file.';
-                } elseif ((int)($file['size'] ?? 0) > UT_MAX_FILE_BYTES) {
-                    $error = 'File exceeds the 50 MB size limit.';
+                if (!in_array($ext, ['xlsx', 'xls', 'csv'], true)) {
+                    $error = 'Invalid file format. Please upload an Excel (.xlsx, .xls, or .csv) file.';
+                } elseif ((int)($file['size'] ?? 0) <= 0) {
+                    $error = 'The uploaded file is empty. Please choose a valid workbook.';
+                } elseif ((int)($file['size'] ?? 0) > $maxUploadBytes) {
+                    $error = 'File exceeds the server upload limit (' . round($maxUploadBytes / (1024 * 1024), 1) . ' MB).';
                 } else {
-                    $uploadDir = rtrim(sys_get_temp_dir(), '/\\') . DIRECTORY_SEPARATOR . 'hcc_ut_imports';
-                    if (!is_dir($uploadDir)) @mkdir($uploadDir, 0755, true);
+                    if (!empty($_SESSION['ut_file_path']) && file_exists($_SESSION['ut_file_path'])) {
+                        @unlink($_SESSION['ut_file_path']);
+                    }
+                    $uploadDir = hccImportTempDir('ut_imports');
                     $destPath = $uploadDir . DIRECTORY_SEPARATOR . 'ut_' . bin2hex(random_bytes(8)) . '.' . $ext;
 
                     if (!move_uploaded_file($file['tmp_name'], $destPath)) {
-                        $error = 'Failed to process uploaded file.';
+                        $error = 'Failed to save uploaded file on server. Check storage folder permissions.';
                     } else {
-                        // Scan workbook for active sheets
-                        $multiSheets = scanUnitTestWorkbook($destPath, $ext);
+                        try {
+                            $scanSkipped = [];
+                            $multiSheets = scanUnitTestWorkbook($destPath, $ext, $scanSkipped);
 
-                        if (empty($multiSheets)) {
-                            $error = 'Could not detect any valid Unit Test marksheets in this Excel file. Please verify sheet headers.';
-                            @unlink($destPath);
-                        } else {
-                            $_SESSION['ut_file_path'] = $destPath;
-                            $_SESSION['ut_file_ext'] = $ext;
-                            $_SESSION['ut_filename'] = $origName;
-                            $_SESSION['ut_multi_sheets'] = $multiSheets;
-                            $_SESSION['ut_confirm_token'] = bin2hex(random_bytes(32));
-
-                            if (count($multiSheets) > 1) {
-                                // Multi-sheet master workbook detected!
-                                $isMulti = true;
-                                $_SESSION['ut_is_multi'] = true;
+                            if (empty($multiSheets)) {
+                                $detail = !empty($scanSkipped) ? (' Checked tabs: ' . implode('; ', array_slice($scanSkipped, 0, 5))) : '';
+                                $error = 'Could not detect any valid Unit Test marksheets in this Excel file. Please verify sheet headers.' . $detail;
+                                @unlink($destPath);
                             } else {
-                                // Single sheet
-                                $isMulti = false;
-                                $_SESSION['ut_is_multi'] = false;
-                                $firstSheet = array_key_first($multiSheets);
-                                $reader = $ext === 'xlsx' ? new \PhpOffice\PhpSpreadsheet\Reader\Xlsx() : new \PhpOffice\PhpSpreadsheet\Reader\Xls();
-                                $reader->setLoadSheetsOnly([$firstSheet]);
-                                $ss = $reader->load($destPath);
-                                $preview = parseUnitTestWorksheet($ss->getActiveSheet(), $firstSheet);
-                                $ss->disconnectWorksheets();
-                                unset($ss);
-                                $_SESSION['ut_preview'] = $preview;
+                                $_SESSION['ut_file_path'] = $destPath;
+                                $_SESSION['ut_file_ext'] = $ext;
+                                $_SESSION['ut_filename'] = basename($origName);
+                                $_SESSION['ut_multi_sheets'] = $multiSheets;
+                                $_SESSION['ut_skipped_sheets'] = $scanSkipped;
+                                $_SESSION['ut_confirm_token'] = bin2hex(random_bytes(32));
+                                $skippedSheets = $scanSkipped;
+
+                                if (count($multiSheets) > 1) {
+                                    $isMulti = true;
+                                    $_SESSION['ut_is_multi'] = true;
+                                    unset($_SESSION['ut_preview'], $_SESSION['ut_active_sheet']);
+                                } else {
+                                    $isMulti = false;
+                                    $_SESSION['ut_is_multi'] = false;
+                                    $firstSheet = array_key_first($multiSheets);
+                                    $ss = hccLoadSingleWorksheet($destPath, $firstSheet, $ext);
+                                    $sheet = $ss->getSheetByName($firstSheet) ?: $ss->getActiveSheet();
+                                    $preview = parseUnitTestWorksheet($sheet, $firstSheet);
+                                    $ss->disconnectWorksheets();
+                                    unset($ss);
+                                    $_SESSION['ut_active_sheet'] = $firstSheet;
+                                    $_SESSION['ut_preview'] = $preview;
+                                }
                             }
+                        } catch (\Throwable $e) {
+                            error_log('import_unit_tests parse error: ' . $e->getMessage());
+                            $error = 'Error reading workbook: ' . $e->getMessage();
+                            @unlink($destPath);
                         }
                     }
+                }
+            }
+        }
+
+        /* ── Action: Inspect Individual Sheet from Multi-Sheet Workbook ── */
+        elseif ($action === 'switch_sheet') {
+            $sheetToView = utCleanText($_POST['sheet_name'] ?? '');
+            $tmpPath = $_SESSION['ut_file_path'] ?? '';
+            $ext = $_SESSION['ut_file_ext'] ?? 'xlsx';
+            $multiSheets = $_SESSION['ut_multi_sheets'] ?? [];
+            $isMulti = !empty($_SESSION['ut_is_multi']);
+            if (!$tmpPath || !file_exists($tmpPath)) {
+                $error = 'Uploaded file session expired. Please re-upload your Excel file.';
+                unset($_SESSION['ut_multi_sheets'], $_SESSION['ut_preview'], $_SESSION['ut_is_multi']);
+                $multiSheets = [];
+                $isMulti = false;
+            } elseif (!isset($multiSheets[$sheetToView])) {
+                $error = 'Selected sheet was not found in the uploaded workbook.';
+            } else {
+                try {
+                    $ss = hccLoadSingleWorksheet($tmpPath, $sheetToView, $ext);
+                    $sheet = $ss->getSheetByName($sheetToView) ?: $ss->getActiveSheet();
+                    $preview = parseUnitTestWorksheet($sheet, $sheetToView);
+                    $ss->disconnectWorksheets();
+                    unset($ss);
+                    $_SESSION['ut_active_sheet'] = $sheetToView;
+                    $_SESSION['ut_preview'] = $preview;
+                } catch (\Throwable $e) {
+                    error_log("import_unit_tests switch_sheet error on '{$sheetToView}': " . $e->getMessage());
+                    $error = 'Could not read sheet "' . $sheetToView . '": ' . $e->getMessage();
                 }
             }
         }
@@ -616,31 +826,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error = 'Uploaded file session expired. Please re-upload your Excel file.';
             } else {
                 $activeYear = rcGetActiveAcademicYear();
-                $reader = $ext === 'xlsx' ? new \PhpOffice\PhpSpreadsheet\Reader\Xlsx() : new \PhpOffice\PhpSpreadsheet\Reader\Xls();
                 $totalImportedStudents = 0;
                 $totalHealedRolls = 0;
                 $totalShieldedRows = 0;
                 $classesImported = [];
                 $lockedWarnings = [];
+                $importErrors = [];
                 $firstClassLink = '';
 
+                // Single-sheet user overrides (when not batch)
+                $overrideYear = !$isBatch ? utCleanText($_POST['confirm_academic_year'] ?? '') : '';
+                $overrideStd  = !$isBatch ? utCleanText($_POST['confirm_std'] ?? '') : '';
+                $overrideDiv  = !$isBatch ? strtoupper(utCleanText($_POST['confirm_division'] ?? '')) : '';
+                $overrideTest = !$isBatch ? utCleanText($_POST['confirm_test_type'] ?? '') : '';
+
                 // Determine which sheets to import
-                $sheetsToImport = $isBatch ? array_keys($multiSheets) : [trim($_POST['selected_sheet'] ?? array_key_first($multiSheets))];
+                $sheetsToImport = $isBatch ? array_keys($multiSheets) : [trim($_POST['selected_sheet'] ?? (string)array_key_first($multiSheets))];
 
                 foreach ($sheetsToImport as $sn) {
                     try {
-                        $reader->setLoadSheetsOnly([$sn]);
-                        $ss = $reader->load($tmpPath);
-                        $parsed = parseUnitTestWorksheet($ss->getActiveSheet(), $sn);
+                        $ss = hccLoadSingleWorksheet($tmpPath, $sn, $ext);
+                        $sheet = $ss->getSheetByName($sn) ?: $ss->getActiveSheet();
+                        $parsed = parseUnitTestWorksheet($sheet, $sn);
                         $ss->disconnectWorksheets();
                         unset($ss);
 
-                        if (!$parsed || empty($parsed['students'])) continue;
+                        if (!$parsed || empty($parsed['students'])) {
+                            $importErrors[] = "Sheet '{$sn}': no student rows detected.";
+                            continue;
+                        }
 
-                        $cYear = !empty($parsed['meta']['academic_year']) ? $parsed['meta']['academic_year'] : $activeYear;
-                        $cStd  = !empty($parsed['meta']['std']) ? $parsed['meta']['std'] : '1';
-                        $cDiv  = !empty($parsed['meta']['division']) ? $parsed['meta']['division'] : 'A';
-                        $cTest = !empty($parsed['meta']['test_type']) ? $parsed['meta']['test_type'] : 'Unit Test 2';
+                        $cYear = $overrideYear !== '' ? hccNormalizeAcademicYear($overrideYear) : (!empty($parsed['meta']['academic_year']) ? $parsed['meta']['academic_year'] : $activeYear);
+                        $cStd  = $overrideStd !== '' ? $overrideStd : (!empty($parsed['meta']['std']) ? $parsed['meta']['std'] : '1');
+                        $cDiv  = $overrideDiv !== '' ? $overrideDiv : (!empty($parsed['meta']['division']) ? $parsed['meta']['division'] : 'A');
+                        $cTest = $overrideTest !== '' ? $overrideTest : (!empty($parsed['meta']['test_type']) ? $parsed['meta']['test_type'] : 'Unit Test 2');
 
                         if (rcIsVaultLocked($cYear)) {
                             $lockedWarnings[] = "STD $cStd $cDiv ({$cYear}) skipped — Academic Vault is locked.";
@@ -658,81 +877,98 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         }
                         rcSaveUnitTestConfig($cYear, $cStd, $cTest, $subjConf);
 
-                        // If overwrite enabled, clear existing cohort for this class (metadata already shielded in $healing)
-                        if ($overwrite) {
-                            $del = $db->prepare("DELETE FROM unit_test_results WHERE academic_year=? AND std=? AND division=? AND test_type=?");
-                            $del->execute([$cYear, $cStd, $cDiv, $cTest]);
-                        }
-
-                        // Prepare bulk insert (preserving parents_sign & parent_phone)
-                        $insStmt = $db->prepare("
-                            INSERT INTO unit_test_results 
-                            (academic_year, std, division, test_type, roll_no, student_name, gender, subject_name, max_marks, marks_obtained, is_absent, grade, remark, attendance, parents_sign, parent_phone)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            ON DUPLICATE KEY UPDATE 
-                                student_name = VALUES(student_name),
-                                gender = VALUES(gender),
-                                max_marks = VALUES(max_marks),
-                                marks_obtained = VALUES(marks_obtained),
-                                is_absent = VALUES(is_absent),
-                                grade = VALUES(grade),
-                                remark = VALUES(remark),
-                                attendance = VALUES(attendance),
-                                parents_sign = VALUES(parents_sign),
-                                parent_phone = VALUES(parent_phone)
-                        ");
-
-                        $classStudentCount = 0;
-                        foreach ($parsed['students'] as $idx => $stu) {
-                            $plan = $healing['rows'][$idx] ?? null;
-                            $roll = $stu['roll_no'];
-                            if ($applyRollHeal && $plan && !empty($plan['suggested_roll']) && !isset($claimedRolls[$plan['suggested_roll']])) {
-                                $roll = $plan['suggested_roll'];
-                                $totalHealedRolls++;
-                            }
-                            $claimedRolls[$roll] = true;
-
-                            $name = $stu['student_name'];
-                            $gender = $stu['gender'];
-                            $attn = $stu['attendance'];
-                            $grd = $stu['grade'];
-                            $rmk = $stu['remark'];
-                            $finalSign  = $plan ? (int)$plan['final_sign'] : (int)($stu['parents_sign'] ?? 0);
-                            $finalPhone = $plan ? (string)$plan['final_phone'] : (string)($stu['parent_phone'] ?? '');
-                            if ($plan && !empty($plan['shielded_fields'])) {
-                                $totalShieldedRows++;
+                        $db->beginTransaction();
+                        try {
+                            // If overwrite enabled, clear existing cohort for this class (metadata already shielded in $healing)
+                            if ($overwrite) {
+                                $del = $db->prepare("DELETE FROM unit_test_results WHERE academic_year=? AND std=? AND division=? AND test_type=?");
+                                $del->execute([$cYear, $cStd, $cDiv, $cTest]);
                             }
 
-                            foreach ($stu['marks'] as $sName => $sData) {
-                                $maxM = (float)$sData['max_marks'];
-                                $obtM = $sData['marks_obtained'];
-                                $isAb = (int)$sData['is_absent'];
+                            // Prepare bulk insert (preserving parents_sign & parent_phone)
+                            $insStmt = $db->prepare("
+                                INSERT INTO unit_test_results
+                                (academic_year, std, division, test_type, roll_no, student_name, gender, subject_name, max_marks, marks_obtained, is_absent, grade, remark, attendance, parents_sign, parent_phone)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                ON DUPLICATE KEY UPDATE
+                                    student_name = VALUES(student_name),
+                                    gender = VALUES(gender),
+                                    max_marks = VALUES(max_marks),
+                                    marks_obtained = VALUES(marks_obtained),
+                                    is_absent = VALUES(is_absent),
+                                    grade = VALUES(grade),
+                                    remark = VALUES(remark),
+                                    attendance = VALUES(attendance),
+                                    parents_sign = VALUES(parents_sign),
+                                    parent_phone = VALUES(parent_phone)
+                            ");
 
-                                $insStmt->execute([
-                                    $cYear, $cStd, $cDiv, $cTest,
-                                    $roll, $name, $gender, $sName,
-                                    $maxM, $obtM, $isAb, $grd, $rmk, $attn,
-                                    $finalSign, ($finalPhone !== '' ? $finalPhone : null)
-                                ]);
+                            $classStudentCount = 0;
+                            foreach ($parsed['students'] as $idx => $stu) {
+                                $plan = $healing['rows'][$idx] ?? null;
+                                $roll = $stu['roll_no'];
+                                if ($applyRollHeal && $plan && !empty($plan['suggested_roll']) && !isset($claimedRolls[$plan['suggested_roll']])) {
+                                    $roll = $plan['suggested_roll'];
+                                    $totalHealedRolls++;
+                                }
+                                $claimedRolls[$roll] = true;
+
+                                $name = mb_substr($stu['student_name'], 0, 100);
+                                $gender = mb_substr($stu['gender'], 0, 10);
+                                $attn = mb_substr($stu['attendance'], 0, 20);
+                                $grd = mb_substr($stu['grade'], 0, 5);
+                                $rmk = mb_substr($stu['remark'], 0, 150);
+                                $finalSign  = $plan ? (int)$plan['final_sign'] : (int)($stu['parents_sign'] ?? 0);
+                                $finalPhone = $plan ? (string)$plan['final_phone'] : (string)($stu['parent_phone'] ?? '');
+                                $finalPhone = mb_substr(preg_replace('/\D+/', '', $finalPhone), 0, 32);
+                                if ($plan && !empty($plan['shielded_fields'])) {
+                                    $totalShieldedRows++;
+                                }
+
+                                foreach ($stu['marks'] as $sName => $sData) {
+                                    $maxM = (float)$sData['max_marks'];
+                                    $obtM = $sData['marks_obtained'];
+                                    $isAb = (int)$sData['is_absent'];
+
+                                    $insStmt->execute([
+                                        $cYear, $cStd, $cDiv, $cTest,
+                                        mb_substr((string)$roll, 0, 10), $name, $gender, mb_substr((string)$sName, 0, 50),
+                                        $maxM, $obtM, $isAb, $grd, $rmk, $attn,
+                                        $finalSign, ($finalPhone !== '' ? $finalPhone : null)
+                                    ]);
+                                }
+                                $classStudentCount++;
                             }
-                            $classStudentCount++;
-                        }
 
-                        $totalImportedStudents += $classStudentCount;
-                        $classesImported[] = "STD $cStd $cDiv ($classStudentCount students)";
+                            $db->commit();
+                            $totalImportedStudents += $classStudentCount;
+                            $classesImported[] = "STD $cStd $cDiv ($classStudentCount students)";
 
-                        if ($firstClassLink === '') {
-                            $firstClassLink = "unit_tests.php?year=" . urlencode($cYear) . "&std=" . urlencode($cStd) . "&division=" . urlencode($cDiv) . "&test_type=" . urlencode($cTest);
+                            if ($firstClassLink === '') {
+                                $firstClassLink = "unit_tests.php?year=" . urlencode($cYear) . "&std=" . urlencode($cStd) . "&division=" . urlencode($cDiv) . "&test_type=" . urlencode($cTest);
+                            }
+                        } catch (\Throwable $txErr) {
+                            if ($db->inTransaction()) $db->rollBack();
+                            throw $txErr;
                         }
-                    } catch (\Throwable $e) {}
+                    } catch (\Throwable $e) {
+                        error_log("import_unit_tests confirm error on sheet '{$sn}': " . $e->getMessage());
+                        $importErrors[] = "Sheet '{$sn}': " . $e->getMessage();
+                    }
                 }
 
-                @unlink($tmpPath);
-                unset($_SESSION['ut_file_path'], $_SESSION['ut_file_ext'], $_SESSION['ut_multi_sheets'], $_SESSION['ut_preview'], $_SESSION['ut_is_multi'], $_SESSION['ut_confirm_token']);
-
-                if ($totalImportedStudents === 0 && !empty($lockedWarnings)) {
-                    $error = implode(' ', $lockedWarnings);
+                if ($totalImportedStudents === 0 && (!empty($lockedWarnings) || !empty($importErrors))) {
+                    // Keep session intact so user can adjust overrides or fix issue without losing preview
+                    $error = implode(' ', array_merge($lockedWarnings, $importErrors));
                 } else {
+                    @unlink($tmpPath);
+                    unset($_SESSION['ut_file_path'], $_SESSION['ut_file_ext'], $_SESSION['ut_multi_sheets'],
+                          $_SESSION['ut_skipped_sheets'], $_SESSION['ut_preview'], $_SESSION['ut_is_multi'],
+                          $_SESSION['ut_confirm_token'], $_SESSION['ut_active_sheet']);
+                    $multiSheets = [];
+                    $isMulti = false;
+                    $preview = null;
+
                     // Fire persistent notification with timestamp
                     $notifTitle = "Unit Test Excel Imported";
                     $notifMsg = "Imported {$totalImportedStudents} students across " . count($classesImported) . " classes into Unit Test results by {$adminUser} (Healed: {$totalHealedRolls}, Shielded: {$totalShieldedRows}).";
@@ -742,8 +978,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($totalHealedRolls > 0 || $totalShieldedRows > 0) {
                         $success .= " (Auto-Healer fixed {$totalHealedRolls} roll(s); Metadata Shield preserved {$totalShieldedRows} phone/signature record(s).)";
                     }
-                    if (!empty($lockedWarnings)) {
-                        $success .= ' ' . implode(' ', $lockedWarnings);
+                    if (!empty($lockedWarnings) || !empty($importErrors)) {
+                        $success .= ' Warnings: ' . implode(' ', array_merge($lockedWarnings, $importErrors));
                     }
                     $importResult = [
                         'imported'        => $totalImportedStudents,
@@ -855,17 +1091,17 @@ $notifData = rcGetRecentNotifications(8);
                         <h2><i class="fas fa-cloud-arrow-up imp-panel-icon imp-panel-icon--brand"></i> Step 1 — Choose Your Workbook</h2>
                     </div>
                     <div class="panel-body">
-                        <form method="POST" enctype="multipart/form-data" id="uploadForm">
+                        <form method="POST" enctype="multipart/form-data" id="uploadForm" data-max-bytes="<?= (int)$maxUploadBytes ?>">
                             <?= csrfField() ?>
                             <input type="hidden" name="action" value="parse">
 
                             <label class="imp-drop" id="fileDrop" for="excelFileInput">
-                                <input type="file" name="excel_file" id="excelFileInput" accept=".xlsx,.xls" required>
+                                <input type="file" name="excel_file" id="excelFileInput" accept=".xlsx,.xls,.csv" required>
                                 <span class="imp-drop-icon"><i class="fas fa-cloud-arrow-up"></i></span>
                                 <p class="imp-drop-title">Drop your Unit Test workbook here, or <em>browse</em></p>
                                 <p class="imp-drop-sub">Multi-sheet workbooks welcome — every class sheet is detected automatically.</p>
                                 <span class="imp-drop-chips">
-                                    <span class="imp-chip"><i class="fas fa-file-excel"></i> .xlsx / .xls</span>
+                                    <span class="imp-chip"><i class="fas fa-file-excel"></i> .xlsx / .xls / .csv</span>
                                     <span class="imp-chip"><i class="fas fa-layer-group"></i> Classes 1 – 10</span>
                                     <span class="imp-chip"><i class="fas fa-list-ol"></i> Max 3,000 rows</span>
                                 </span>
@@ -957,7 +1193,7 @@ $notifData = rcGetRecentNotifications(8);
                                     <i class="fas fa-file-import"></i> Confirm Batch Import — <?= count($multiSheets) ?> classes
                                 </button>
                                 <span class="imp-spacer"></span>
-                                <a href="import_unit_tests.php" class="btn btn-outline"><i class="fas fa-xmark"></i> Cancel &amp; Upload Another</a>
+                                <a href="import_unit_tests.php?fresh=1" class="btn btn-outline"><i class="fas fa-xmark"></i> Cancel &amp; Upload Another</a>
                             </div>
                         </form>
                     </div>
@@ -1129,6 +1365,30 @@ $notifData = rcGetRecentNotifications(8);
                             <input type="hidden" name="confirm_token" value="<?= sanitize($_SESSION['ut_confirm_token'] ?? '') ?>">
                             <input type="hidden" name="selected_sheet" value="<?= sanitize($preview['sheet_name']) ?>">
 
+                            <div style="padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom:16px;">
+                                <div style="font-weight:600; font-size:0.9rem; margin-bottom:8px; color:var(--text-2);">
+                                    <i class="fas fa-sliders-h"></i> Destination Details for this Unit Test Sheet
+                                </div>
+                                <div class="imp-grid">
+                                    <div class="imp-field">
+                                        <label>Academic Year</label>
+                                        <input type="text" name="confirm_academic_year" class="form-control" value="<?= sanitize($preview['meta']['academic_year'] ?? rcGetActiveAcademicYear()) ?>" required>
+                                    </div>
+                                    <div class="imp-field">
+                                        <label>Class / Std</label>
+                                        <input type="text" name="confirm_std" class="form-control" value="<?= sanitize($preview['meta']['std'] ?: '1') ?>" required>
+                                    </div>
+                                    <div class="imp-field">
+                                        <label>Division</label>
+                                        <input type="text" name="confirm_division" class="form-control" value="<?= sanitize($preview['meta']['division'] ?: 'A') ?>" required>
+                                    </div>
+                                    <div class="imp-field">
+                                        <label>Unit Test</label>
+                                        <input type="text" name="confirm_test_type" class="form-control" value="<?= sanitize($preview['meta']['test_type'] ?: 'Unit Test 1') ?>" required>
+                                    </div>
+                                </div>
+                            </div>
+
                             <label class="imp-switch" for="singleOverwrite">
                                 <input type="checkbox" name="overwrite" id="singleOverwrite" value="1" checked>
                                 <span class="imp-switch-text">
@@ -1149,7 +1409,7 @@ $notifData = rcGetRecentNotifications(8);
                                     <i class="fas fa-check"></i> Confirm Import — <?= $pvStudents ?> student(s)
                                 </button>
                                 <span class="imp-spacer"></span>
-                                <a href="import_unit_tests.php" class="btn btn-outline"><i class="fas fa-xmark"></i> Cancel</a>
+                                <a href="import_unit_tests.php?fresh=1" class="btn btn-outline"><i class="fas fa-xmark"></i> Cancel</a>
                             </div>
                         </form>
                     </div>
